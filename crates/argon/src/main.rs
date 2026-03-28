@@ -1780,37 +1780,44 @@ fn try_launch_desktop_app(
         return Ok("desktop-launch-flag");
     }
 
-    // Try launching Argon.app via macOS `open` command
     #[cfg(target_os = "macos")]
     {
         let reviewed_repo = repo_root.to_string_lossy().to_string();
+
+        // Try ARGON_APP env var pointing to a specific .app bundle
+        if let Some(app_path) = std::env::var_os("ARGON_APP").filter(|v| !v.is_empty()) {
+            let app = PathBuf::from(app_path);
+            if app.exists()
+                && spawn_desktop_command(
+                    {
+                        let mut command = Command::new("open");
+                        command.args(["-a", &app.to_string_lossy()]);
+                        command.args(["--args", "--session-id", &session, "--repo-root", &reviewed_repo]);
+                        command
+                    },
+                    repo_root, repo_root, &session, false,
+                ).is_ok()
+            {
+                return Ok("argon-app-env");
+            }
+        }
+
+        // Try launching Argon.app via macOS `open` (installed in /Applications or Spotlight-indexed)
         if spawn_desktop_command(
             {
                 let mut command = Command::new("open");
-                command.args([
-                    "-a",
-                    "Argon",
-                    "--args",
-                    "--session-id",
-                    &session,
-                    "--repo-root",
-                    &reviewed_repo,
-                ]);
+                command.args(["-a", "Argon"]);
+                command.args(["--args", "--session-id", &session, "--repo-root", &reviewed_repo]);
                 command
             },
-            repo_root,
-            repo_root,
-            &session,
-            false,
-        )
-        .is_ok()
-        {
+            repo_root, repo_root, &session, false,
+        ).is_ok() {
             return Ok("macos-open");
         }
     }
 
     bail!(
-        "no compatible launch method found (use --desktop-launch or install Argon.app)"
+        "no compatible launch method found (use --desktop-launch, ARGON_APP, or install Argon.app)"
     )
 }
 
