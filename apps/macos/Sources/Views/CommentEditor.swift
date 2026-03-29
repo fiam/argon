@@ -104,6 +104,8 @@ struct FocusedTextEditor: NSViewRepresentable {
         // Delayed focus to work in popovers
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             textView.window?.makeFirstResponder(textView)
+            textView.setSelectedRange(NSRange(location: 0, length: 0))
+            textView.needsDisplay = true
         }
 
         return scrollView
