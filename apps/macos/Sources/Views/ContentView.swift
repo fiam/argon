@@ -94,9 +94,10 @@ struct ReviewLayout: View {
 struct FileTreeSidebar: View {
   @Environment(AppState.self) private var appState
   @State private var filterText = ""
+  @State private var showModeHelp = false
 
-  private var isRegexMode: Bool {
-    filterText.hasPrefix("/")
+  private var currentMode: FilterMode {
+    detectFilterMode(filterText)
   }
 
   private var filteredFiles: [FileDiff] {
@@ -124,14 +125,27 @@ struct FileTreeSidebar: View {
             .focused($filterFocused)
 
           if !filterText.isEmpty {
-            if isRegexMode {
-              Text("regex")
+            Button {
+              showModeHelp = true
+            } label: {
+              Text(currentMode.label)
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                 .padding(.horizontal, 4)
                 .padding(.vertical, 1)
-                .background(Color.purple.opacity(0.15))
-                .foregroundStyle(.purple)
+                .background(currentMode.color.opacity(0.15))
+                .foregroundStyle(currentMode.color)
                 .clipShape(RoundedRectangle(cornerRadius: 3))
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showModeHelp, arrowEdge: .bottom) {
+              VStack(alignment: .leading, spacing: 6) {
+                Text(currentMode.help)
+                  .font(.system(.caption, design: .monospaced))
+                  .foregroundStyle(.secondary)
+                  .fixedSize(horizontal: false, vertical: true)
+              }
+              .padding(12)
+              .frame(width: 280)
             }
 
             Text("\(filteredFiles.count)/\(appState.files.count)")
@@ -153,19 +167,23 @@ struct FileTreeSidebar: View {
 
         if filterText.isEmpty {
           HStack(spacing: 3) {
-            Text("Type to filter")
+            Text("fuzzy")
+              .foregroundStyle(.quaternary)
+            Text("·")
+              .foregroundStyle(.quaternary)
+            Text("*?")
+              .font(.system(.caption2, design: .monospaced))
+              .fontWeight(.medium)
+              .foregroundStyle(.quaternary)
+            Text("glob")
               .foregroundStyle(.quaternary)
             Text("·")
               .foregroundStyle(.quaternary)
             Text("/")
               .font(.system(.caption2, design: .monospaced))
               .fontWeight(.medium)
-              .padding(.horizontal, 3)
-              .padding(.vertical, 0.5)
-              .background(Color(nsColor: .separatorColor).opacity(0.3))
-              .clipShape(RoundedRectangle(cornerRadius: 2))
               .foregroundStyle(.quaternary)
-            Text("for regex")
+            Text("regex")
               .foregroundStyle(.quaternary)
           }
           .font(.system(size: 9))

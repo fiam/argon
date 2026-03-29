@@ -222,3 +222,77 @@ struct FuzzyMatchScoringTests {
     #expect(!matches)
   }
 }
+
+@Suite("Mode Detection")
+struct ModeDetectionTests {
+
+  @Test("plain text is fuzzy")
+  func plainTextIsFuzzy() {
+    #expect(detectFilterMode("main") == .fuzzy)
+    #expect(detectFilterMode("src/lib") == .fuzzy)
+  }
+
+  @Test("wildcards trigger glob")
+  func wildcardsAreGlob() {
+    #expect(detectFilterMode("*.rs") == .glob)
+    #expect(detectFilterMode("src/**") == .glob)
+    #expect(detectFilterMode("te?t") == .glob)
+  }
+
+  @Test("leading slash is regex")
+  func slashIsRegex() {
+    #expect(detectFilterMode("/\\.rs$") == .regex)
+    #expect(detectFilterMode("/main") == .regex)
+  }
+
+  @Test("empty is fuzzy")
+  func emptyIsFuzzy() {
+    #expect(detectFilterMode("") == .fuzzy)
+  }
+}
+
+@Suite("Glob Filter")
+struct GlobFilterTests {
+
+  private func makeFile(_ path: String) -> FileDiff {
+    FileDiff(oldPath: path, newPath: path, hunks: [])
+  }
+
+  private var files: [FileDiff] {
+    [
+      makeFile("src/main.rs"),
+      makeFile("src/lib.rs"),
+      makeFile("src/utils/helper.rs"),
+      makeFile("tests/test_main.rs"),
+      makeFile("README.md"),
+      makeFile("Cargo.toml"),
+    ]
+  }
+
+  @Test("star matches within single segment")
+  func starMatch() {
+    let result = filterFiles(files, pattern: "*.md")
+    #expect(result.count == 1)
+    #expect(result[0].displayPath == "README.md")
+  }
+
+  @Test("double star matches across segments")
+  func doubleStarMatch() {
+    let result = filterFiles(files, pattern: "**/*.rs")
+    #expect(result.count == 4)
+  }
+
+  @Test("question mark matches single character")
+  func questionMarkMatch() {
+    let result = filterFiles(files, pattern: "src/??b.rs")
+    #expect(result.count == 1)
+    #expect(result[0].displayPath == "src/lib.rs")
+  }
+
+  @Test("partial name with star")
+  func partialName() {
+    let result = filterFiles(files, pattern: "**/test*")
+    #expect(result.count == 1)
+    #expect(result[0].displayPath == "tests/test_main.rs")
+  }
+}
