@@ -11,12 +11,13 @@ enum GitService {
 
   // MARK: - Diff Fingerprint (lightweight check for changes)
 
-  /// Returns a short stat string that changes when the diff content changes.
+  /// Returns a string that changes when the working tree changes.
+  /// Uses git diff --stat for tracked changes and file sizes for untracked files.
   static func diffFingerprint(
     repoRoot: String, mode: ReviewMode, baseRef: String, headRef: String, mergeBaseSha: String
   ) -> String {
+    // Tracked changes stat
     var args = ["-C", repoRoot, "diff", "--stat", "--no-color"]
-
     switch mode {
     case .branch:
       args.append(mergeBaseSha)
@@ -31,8 +32,21 @@ enum GitService {
     case .uncommitted:
       args.append("HEAD")
     }
+    var result = runGit(args)
 
-    return runGit(args)
+    // Untracked files with sizes (so content changes are detected)
+    let untrackedList = untrackedFiles(repoRoot: repoRoot)
+    if !untrackedList.isEmpty {
+      result += "\n__untracked__"
+      let fm = FileManager.default
+      for file in untrackedList {
+        let fullPath = (repoRoot as NSString).appendingPathComponent(file)
+        let size = (try? fm.attributesOfItem(atPath: fullPath)[.size] as? Int) ?? 0
+        result += "\n\(file):\(size)"
+      }
+    }
+
+    return result
   }
 
   // MARK: - Diff
@@ -57,7 +71,33 @@ enum GitService {
       args.append("HEAD")
     }
 
-    return runGit(args)
+    var result = runGit(args)
+
+    // Append untracked (non-ignored) files as diffs against /dev/null
+    let untrackedFiles = untrackedFiles(repoRoot: repoRoot)
+    for file in untrackedFiles {
+      let fileDiff = runGit([
+        "-C", repoRoot, "diff", "--no-color", "--unified=3", "--no-ext-diff",
+        "--no-index", "/dev/null", file,
+      ])
+      if !fileDiff.isEmpty {
+        result += "\n" + fileDiff
+      }
+    }
+
+    return result
+  }
+
+  /// Returns untracked, non-ignored files relative to the repo root.
+  private static func untrackedFiles(repoRoot: String) -> [String] {
+    let output = runGit([
+      "-C", repoRoot, "ls-files", "--others", "--exclude-standard",
+    ])
+    return
+      output
+      .split(separator: "\n")
+      .map(String.init)
+      .filter { !$0.isEmpty }
   }
 
   static func diff(session: ReviewSession) -> String {
