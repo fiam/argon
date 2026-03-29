@@ -62,7 +62,12 @@ pub fn resolve_branch_target(
         }
     };
     let merge_base_sha = git_capture(repo_root, &["merge-base", &base_ref, &head_ref])?;
-    Ok(ResolvedReviewTarget { mode: ReviewMode::Branch, base_ref, head_ref, merge_base_sha })
+    Ok(ResolvedReviewTarget {
+        mode: ReviewMode::Branch,
+        base_ref,
+        head_ref,
+        merge_base_sha,
+    })
 }
 
 pub fn resolve_commit_target(
@@ -71,7 +76,11 @@ pub fn resolve_commit_target(
 ) -> Result<ResolvedReviewTarget, TargetError> {
     let commit_ref = commit_input.unwrap_or("HEAD");
     let commit_sha = verify_commit_ref(repo_root, commit_ref)?;
-    let base_ref = if commit_ref == "HEAD" { "HEAD".to_string() } else { commit_sha.clone() };
+    let base_ref = if commit_ref == "HEAD" {
+        "HEAD".to_string()
+    } else {
+        commit_sha.clone()
+    };
 
     Ok(ResolvedReviewTarget {
         mode: ReviewMode::Commit,
@@ -81,9 +90,7 @@ pub fn resolve_commit_target(
     })
 }
 
-pub fn resolve_uncommitted_target(
-    repo_root: &Path,
-) -> Result<ResolvedReviewTarget, TargetError> {
+pub fn resolve_uncommitted_target(repo_root: &Path) -> Result<ResolvedReviewTarget, TargetError> {
     let merge_base_sha = verify_commit_ref(repo_root, "HEAD")?;
 
     Ok(ResolvedReviewTarget {
@@ -95,9 +102,15 @@ pub fn resolve_uncommitted_target(
 }
 
 pub fn infer_base_ref(repo_root: &Path) -> Result<String, TargetError> {
-    if let Ok(origin_head) =
-        git_capture(repo_root, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])
-    {
+    if let Ok(origin_head) = git_capture(
+        repo_root,
+        &[
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
+    ) {
         return Ok(origin_head);
     }
 
@@ -130,10 +143,17 @@ pub fn resolve_ref(repo_root: &Path, reference: &str) -> Result<String, TargetEr
 }
 
 pub fn git_capture(repo_root: &Path, args: &[&str]) -> Result<String, TargetError> {
-    let output = Command::new("git").arg("-C").arg(repo_root).args(args).output()?;
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(args)
+        .output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(TargetError::Git(format!("git {} failed: {stderr}", args.join(" "))));
+        return Err(TargetError::Git(format!(
+            "git {} failed: {stderr}",
+            args.join(" ")
+        )));
     }
 
     let stdout = String::from_utf8(output.stdout)?;
@@ -207,10 +227,21 @@ mod tests {
             .output()
             .context("init bare remote")?;
         if !output.status.success() {
-            bail!("git init --bare failed: {}", String::from_utf8_lossy(&output.stderr).trim());
+            bail!(
+                "git init --bare failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
         }
 
-        git(&repo, &["remote", "add", "origin", remote_path.to_string_lossy().as_ref()])?;
+        git(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "origin",
+                remote_path.to_string_lossy().as_ref(),
+            ],
+        )?;
         git(&repo, &["push", "-u", "origin", "main"])?;
         git(&repo, &["remote", "set-head", "origin", "main"])?;
 

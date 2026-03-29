@@ -30,3 +30,15 @@ targets:
         COMBINE_HIDPI_IMAGES: true
         ENABLE_HARDENED_RUNTIME: true
         CODE_SIGN_STYLE: Automatic
+
+  ArgonTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests
+    dependencies:
+      - target: Argon
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.argon.app.tests
+        GENERATE_INFOPLIST_FILE: true

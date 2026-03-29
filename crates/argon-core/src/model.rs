@@ -127,7 +127,13 @@ impl ReviewSession {
         head_ref: String,
         merge_base_sha: String,
     ) -> Self {
-        Self::new_with_mode(ReviewMode::Branch, repo_root, base_ref, head_ref, merge_base_sha)
+        Self::new_with_mode(
+            ReviewMode::Branch,
+            repo_root,
+            base_ref,
+            head_ref,
+            merge_base_sha,
+        )
     }
 
     pub fn new_with_mode(
@@ -137,14 +143,7 @@ impl ReviewSession {
         head_ref: String,
         merge_base_sha: String,
     ) -> Self {
-        Self::new_with_mode_and_summary(
-            mode,
-            repo_root,
-            base_ref,
-            head_ref,
-            merge_base_sha,
-            None,
-        )
+        Self::new_with_mode_and_summary(mode, repo_root, base_ref, head_ref, merge_base_sha, None)
     }
 
     pub fn new_with_mode_and_summary(
@@ -181,7 +180,12 @@ impl ReviewSession {
 impl DraftReview {
     pub fn new(session_id: Uuid) -> Self {
         let now = Utc::now();
-        Self { session_id, comments: Vec::new(), created_at: now, updated_at: now }
+        Self {
+            session_id,
+            comments: Vec::new(),
+            created_at: now,
+            updated_at: now,
+        }
     }
 
     pub fn touch(&mut self) {

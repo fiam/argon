@@ -132,7 +132,9 @@ mod tests {
     use super::*;
 
     fn fixed_timestamp() -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 3, 3, 12, 0, 0).single().expect("valid fixed timestamp")
+        Utc.with_ymd_and_hms(2026, 3, 3, 12, 0, 0)
+            .single()
+            .expect("valid fixed timestamp")
     }
 
     #[test]

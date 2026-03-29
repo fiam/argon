@@ -8,14 +8,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Utc};
 use argon_core::{
     AgentEvent, AgentEventKind, CliCommand, CliResponse, CommentAnchor, CommentAuthor, CommentKind,
-    PendingFeedback, ResolvedReviewTarget, ReviewComment, ReviewMode, ReviewOutcome,
-    ReviewSession,
+    PendingFeedback, ResolvedReviewTarget, ReviewComment, ReviewMode, ReviewOutcome, ReviewSession,
     SessionPayload, SessionStatus, SessionStore, ThreadState, auto_detect_review_target,
     resolve_branch_target, resolve_commit_target, resolve_uncommitted_target,
 };
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand, ValueEnum};
 use uuid::Uuid;
 
@@ -470,8 +469,10 @@ fn run() -> Result<()> {
         repo_root_override: normalize_override_path(cli.repo.clone()),
     };
 
-    let supports_agent_launch =
-        matches!(&cli.command, Commands::Review(_) | Commands::Agent(AgentCommands::Start(_)));
+    let supports_agent_launch = matches!(
+        &cli.command,
+        Commands::Review(_) | Commands::Agent(AgentCommands::Start(_))
+    );
     if runtime.launch.agent_command.is_some() && !supports_agent_launch {
         bail!(
             "--agent is only supported with session-starting commands (`argon <path>`, `argon review`, `argon agent start`)"
@@ -561,7 +562,10 @@ fn maybe_direct_path_invocation(raw_args: &[String]) -> Option<(PathBuf, LaunchO
 }
 
 fn is_command_token(token: &str) -> bool {
-    matches!(token, "review" | "agent" | "reviewer" | "draft" | "skill" | "help")
+    matches!(
+        token,
+        "review" | "agent" | "reviewer" | "draft" | "skill" | "help"
+    )
 }
 
 fn run_path_review(path: PathBuf, launch: &LaunchOptions) -> Result<()> {
@@ -666,7 +670,10 @@ fn run_draft(command: DraftCommands, runtime: &RuntimeOptions) -> Result<()> {
                     println!("{}", serde_json::to_string_pretty(&payload)?);
                 } else {
                     println!("submitted: {count} comments");
-                    println!("decision: {:?}", session.decision.as_ref().map(|d| &d.outcome));
+                    println!(
+                        "decision: {:?}",
+                        session.decision.as_ref().map(|d| &d.outcome)
+                    );
                     println!("status: {:?}", session.status);
                 }
             } else if args.json {
@@ -711,7 +718,10 @@ fn run_skill_install(args: SkillInstallArgs) -> Result<()> {
             .with_context(|| format!("failed to create skill directory: {}", dest.display()))?;
         copy_dir_recursive(&skill_source, &dest)
             .with_context(|| format!("failed to copy skill to {}", dest.display()))?;
-        println!("installed argon-app-review skill for {agent_name} at {}", dest.display());
+        println!(
+            "installed argon-app-review skill for {agent_name} at {}",
+            dest.display()
+        );
     }
 
     Ok(())
@@ -753,7 +763,9 @@ fn find_skill_source() -> Result<PathBuf> {
         }
     }
 
-    bail!("could not find bundled skill directory; set ARGON_SKILL_DIR or run from an Argon.app bundle")
+    bail!(
+        "could not find bundled skill directory; set ARGON_SKILL_DIR or run from an Argon.app bundle"
+    )
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
@@ -775,9 +787,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 fn dirs_home() -> Result<PathBuf> {
     std::env::var("HOME")
         .map(PathBuf::from)
-        .or_else(|_| {
-            std::env::var("USERPROFILE").map(PathBuf::from)
-        })
+        .or_else(|_| std::env::var("USERPROFILE").map(PathBuf::from))
         .context("could not determine home directory (HOME or USERPROFILE not set)")
 }
 
@@ -797,12 +807,8 @@ fn run_start(args: StartArgs, runtime: &RuntimeOptions) -> Result<()> {
             }
             resolve_branch_target(&repo_root, base, head)?
         }
-        Some(ReviewMode::Commit) => {
-            resolve_commit_target(&repo_root, None)?
-        }
-        Some(ReviewMode::Uncommitted) => {
-            resolve_uncommitted_target(&repo_root)?
-        }
+        Some(ReviewMode::Commit) => resolve_commit_target(&repo_root, None)?,
+        Some(ReviewMode::Uncommitted) => resolve_uncommitted_target(&repo_root)?,
         None => {
             // Backward compat: if base/head provided, use branch mode
             if args.base.is_some() || args.head.is_some() {
@@ -860,7 +866,12 @@ fn run_review(args: ReviewArgs, runtime: &RuntimeOptions) -> Result<()> {
 
     if args.wait {
         let wait_result = wait_for_decision(&store, session.id, args.timeout_secs)?;
-        print_wait_result(CliCommand::Review, wait_result, args.json, args.timeout_secs)
+        print_wait_result(
+            CliCommand::Review,
+            wait_result,
+            args.json,
+            args.timeout_secs,
+        )
     } else {
         print_session(CliCommand::Review, &session, args.json)
     }
@@ -875,7 +886,11 @@ fn resolve_review_target_for_review(
             bail!("--pr cannot be combined with --mode or --commit");
         }
         let refs = pr_refs()?;
-        return Ok(resolve_branch_target(repo_root, Some(&refs.base_ref), Some(&refs.head_ref))?);
+        return Ok(resolve_branch_target(
+            repo_root,
+            Some(&refs.base_ref),
+            Some(&refs.head_ref),
+        )?);
     }
 
     match args.mode.map(ReviewMode::from) {
@@ -883,7 +898,11 @@ fn resolve_review_target_for_review(
             if args.commit.is_some() {
                 bail!("--mode branch cannot be combined with --commit");
             }
-            Ok(resolve_branch_target(repo_root, args.base.as_deref(), args.head.as_deref())?)
+            Ok(resolve_branch_target(
+                repo_root,
+                args.base.as_deref(),
+                args.head.as_deref(),
+            )?)
         }
         Some(ReviewMode::Commit) => {
             if args.base.is_some() || args.head.is_some() {
@@ -1050,7 +1069,12 @@ fn run_reviewer_wait(args: ReviewerWaitArgs, runtime: &RuntimeOptions) -> Result
     let reviewer_name = normalize_reviewer_name(args.reviewer.as_deref());
     let wait_result =
         wait_for_reviewer_feedback(&store, args.session, &reviewer_name, args.timeout_secs)?;
-    print_wait_result(CliCommand::ReviewerWait, wait_result, args.json, args.timeout_secs)
+    print_wait_result(
+        CliCommand::ReviewerWait,
+        wait_result,
+        args.json,
+        args.timeout_secs,
+    )
 }
 
 fn run_reviewer_comment(args: ReviewerCommentArgs, runtime: &RuntimeOptions) -> Result<()> {
@@ -1115,7 +1139,9 @@ fn build_reviewer_prompt(
         session.head_ref
     ));
     if let Some(change_summary) = session.change_summary.as_deref() {
-        lines.push(format!("Planned changes from the coding agent: {change_summary}"));
+        lines.push(format!(
+            "Planned changes from the coding agent: {change_summary}"
+        ));
     }
     lines.push("Review the current local changes and leave feedback in Argon.".to_string());
     lines.push("Do not edit files or apply code changes yourself.".to_string());
@@ -1131,7 +1157,10 @@ fn build_reviewer_prompt(
         "Add --file <path> and optionally --line-old/--line-new when you can anchor the comment to a changed line."
             .to_string(),
     );
-    lines.push("When you finish a review round, either leave more comments or submit one decision.".to_string());
+    lines.push(
+        "When you finish a review round, either leave more comments or submit one decision."
+            .to_string(),
+    );
     lines.push(format!("Decision template: {decision_command_template}"));
     lines.push(
         "Use `changes-requested` when the agent must make changes. Use `commented` when the pass is clean or when feedback is non-blocking."
@@ -1154,12 +1183,19 @@ fn build_reviewer_prompt(
     );
 
     if pending_feedback.is_empty() {
-        lines.push("Current snapshot: no subscribed thread updates are waiting right now.".to_string());
+        lines.push(
+            "Current snapshot: no subscribed thread updates are waiting right now.".to_string(),
+        );
     } else {
-        lines.push("Current snapshot: pending subscribed thread updates (review these now):".to_string());
+        lines.push(
+            "Current snapshot: pending subscribed thread updates (review these now):".to_string(),
+        );
         for (index, item) in pending_feedback.iter().enumerate() {
-            let anchor = match (&item.anchor.file_path, item.anchor.line_old, item.anchor.line_new)
-            {
+            let anchor = match (
+                &item.anchor.file_path,
+                item.anchor.line_old,
+                item.anchor.line_new,
+            ) {
                 (Some(path), old, new) => format!("{path} (old:{old:?} new:{new:?})"),
                 _ => "global".to_string(),
             };
@@ -1262,7 +1298,10 @@ fn feedback_author_label(feedback: &ReviewerFeedback) -> String {
 }
 
 fn latest_feedback_seen_at(pending_feedback: &[ReviewerFeedback]) -> Option<DateTime<Utc>> {
-    pending_feedback.iter().map(|feedback| feedback.created_at).max()
+    pending_feedback
+        .iter()
+        .map(|feedback| feedback.created_at)
+        .max()
 }
 
 fn mark_reviewer_feedback_seen(
@@ -1416,8 +1455,11 @@ fn build_agent_prompt(
         lines
             .push("Current snapshot: pending reviewer feedback (address immediately):".to_string());
         for (index, item) in pending_feedback.iter().enumerate() {
-            let anchor = match (&item.anchor.file_path, item.anchor.line_old, item.anchor.line_new)
-            {
+            let anchor = match (
+                &item.anchor.file_path,
+                item.anchor.line_old,
+                item.anchor.line_new,
+            ) {
                 (Some(path), old, new) => format!("{path} (old:{old:?} new:{new:?})"),
                 _ => "global".to_string(),
             };
@@ -1491,7 +1533,11 @@ fn render_agent_launch_command(
         .replace("{{repo_root}}", &repo_root)
         .replace("{{continue_command}}", &continue_quoted);
 
-    if has_prompt_placeholder { rendered } else { format!("{rendered} {prompt_quoted}") }
+    if has_prompt_placeholder {
+        rendered
+    } else {
+        format!("{rendered} {prompt_quoted}")
+    }
 }
 
 fn shell_command(command: &str) -> Command {
@@ -1575,7 +1621,10 @@ mod tests {
     fn desktop_spawn_detaches_into_new_session() {
         let temp = tempdir().expect("tempdir");
         let sid_path = temp.path().join("child.sid");
-        let script = format!("ps -o sid= -p $$ > {}", shell_quote(&sid_path.to_string_lossy()));
+        let script = format!(
+            "ps -o sid= -p $$ > {}",
+            shell_quote(&sid_path.to_string_lossy())
+        );
 
         let mut command = Command::new("sh");
         command.arg("-c").arg(script);
@@ -1590,7 +1639,10 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
 
-        let child_sid = fs::read_to_string(&sid_path).expect("child sid file").trim().to_string();
+        let child_sid = fs::read_to_string(&sid_path)
+            .expect("child sid file")
+            .trim()
+            .to_string();
         assert!(!child_sid.is_empty(), "child sid should not be empty");
 
         let parent_sid = unsafe { libc::getsid(0) };
@@ -1693,7 +1745,10 @@ fn wait_for_reviewer_feedback(
     let started = Instant::now();
     loop {
         let session = store.load(session_id)?;
-        if matches!(session.status, SessionStatus::Approved | SessionStatus::Closed) {
+        if matches!(
+            session.status,
+            SessionStatus::Approved | SessionStatus::Closed
+        ) {
             return Ok(WaitResult::Ready(session));
         }
         let last_seen_at = store.load_reviewer_last_seen(session_id, reviewer_name)?;
@@ -1748,7 +1803,10 @@ fn follow_session_events(store: &SessionStore, session_id: Uuid) -> Result<()> {
             last_emitted_signature = Some(signature);
             emitted_snapshot = true;
 
-            if matches!(session.status, SessionStatus::Approved | SessionStatus::Closed) {
+            if matches!(
+                session.status,
+                SessionStatus::Approved | SessionStatus::Closed
+            ) {
                 break;
             }
         }
@@ -1937,8 +1995,14 @@ fn try_launch_desktop_app(
         .clone()
         .or_else(|| std::env::var_os("ARGON_DESKTOP_LAUNCH").map(PathBuf::from))
         .map(normalize_path)
-        && spawn_desktop_command(Command::new(launcher_path), repo_root, repo_root, &session, false)
-            .is_ok()
+        && spawn_desktop_command(
+            Command::new(launcher_path),
+            repo_root,
+            repo_root,
+            &session,
+            false,
+        )
+        .is_ok()
     {
         return Ok("desktop-launch-flag");
     }
@@ -1955,11 +2019,21 @@ fn try_launch_desktop_app(
                     {
                         let mut command = Command::new("open");
                         command.args(["-a", &app.to_string_lossy()]);
-                        command.args(["--args", "--session-id", &session, "--repo-root", &reviewed_repo]);
+                        command.args([
+                            "--args",
+                            "--session-id",
+                            &session,
+                            "--repo-root",
+                            &reviewed_repo,
+                        ]);
                         command
                     },
-                    repo_root, repo_root, &session, false,
-                ).is_ok()
+                    repo_root,
+                    repo_root,
+                    &session,
+                    false,
+                )
+                .is_ok()
             {
                 return Ok("argon-app-env");
             }
@@ -1970,11 +2044,22 @@ fn try_launch_desktop_app(
             {
                 let mut command = Command::new("open");
                 command.args(["-a", "Argon"]);
-                command.args(["--args", "--session-id", &session, "--repo-root", &reviewed_repo]);
+                command.args([
+                    "--args",
+                    "--session-id",
+                    &session,
+                    "--repo-root",
+                    &reviewed_repo,
+                ]);
                 command
             },
-            repo_root, repo_root, &session, false,
-        ).is_ok() {
+            repo_root,
+            repo_root,
+            &session,
+            false,
+        )
+        .is_ok()
+        {
             return Ok("macos-open");
         }
     }
@@ -1993,7 +2078,11 @@ fn spawn_desktop_command(
 ) -> Result<()> {
     if inject_cli_args {
         let reviewed_repo = reviewed_repo_root.to_string_lossy().to_string();
-        command.arg("--session-id").arg(session_id).arg("--repo-root").arg(&reviewed_repo);
+        command
+            .arg("--session-id")
+            .arg(session_id)
+            .arg("--repo-root")
+            .arg(&reviewed_repo);
     }
 
     command
@@ -2015,7 +2104,9 @@ fn spawn_desktop_command(
             Ok(())
         });
     }
-    command.spawn().with_context(|| "failed to spawn desktop launch command".to_string())?;
+    command
+        .spawn()
+        .with_context(|| "failed to spawn desktop launch command".to_string())?;
     Ok(())
 }
 

@@ -3,410 +3,423 @@ import SwiftUI
 @MainActor
 @Observable
 final class AppState {
-    var session: ReviewSession?
-    var files: [FileDiff] = []
-    var selectedFile: FileDiff?
-    var errorMessage: String?
-    var isLoading = false
-    var isPolling = false
-    var pendingDrafts: [DraftComment] = []
-    var scrollToFile: UUID?
+  var session: ReviewSession?
+  var files: [FileDiff] = []
+  var selectedFile: FileDiff?
+  var errorMessage: String?
+  var isLoading = false
+  var isPolling = false
+  var pendingDrafts: [DraftComment] = []
+  var scrollToFile: UUID?
 
-    // Active inline comment editor
-    var activeCommentLineId: UUID?
-    var activeCommentText: String = ""
-    var showDiscardAlert = false
-    var pendingCommentLineId: UUID?
+  // Active inline comment editor
+  var activeCommentLineId: UUID?
+  var activeCommentText: String = ""
+  var showDiscardAlert = false
+  var pendingCommentLineId: UUID?
 
-    var activeMode: ReviewMode = .uncommitted
-    var activeBaseRef: String = "HEAD"
-    var activeHeadRef: String = "WORKTREE"
-    var activeMergeBaseSha: String = ""
+  var activeMode: ReviewMode = .uncommitted
+  var activeBaseRef: String = "HEAD"
+  var activeHeadRef: String = "WORKTREE"
+  var activeMergeBaseSha: String = ""
 
-    var detectedBaseRef: String?
-    var detectedHeadRef: String?
+  var detectedBaseRef: String?
+  var detectedHeadRef: String?
 
-    var sessionId: String?
-    var repoRoot: String?
+  var sessionId: String?
+  var repoRoot: String?
 
-    private var pollTask: Task<Void, Never>?
-    private var fileWatcher: FileWatcher?
-    private var diffRefreshTask: Task<Void, Never>?
-    private var lastDiffFingerprint: String = ""
+  private var pollTask: Task<Void, Never>?
+  private var fileWatcher: FileWatcher?
+  private var diffRefreshTask: Task<Void, Never>?
+  private var lastDiffFingerprint: String = ""
 
-    init() {
-        parseArguments()
+  init() {
+    parseArguments()
+  }
+
+  private func parseArguments() {
+    let args = ProcessInfo.processInfo.arguments
+    var i = 1
+    while i < args.count {
+      switch args[i] {
+      case "--session-id" where i + 1 < args.count:
+        sessionId = args[i + 1]
+        i += 2
+      case "--repo-root" where i + 1 < args.count:
+        repoRoot = args[i + 1]
+        i += 2
+      default:
+        i += 1
+      }
+    }
+  }
+
+  // MARK: - Load
+
+  func loadSession() {
+    guard let sessionId, let repoRoot else {
+      errorMessage = "No session. Run: argon . from a git repo"
+      return
     }
 
-    private func parseArguments() {
-        let args = ProcessInfo.processInfo.arguments
-        var i = 1
-        while i < args.count {
-            switch args[i] {
-            case "--session-id" where i + 1 < args.count:
-                sessionId = args[i + 1]
-                i += 2
-            case "--repo-root" where i + 1 < args.count:
-                repoRoot = args[i + 1]
-                i += 2
-            default:
-                i += 1
-            }
-        }
+    isLoading = true
+    let sid = sessionId
+    let root = repoRoot
+
+    Task {
+      let result = await Task.detached {
+        Self.doLoadSession(sessionId: sid, repoRoot: root)
+      }.value
+
+      isLoading = false
+      switch result {
+      case .success(let data):
+        session = data.session
+        activeMode = data.session.mode
+        activeBaseRef = data.session.baseRef
+        activeHeadRef = data.session.headRef
+        activeMergeBaseSha = data.session.mergeBaseSha
+        detectedBaseRef = data.detectedBase
+        detectedHeadRef = data.detectedHead
+        lastDiffFingerprint = data.diffFingerprint
+        applyNewFiles(data.files)
+      case .failure(let error):
+        errorMessage = error.localizedDescription
+      }
     }
+  }
 
-    // MARK: - Load
+  // MARK: - Switch Mode
 
-    func loadSession() {
-        guard let sessionId, let repoRoot else {
-            errorMessage = "No session. Run: argon . from a git repo"
-            return
-        }
+  func switchMode(_ mode: ReviewMode) {
+    guard let repoRoot else { return }
+    isLoading = true
 
-        isLoading = true
-        let sid = sessionId
-        let root = repoRoot
+    let sid = sessionId
+    let root = repoRoot
+    let dBase = detectedBaseRef
+    let dHead = detectedHeadRef
 
-        Task {
-            let result = await Task.detached {
-                Self.doLoadSession(sessionId: sid, repoRoot: root)
-            }.value
-
-            isLoading = false
-            switch result {
-            case .success(let data):
-                session = data.session
-                activeMode = data.session.mode
-                activeBaseRef = data.session.baseRef
-                activeHeadRef = data.session.headRef
-                activeMergeBaseSha = data.session.mergeBaseSha
-                detectedBaseRef = data.detectedBase
-                detectedHeadRef = data.detectedHead
-                lastDiffFingerprint = data.diffFingerprint
-                applyNewFiles(data.files)
-            case .failure(let error):
-                errorMessage = error.localizedDescription
-            }
-        }
-    }
-
-    // MARK: - Switch Mode
-
-    func switchMode(_ mode: ReviewMode) {
-        guard let repoRoot else { return }
-        isLoading = true
-
-        let sid = sessionId
-        let root = repoRoot
-        let dBase = detectedBaseRef
-        let dHead = detectedHeadRef
-
-        Task {
-            let result = await Task.detached {
-                Self.doSwitchMode(
-                    mode: mode, repoRoot: root, sessionId: sid,
-                    detectedBase: dBase, detectedHead: dHead
-                )
-            }.value
-
-            isLoading = false
-            switch result {
-            case .success(let data):
-                activeMode = data.target.mode
-                activeBaseRef = data.target.baseRef
-                activeHeadRef = data.target.headRef
-                activeMergeBaseSha = data.target.mergeBaseSha
-                applyNewFiles(data.files)
-                if let s = data.updatedSession {
-                    session = s
-                }
-            case .failure(let err):
-                errorMessage = err.localizedDescription
-            }
-        }
-    }
-
-    // MARK: - Background helpers
-
-    private enum SwitchError: LocalizedError {
-        case failed(String)
-        var errorDescription: String? {
-            switch self { case .failed(let msg): msg }
-        }
-    }
-
-    /// Replace the file list while preserving the selected file by path.
-    private func applyNewFiles(_ newFiles: [FileDiff]) {
-        let previousPath = selectedFile?.displayPath
-        files = newFiles
-        if let previousPath,
-           let match = newFiles.first(where: { $0.displayPath == previousPath }) {
-            selectedFile = match
-        } else {
-            selectedFile = newFiles.first
-        }
-    }
-
-    private struct LoadData: Sendable {
-        let session: ReviewSession
-        let files: [FileDiff]
-        let detectedBase: String?
-        let detectedHead: String?
-        let diffFingerprint: String
-    }
-
-    private struct SwitchData: Sendable {
-        let target: ResolvedTarget
-        let files: [FileDiff]
-        let updatedSession: ReviewSession?
-    }
-
-    nonisolated private static func doLoadSession(sessionId: String, repoRoot: String) -> Result<LoadData, Error> {
-        do {
-            let session = try SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
-            let rawDiff = GitService.diff(session: session)
-            let files = DiffParser.parse(rawDiff)
-            let detectedBase = GitService.inferBaseRef(repoRoot: repoRoot)
-            let detectedHead = GitService.currentBranchName(repoRoot: repoRoot)
-            let fingerprint = GitService.diffFingerprint(
-                repoRoot: repoRoot, mode: session.mode,
-                baseRef: session.baseRef, headRef: session.headRef,
-                mergeBaseSha: session.mergeBaseSha
-            )
-            return .success(LoadData(session: session, files: files, detectedBase: detectedBase, detectedHead: detectedHead, diffFingerprint: fingerprint))
-        } catch {
-            return .failure(error)
-        }
-    }
-
-    nonisolated private static func doSwitchMode(
-        mode: ReviewMode, repoRoot: String, sessionId: String?,
-        detectedBase: String?, detectedHead: String?
-    ) -> Result<SwitchData, SwitchError> {
-
-        let target: ResolvedTarget?
-        switch mode {
-        case .branch:
-            let base = detectedBase ?? "main"
-            let head = detectedHead ?? "HEAD"
-
-            target = GitService.resolveBranchTarget(repoRoot: repoRoot, baseRef: base, headRef: head)
-        case .commit:
-            target = GitService.resolveCommitTarget(repoRoot: repoRoot)
-        case .uncommitted:
-            target = GitService.resolveUncommittedTarget(repoRoot: repoRoot)
-        }
-
-        guard let target else {
-            return .failure(.failed("Could not resolve \(mode.rawValue) target"))
-        }
-
-        let rawDiff = GitService.diff(
-            repoRoot: repoRoot, mode: target.mode,
-            baseRef: target.baseRef, headRef: target.headRef,
-            mergeBaseSha: target.mergeBaseSha
+    Task {
+      let result = await Task.detached {
+        Self.doSwitchMode(
+          mode: mode, repoRoot: root, sessionId: sid,
+          detectedBase: dBase, detectedHead: dHead
         )
-        let files = DiffParser.parse(rawDiff)
+      }.value
 
-        var updatedSession: ReviewSession?
-        if let sessionId {
-            try? ArgonCLI.updateSessionTarget(
-                sessionId: sessionId, repoRoot: repoRoot,
-                mode: target.mode.rawValue, baseRef: target.baseRef,
-                headRef: target.headRef, mergeBaseSha: target.mergeBaseSha
-            )
-            updatedSession = try? SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
+      isLoading = false
+      switch result {
+      case .success(let data):
+        activeMode = data.target.mode
+        activeBaseRef = data.target.baseRef
+        activeHeadRef = data.target.headRef
+        activeMergeBaseSha = data.target.mergeBaseSha
+        applyNewFiles(data.files)
+        if let s = data.updatedSession {
+          session = s
         }
+      case .failure(let err):
+        errorMessage = err.localizedDescription
+      }
+    }
+  }
 
-        return .success(SwitchData(target: target, files: files, updatedSession: updatedSession))
+  // MARK: - Background helpers
+
+  private enum SwitchError: LocalizedError {
+    case failed(String)
+    var errorDescription: String? {
+      switch self {
+      case .failed(let msg): msg
+      }
+    }
+  }
+
+  /// Replace the file list while preserving the selected file by path.
+  private func applyNewFiles(_ newFiles: [FileDiff]) {
+    let previousPath = selectedFile?.displayPath
+    files = newFiles
+    if let previousPath,
+      let match = newFiles.first(where: { $0.displayPath == previousPath })
+    {
+      selectedFile = match
+    } else {
+      selectedFile = newFiles.first
+    }
+  }
+
+  private struct LoadData: Sendable {
+    let session: ReviewSession
+    let files: [FileDiff]
+    let detectedBase: String?
+    let detectedHead: String?
+    let diffFingerprint: String
+  }
+
+  private struct SwitchData: Sendable {
+    let target: ResolvedTarget
+    let files: [FileDiff]
+    let updatedSession: ReviewSession?
+  }
+
+  nonisolated private static func doLoadSession(sessionId: String, repoRoot: String) -> Result<
+    LoadData, Error
+  > {
+    do {
+      let session = try SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
+      let rawDiff = GitService.diff(session: session)
+      let files = DiffParser.parse(rawDiff)
+      let detectedBase = GitService.inferBaseRef(repoRoot: repoRoot)
+      let detectedHead = GitService.currentBranchName(repoRoot: repoRoot)
+      let fingerprint = GitService.diffFingerprint(
+        repoRoot: repoRoot, mode: session.mode,
+        baseRef: session.baseRef, headRef: session.headRef,
+        mergeBaseSha: session.mergeBaseSha
+      )
+      return .success(
+        LoadData(
+          session: session, files: files, detectedBase: detectedBase, detectedHead: detectedHead,
+          diffFingerprint: fingerprint))
+    } catch {
+      return .failure(error)
+    }
+  }
+
+  nonisolated private static func doSwitchMode(
+    mode: ReviewMode, repoRoot: String, sessionId: String?,
+    detectedBase: String?, detectedHead: String?
+  ) -> Result<SwitchData, SwitchError> {
+
+    let target: ResolvedTarget?
+    switch mode {
+    case .branch:
+      let base = detectedBase ?? "main"
+      let head = detectedHead ?? "HEAD"
+
+      target = GitService.resolveBranchTarget(repoRoot: repoRoot, baseRef: base, headRef: head)
+    case .commit:
+      target = GitService.resolveCommitTarget(repoRoot: repoRoot)
+    case .uncommitted:
+      target = GitService.resolveUncommittedTarget(repoRoot: repoRoot)
     }
 
-    // MARK: - Polling
-
-    func refreshSession() {
-        guard let sessionId, let repoRoot else { return }
-        do {
-            session = try SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
-        } catch {}
+    guard let target else {
+      return .failure(.failed("Could not resolve \(mode.rawValue) target"))
     }
 
-    func reload() {
-        errorMessage = nil
-        loadSession()
+    let rawDiff = GitService.diff(
+      repoRoot: repoRoot, mode: target.mode,
+      baseRef: target.baseRef, headRef: target.headRef,
+      mergeBaseSha: target.mergeBaseSha
+    )
+    let files = DiffParser.parse(rawDiff)
+
+    var updatedSession: ReviewSession?
+    if let sessionId {
+      try? ArgonCLI.updateSessionTarget(
+        sessionId: sessionId, repoRoot: repoRoot,
+        mode: target.mode.rawValue, baseRef: target.baseRef,
+        headRef: target.headRef, mergeBaseSha: target.mergeBaseSha
+      )
+      updatedSession = try? SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
     }
 
-    func startPolling() {
-        guard pollTask == nil else { return }
-        isPolling = true
+    return .success(SwitchData(target: target, files: files, updatedSession: updatedSession))
+  }
 
-        // Session poll (threads, status, decision)
-        pollTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1.5))
-                guard !Task.isCancelled else { break }
-                self?.refreshSession()
-                self?.reloadDrafts()
-            }
+  // MARK: - Polling
+
+  func refreshSession() {
+    guard let sessionId, let repoRoot else { return }
+    do {
+      session = try SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
+    } catch {}
+  }
+
+  func reload() {
+    errorMessage = nil
+    loadSession()
+  }
+
+  func startPolling() {
+    guard pollTask == nil else { return }
+    isPolling = true
+
+    // Session poll (threads, status, decision)
+    pollTask = Task { [weak self] in
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(1.5))
+        guard !Task.isCancelled else { break }
+        self?.refreshSession()
+        self?.reloadDrafts()
+      }
+    }
+
+    // File watcher for working tree changes
+    if let repoRoot, fileWatcher == nil {
+      fileWatcher = FileWatcher(path: repoRoot) { [weak self] in
+        Task { @MainActor [weak self] in
+          await self?.onFileSystemChange()
         }
-
-        // File watcher for working tree changes
-        if let repoRoot, fileWatcher == nil {
-            fileWatcher = FileWatcher(path: repoRoot) { [weak self] in
-                Task { @MainActor [weak self] in
-                    await self?.onFileSystemChange()
-                }
-            }
-            fileWatcher?.start()
-        }
+      }
+      fileWatcher?.start()
     }
+  }
 
-    private func onFileSystemChange() async {
-        // Debounce: cancel any pending refresh and start a new one
-        diffRefreshTask?.cancel()
-        diffRefreshTask = Task {
-            try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled else { return }
-            await checkDiffChanged()
-        }
+  private func onFileSystemChange() async {
+    // Debounce: cancel any pending refresh and start a new one
+    diffRefreshTask?.cancel()
+    diffRefreshTask = Task {
+      try? await Task.sleep(for: .milliseconds(500))
+      guard !Task.isCancelled else { return }
+      await checkDiffChanged()
     }
+  }
 
-    // MARK: - Inline Comment Editor
+  // MARK: - Inline Comment Editor
 
-    func requestCommentEditor(for lineId: UUID) {
-        // Same line — toggle off
-        if activeCommentLineId == lineId {
-            return
-        }
-        // Another line with unsaved text — confirm discard
-        if activeCommentLineId != nil && !activeCommentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            pendingCommentLineId = lineId
-            showDiscardAlert = true
-            return
-        }
-        // Open on new line
-        openCommentEditor(for: lineId)
+  func requestCommentEditor(for lineId: UUID) {
+    // Same line — toggle off
+    if activeCommentLineId == lineId {
+      return
     }
-
-    func confirmDiscard() {
-        if let pending = pendingCommentLineId {
-            openCommentEditor(for: pending)
-        }
-        pendingCommentLineId = nil
+    // Another line with unsaved text — confirm discard
+    if activeCommentLineId != nil
+      && !activeCommentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    {
+      pendingCommentLineId = lineId
+      showDiscardAlert = true
+      return
     }
+    // Open on new line
+    openCommentEditor(for: lineId)
+  }
 
-    func cancelDiscard() {
-        pendingCommentLineId = nil
+  func confirmDiscard() {
+    if let pending = pendingCommentLineId {
+      openCommentEditor(for: pending)
     }
+    pendingCommentLineId = nil
+  }
 
-    func closeCommentEditor() {
-        activeCommentLineId = nil
-        activeCommentText = ""
+  func cancelDiscard() {
+    pendingCommentLineId = nil
+  }
+
+  func closeCommentEditor() {
+    activeCommentLineId = nil
+    activeCommentText = ""
+  }
+
+  private func openCommentEditor(for lineId: UUID) {
+    activeCommentText = ""
+    activeCommentLineId = lineId
+  }
+
+  func stopPolling() {
+    pollTask?.cancel()
+    pollTask = nil
+    diffRefreshTask?.cancel()
+    diffRefreshTask = nil
+    fileWatcher?.stop()
+    fileWatcher = nil
+    isPolling = false
+  }
+
+  private func checkDiffChanged() async {
+    guard let repoRoot else { return }
+    let mode = activeMode
+    let base = activeBaseRef
+    let head = activeHeadRef
+    let mergeBase = activeMergeBaseSha
+
+    let fingerprint = await Task.detached {
+      GitService.diffFingerprint(
+        repoRoot: repoRoot, mode: mode,
+        baseRef: base, headRef: head, mergeBaseSha: mergeBase
+      )
+    }.value
+
+    if fingerprint != lastDiffFingerprint && !lastDiffFingerprint.isEmpty {
+      // Diff changed — refresh in background
+      let newFiles = await Task.detached {
+        let rawDiff = GitService.diff(
+          repoRoot: repoRoot, mode: mode,
+          baseRef: base, headRef: head, mergeBaseSha: mergeBase
+        )
+        return DiffParser.parse(rawDiff)
+      }.value
+      applyNewFiles(newFiles)
     }
+    lastDiffFingerprint = fingerprint
+  }
 
-    private func openCommentEditor(for lineId: UUID) {
-        activeCommentText = ""
-        activeCommentLineId = lineId
+  func closeSession() {
+    guard let sessionId, let repoRoot else { return }
+    do {
+      try ArgonCLI.closeSession(sessionId: sessionId, repoRoot: repoRoot)
+      refreshSession()
+    } catch {}
+    stopPolling()
+  }
+
+  // MARK: - Draft Review
+
+  func addDraft(
+    message: String, filePath: String? = nil, lineNew: UInt32? = nil, lineOld: UInt32? = nil,
+    threadId: String? = nil
+  ) {
+    guard let sessionId, let repoRoot else { return }
+    do {
+      try ArgonCLI.addDraftComment(
+        sessionId: sessionId, repoRoot: repoRoot,
+        message: message, filePath: filePath,
+        lineNew: lineNew, lineOld: lineOld, threadId: threadId
+      )
+      reloadDrafts()
+    } catch {
+      errorMessage = error.localizedDescription
     }
+  }
 
-    func stopPolling() {
-        pollTask?.cancel()
-        pollTask = nil
-        diffRefreshTask?.cancel()
-        diffRefreshTask = nil
-        fileWatcher?.stop()
-        fileWatcher = nil
-        isPolling = false
+  func deleteDraft(_ draftId: String) {
+    guard let sessionId, let repoRoot else { return }
+    do {
+      try ArgonCLI.deleteDraftComment(sessionId: sessionId, repoRoot: repoRoot, draftId: draftId)
+      reloadDrafts()
+    } catch {
+      errorMessage = error.localizedDescription
     }
+  }
 
-    private func checkDiffChanged() async {
-        guard let repoRoot else { return }
-        let mode = activeMode
-        let base = activeBaseRef
-        let head = activeHeadRef
-        let mergeBase = activeMergeBaseSha
-
-        let fingerprint = await Task.detached {
-            GitService.diffFingerprint(
-                repoRoot: repoRoot, mode: mode,
-                baseRef: base, headRef: head, mergeBaseSha: mergeBase
-            )
-        }.value
-
-        if fingerprint != lastDiffFingerprint && !lastDiffFingerprint.isEmpty {
-            // Diff changed — refresh in background
-            let newFiles = await Task.detached {
-                let rawDiff = GitService.diff(
-                    repoRoot: repoRoot, mode: mode,
-                    baseRef: base, headRef: head, mergeBaseSha: mergeBase
-                )
-                return DiffParser.parse(rawDiff)
-            }.value
-            applyNewFiles(newFiles)
-        }
-        lastDiffFingerprint = fingerprint
+  func submitReview(outcome: String?, summary: String? = nil) {
+    guard let sessionId, let repoRoot else { return }
+    do {
+      try ArgonCLI.submitReview(
+        sessionId: sessionId, repoRoot: repoRoot,
+        outcome: outcome, summary: summary
+      )
+      pendingDrafts = []
+      reload()
+    } catch {
+      errorMessage = error.localizedDescription
     }
+  }
 
-    func closeSession() {
-        guard let sessionId, let repoRoot else { return }
-        do {
-            try ArgonCLI.closeSession(sessionId: sessionId, repoRoot: repoRoot)
-            refreshSession()
-        } catch {}
-        stopPolling()
+  func reloadDrafts() {
+    guard let sessionId, let repoRoot else { return }
+    do {
+      pendingDrafts = try SessionLoader.loadDraftReview(sessionId: sessionId, repoRoot: repoRoot)
+    } catch {
+      pendingDrafts = []
     }
+  }
 
-    // MARK: - Draft Review
-
-    func addDraft(message: String, filePath: String? = nil, lineNew: UInt32? = nil, lineOld: UInt32? = nil, threadId: String? = nil) {
-        guard let sessionId, let repoRoot else { return }
-        do {
-            try ArgonCLI.addDraftComment(
-                sessionId: sessionId, repoRoot: repoRoot,
-                message: message, filePath: filePath,
-                lineNew: lineNew, lineOld: lineOld, threadId: threadId
-            )
-            reloadDrafts()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    func deleteDraft(_ draftId: String) {
-        guard let sessionId, let repoRoot else { return }
-        do {
-            try ArgonCLI.deleteDraftComment(sessionId: sessionId, repoRoot: repoRoot, draftId: draftId)
-            reloadDrafts()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    func submitReview(outcome: String?, summary: String? = nil) {
-        guard let sessionId, let repoRoot else { return }
-        do {
-            try ArgonCLI.submitReview(
-                sessionId: sessionId, repoRoot: repoRoot,
-                outcome: outcome, summary: summary
-            )
-            pendingDrafts = []
-            reload()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    func reloadDrafts() {
-        guard let sessionId, let repoRoot else { return }
-        do {
-            pendingDrafts = try SessionLoader.loadDraftReview(sessionId: sessionId, repoRoot: repoRoot)
-        } catch {
-            pendingDrafts = []
-        }
-    }
-
-    var handoffCommand: String {
-        guard let sessionId, let repoRoot else { return "" }
-        let cli = ProcessInfo.processInfo.environment["ARGON_CLI_CMD"] ?? "argon"
-        return "\(cli) --repo \(repoRoot) agent prompt --session \(sessionId)"
-    }
+  var handoffCommand: String {
+    guard let sessionId, let repoRoot else { return "" }
+    let cli = ProcessInfo.processInfo.environment["ARGON_CLI_CMD"] ?? "argon"
+    return "\(cli) --repo \(repoRoot) agent prompt --session \(sessionId)"
+  }
 }

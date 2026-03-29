@@ -61,7 +61,10 @@ impl SessionStore {
     ) -> Self {
         let repo_root = repo_root.into();
         let sessions_dir = sessions_dir_for_repo(&repo_root, &storage_root.into());
-        Self { repo_root, sessions_dir }
+        Self {
+            repo_root,
+            sessions_dir,
+        }
     }
 
     pub fn repo_root(&self) -> &Path {
@@ -191,14 +194,19 @@ impl SessionStore {
                 .comments
                 .iter_mut()
                 .find(|draft| draft.id == draft_id)
-                .ok_or(StoreError::DraftCommentNotFound { session_id, draft_id })?;
+                .ok_or(StoreError::DraftCommentNotFound {
+                    session_id,
+                    draft_id,
+                })?;
             draft.thread_id = thread_id;
             draft.anchor = anchor;
             draft.body = body;
             draft.updated_at = now;
         } else if let Some(thread_id) = thread_id {
-            if let Some(draft) =
-                draft_review.comments.iter_mut().find(|draft| draft.thread_id == Some(thread_id))
+            if let Some(draft) = draft_review
+                .comments
+                .iter_mut()
+                .find(|draft| draft.thread_id == Some(thread_id))
             {
                 draft.anchor = anchor;
                 draft.body = body;
@@ -238,7 +246,10 @@ impl SessionStore {
         let initial_len = draft_review.comments.len();
         draft_review.comments.retain(|draft| draft.id != draft_id);
         if draft_review.comments.len() == initial_len {
-            return Err(StoreError::DraftCommentNotFound { session_id, draft_id });
+            return Err(StoreError::DraftCommentNotFound {
+                session_id,
+                draft_id,
+            });
         }
 
         draft_review.touch();
@@ -375,11 +386,17 @@ impl SessionStore {
             .threads
             .iter_mut()
             .find(|thread| thread.id == thread_id)
-            .ok_or(StoreError::ThreadNotFound { session_id, thread_id })?;
+            .ok_or(StoreError::ThreadNotFound {
+                session_id,
+                thread_id,
+            })?;
         thread.state = ThreadState::Resolved;
         thread.agent_acknowledged_at = None;
 
-        if !matches!(session.status, SessionStatus::Approved | SessionStatus::Closed) {
+        if !matches!(
+            session.status,
+            SessionStatus::Approved | SessionStatus::Closed
+        ) {
             session.status = if has_pending_reviewer_feedback(&session) {
                 SessionStatus::AwaitingAgent
             } else {
@@ -403,7 +420,10 @@ impl SessionStore {
             .threads
             .iter_mut()
             .find(|thread| thread.id == thread_id)
-            .ok_or(StoreError::ThreadNotFound { session_id, thread_id })?;
+            .ok_or(StoreError::ThreadNotFound {
+                session_id,
+                thread_id,
+            })?;
         thread.agent_acknowledged_at = Some(now);
         session.agent_last_seen_at = Some(now);
         session.touch();
@@ -418,7 +438,11 @@ impl SessionStore {
         summary: Option<String>,
     ) -> Result<ReviewSession, StoreError> {
         let mut session = self.load(session_id)?;
-        session.decision = Some(ReviewDecision { outcome, summary, created_at: Utc::now() });
+        session.decision = Some(ReviewDecision {
+            outcome,
+            summary,
+            created_at: Utc::now(),
+        });
         session.status = match outcome {
             ReviewOutcome::Approved => SessionStatus::Approved,
             ReviewOutcome::ChangesRequested | ReviewOutcome::Commented => {
@@ -432,7 +456,10 @@ impl SessionStore {
 
     pub fn close_session(&self, session_id: Uuid) -> Result<ReviewSession, StoreError> {
         let mut session = self.load(session_id)?;
-        if matches!(session.status, SessionStatus::Approved | SessionStatus::Closed) {
+        if matches!(
+            session.status,
+            SessionStatus::Approved | SessionStatus::Closed
+        ) {
             return Ok(session);
         }
 
@@ -456,10 +483,14 @@ impl SessionStore {
 
         let resolved_thread_id = match input.thread_id {
             Some(thread_id) => {
-                let thread =
-                    session.threads.iter_mut().find(|thread| thread.id == thread_id).ok_or(
-                        StoreError::ThreadNotFound { session_id: input.session_id, thread_id },
-                    )?;
+                let thread = session
+                    .threads
+                    .iter_mut()
+                    .find(|thread| thread.id == thread_id)
+                    .ok_or(StoreError::ThreadNotFound {
+                        session_id: input.session_id,
+                        thread_id,
+                    })?;
 
                 let comment = ReviewComment {
                     id: Uuid::new_v4(),
@@ -527,7 +558,9 @@ impl SessionStore {
     }
 
     fn draft_review_path(&self, session_id: Uuid) -> PathBuf {
-        self.sessions_dir.join("drafts").join(format!("{session_id}.json"))
+        self.sessions_dir
+            .join("drafts")
+            .join(format!("{session_id}.json"))
     }
 
     fn reviewer_state_path(&self, session_id: Uuid, reviewer_name: &str) -> PathBuf {
@@ -591,7 +624,9 @@ fn read_draft_review_from_path(path: &Path) -> Result<DraftReview, io::Error> {
 }
 
 fn sessions_dir_for_repo(repo_root: &Path, storage_root: &Path) -> PathBuf {
-    storage_root.join("sessions").join(repo_storage_key(repo_root))
+    storage_root
+        .join("sessions")
+        .join(repo_storage_key(repo_root))
 }
 
 fn argon_storage_root() -> PathBuf {
@@ -681,7 +716,9 @@ mod tests {
     fn create_and_load_session() {
         let temp_dir = TempDir::new().expect("temp dir");
         let store = test_store(temp_dir.path());
-        let session = store.create_session("main", "feature/test", "deadbeef").expect("session");
+        let session = store
+            .create_session("main", "feature/test", "deadbeef")
+            .expect("session");
 
         let loaded = store.load(session.id).expect("load");
         assert_eq!(loaded.mode, ReviewMode::Branch);
@@ -696,7 +733,9 @@ mod tests {
     fn reviewer_comment_persists_author_name() {
         let temp_dir = TempDir::new().expect("temp dir");
         let store = test_store(temp_dir.path());
-        let session = store.create_session("main", "feature/test", "deadbeef").expect("session");
+        let session = store
+            .create_session("main", "feature/test", "deadbeef")
+            .expect("session");
 
         let (updated, _thread_id) = store
             .add_reviewer_comment(
@@ -724,7 +763,9 @@ mod tests {
     fn reviewer_seen_state_round_trips() {
         let temp_dir = TempDir::new().expect("temp dir");
         let store = test_store(temp_dir.path());
-        let session = store.create_session("main", "feature/test", "deadbeef").expect("session");
+        let session = store
+            .create_session("main", "feature/test", "deadbeef")
+            .expect("session");
         let seen_at = Utc::now();
 
         store
@@ -741,7 +782,9 @@ mod tests {
     fn mark_agent_seen_sets_timestamp() {
         let temp_dir = TempDir::new().expect("temp dir");
         let store = test_store(temp_dir.path());
-        let session = store.create_session("main", "feature/test", "deadbeef").expect("session");
+        let session = store
+            .create_session("main", "feature/test", "deadbeef")
+            .expect("session");
         assert!(session.agent_last_seen_at.is_none());
 
         let updated = store.mark_agent_seen(session.id).expect("mark agent seen");
@@ -752,7 +795,9 @@ mod tests {
     fn add_agent_reply_fails_for_missing_thread() {
         let temp_dir = TempDir::new().expect("temp dir");
         let store = test_store(temp_dir.path());
-        let session = store.create_session("main", "feature/test", "deadbeef").expect("session");
+        let session = store
+            .create_session("main", "feature/test", "deadbeef")
+            .expect("session");
 
         let missing_thread = Uuid::new_v4();
         let error = store
@@ -760,7 +805,10 @@ mod tests {
             .expect_err("thread should be missing");
 
         match error {
-            StoreError::ThreadNotFound { session_id, thread_id } => {
+            StoreError::ThreadNotFound {
+                session_id,
+                thread_id,
+            } => {
                 assert_eq!(session_id, session.id);
                 assert_eq!(thread_id, missing_thread);
             }
@@ -772,7 +820,9 @@ mod tests {
     fn update_session_target_resets_threads_and_decision() {
         let temp_dir = TempDir::new().expect("temp dir");
         let store = test_store(temp_dir.path());
-        let session = store.create_session("main", "feature/test", "deadbeef").expect("session");
+        let session = store
+            .create_session("main", "feature/test", "deadbeef")
+            .expect("session");
 
         let (session, thread_id) = store
             .add_reviewer_comment(
@@ -811,7 +861,9 @@ mod tests {
     fn mark_thread_resolved_updates_thread_state_and_status() {
         let temp_dir = TempDir::new().expect("temp dir");
         let store = test_store(temp_dir.path());
-        let session = store.create_session("main", "feature/test", "deadbeef").expect("session");
+        let session = store
+            .create_session("main", "feature/test", "deadbeef")
+            .expect("session");
 
         let (with_thread, thread_id) = store
             .add_reviewer_comment(
@@ -825,8 +877,9 @@ mod tests {
             .expect("reviewer comment");
         assert_eq!(with_thread.status, SessionStatus::AwaitingAgent);
 
-        let resolved =
-            store.mark_thread_resolved(with_thread.id, thread_id).expect("resolve thread");
+        let resolved = store
+            .mark_thread_resolved(with_thread.id, thread_id)
+            .expect("resolve thread");
         assert_eq!(resolved.status, SessionStatus::AwaitingReviewer);
         assert_eq!(resolved.threads.len(), 1);
         assert_eq!(resolved.threads[0].state, ThreadState::Resolved);
@@ -836,7 +889,9 @@ mod tests {
     fn mark_thread_resolved_fails_for_missing_thread() {
         let temp_dir = TempDir::new().expect("temp dir");
         let store = test_store(temp_dir.path());
-        let session = store.create_session("main", "feature/test", "deadbeef").expect("session");
+        let session = store
+            .create_session("main", "feature/test", "deadbeef")
+            .expect("session");
 
         let missing_thread = Uuid::new_v4();
         let error = store
@@ -844,7 +899,10 @@ mod tests {
             .expect_err("thread should be missing");
 
         match error {
-            StoreError::ThreadNotFound { session_id, thread_id } => {
+            StoreError::ThreadNotFound {
+                session_id,
+                thread_id,
+            } => {
                 assert_eq!(session_id, session.id);
                 assert_eq!(thread_id, missing_thread);
             }
@@ -856,7 +914,9 @@ mod tests {
     fn acknowledge_thread_sets_timestamp_and_agent_seen() {
         let temp_dir = TempDir::new().expect("temp dir");
         let store = test_store(temp_dir.path());
-        let session = store.create_session("main", "feature/test", "deadbeef").expect("session");
+        let session = store
+            .create_session("main", "feature/test", "deadbeef")
+            .expect("session");
         let (with_thread, thread_id) = store
             .add_reviewer_comment(
                 session.id,
@@ -869,8 +929,9 @@ mod tests {
             .expect("reviewer comment");
         assert!(with_thread.threads[0].agent_acknowledged_at.is_none());
 
-        let acknowledged =
-            store.acknowledge_thread(with_thread.id, thread_id).expect("acknowledge thread");
+        let acknowledged = store
+            .acknowledge_thread(with_thread.id, thread_id)
+            .expect("acknowledge thread");
         assert!(acknowledged.agent_last_seen_at.is_some());
         assert_eq!(acknowledged.threads.len(), 1);
         assert!(acknowledged.threads[0].agent_acknowledged_at.is_some());
@@ -880,7 +941,9 @@ mod tests {
     fn close_session_marks_status_closed() {
         let temp_dir = TempDir::new().expect("temp dir");
         let store = test_store(temp_dir.path());
-        let session = store.create_session("main", "feature/test", "deadbeef").expect("session");
+        let session = store
+            .create_session("main", "feature/test", "deadbeef")
+            .expect("session");
         let session = store
             .add_reviewer_comment(
                 session.id,
@@ -902,9 +965,15 @@ mod tests {
     fn close_session_keeps_approved_sessions_approved() {
         let temp_dir = TempDir::new().expect("temp dir");
         let store = test_store(temp_dir.path());
-        let session = store.create_session("main", "feature/test", "deadbeef").expect("session");
+        let session = store
+            .create_session("main", "feature/test", "deadbeef")
+            .expect("session");
         let approved = store
-            .set_decision(session.id, ReviewOutcome::Approved, Some("done".to_string()))
+            .set_decision(
+                session.id,
+                ReviewOutcome::Approved,
+                Some("done".to_string()),
+            )
             .expect("approve session");
 
         let closed = store.close_session(approved.id).expect("close session");
@@ -916,7 +985,9 @@ mod tests {
     fn acknowledge_thread_fails_for_missing_thread() {
         let temp_dir = TempDir::new().expect("temp dir");
         let store = test_store(temp_dir.path());
-        let session = store.create_session("main", "feature/test", "deadbeef").expect("session");
+        let session = store
+            .create_session("main", "feature/test", "deadbeef")
+            .expect("session");
 
         let missing_thread = Uuid::new_v4();
         let error = store
@@ -924,7 +995,10 @@ mod tests {
             .expect_err("thread should be missing");
 
         match error {
-            StoreError::ThreadNotFound { session_id, thread_id } => {
+            StoreError::ThreadNotFound {
+                session_id,
+                thread_id,
+            } => {
                 assert_eq!(session_id, session.id);
                 assert_eq!(thread_id, missing_thread);
             }
@@ -936,7 +1010,9 @@ mod tests {
     fn add_comment_clears_thread_acknowledgement() {
         let temp_dir = TempDir::new().expect("temp dir");
         let store = test_store(temp_dir.path());
-        let session = store.create_session("main", "feature/test", "deadbeef").expect("session");
+        let session = store
+            .create_session("main", "feature/test", "deadbeef")
+            .expect("session");
         let (with_thread, thread_id) = store
             .add_reviewer_comment(
                 session.id,
@@ -947,12 +1023,18 @@ mod tests {
                 None,
             )
             .expect("reviewer comment");
-        let acknowledged =
-            store.acknowledge_thread(with_thread.id, thread_id).expect("acknowledge thread");
+        let acknowledged = store
+            .acknowledge_thread(with_thread.id, thread_id)
+            .expect("acknowledge thread");
         assert!(acknowledged.threads[0].agent_acknowledged_at.is_some());
 
         let replied = store
-            .add_agent_reply(acknowledged.id, thread_id, "Explained in latest update", true)
+            .add_agent_reply(
+                acknowledged.id,
+                thread_id,
+                "Explained in latest update",
+                true,
+            )
             .expect("agent reply");
         assert_eq!(replied.threads[0].state, ThreadState::Addressed);
         assert!(replied.threads[0].agent_acknowledged_at.is_none());
@@ -962,7 +1044,9 @@ mod tests {
     fn create_session_does_not_create_repo_local_argon_directory() {
         let temp_dir = TempDir::new().expect("temp dir");
         let store = test_store(temp_dir.path());
-        let session = store.create_session("main", "feature/test", "deadbeef").expect("session");
+        let session = store
+            .create_session("main", "feature/test", "deadbeef")
+            .expect("session");
 
         let repo_local_dir = temp_dir.path().join(".argon");
         assert!(!repo_local_dir.exists());
@@ -973,7 +1057,9 @@ mod tests {
     fn upsert_and_delete_draft_comment_persists_review_batch() {
         let temp_dir = TempDir::new().expect("temp dir");
         let store = test_store(temp_dir.path());
-        let session = store.create_session("main", "feature/test", "deadbeef").expect("session");
+        let session = store
+            .create_session("main", "feature/test", "deadbeef")
+            .expect("session");
 
         let draft_review = store
             .upsert_draft_comment(
@@ -991,7 +1077,9 @@ mod tests {
         assert_eq!(draft_review.comments.len(), 1);
         let draft_id = draft_review.comments[0].id;
 
-        let loaded = store.load_draft_review(session.id).expect("load draft review");
+        let loaded = store
+            .load_draft_review(session.id)
+            .expect("load draft review");
         assert_eq!(loaded.comments.len(), 1);
         assert_eq!(loaded.comments[0].body, "Please rename this");
 
@@ -1012,8 +1100,9 @@ mod tests {
         assert_eq!(updated.comments[0].body, "Please rename this helper");
         assert_eq!(updated.comments[0].anchor.line_new, Some(14));
 
-        let emptied =
-            store.delete_draft_comment(session.id, draft_id).expect("delete draft comment");
+        let emptied = store
+            .delete_draft_comment(session.id, draft_id)
+            .expect("delete draft comment");
         assert!(emptied.comments.is_empty());
         assert!(
             !store.draft_review_path(session.id).exists(),
@@ -1025,7 +1114,9 @@ mod tests {
     fn submit_draft_review_materializes_comments_and_clears_draft_file() {
         let temp_dir = TempDir::new().expect("temp dir");
         let store = test_store(temp_dir.path());
-        let session = store.create_session("main", "feature/test", "deadbeef").expect("session");
+        let session = store
+            .create_session("main", "feature/test", "deadbeef")
+            .expect("session");
 
         store
             .upsert_draft_comment(
@@ -1037,18 +1128,26 @@ mod tests {
             )
             .expect("create draft");
 
-        let (submitted_session, submitted_count) =
-            store.submit_draft_review(session.id).expect("submit draft review");
+        let (submitted_session, submitted_count) = store
+            .submit_draft_review(session.id)
+            .expect("submit draft review");
         assert_eq!(submitted_count, 1);
         assert_eq!(submitted_session.status, SessionStatus::AwaitingAgent);
         assert_eq!(submitted_session.threads.len(), 1);
-        assert_eq!(submitted_session.threads[0].comments[0].body, "Please explain this branch");
+        assert_eq!(
+            submitted_session.threads[0].comments[0].body,
+            "Please explain this branch"
+        );
         assert!(
             !store.draft_review_path(session.id).exists(),
             "submitting draft review should clear the draft file"
         );
         assert!(
-            store.load_draft_review(session.id).expect("reload draft review").comments.is_empty()
+            store
+                .load_draft_review(session.id)
+                .expect("reload draft review")
+                .comments
+                .is_empty()
         );
     }
 
@@ -1056,7 +1155,9 @@ mod tests {
     fn update_session_target_clears_draft_review() {
         let temp_dir = TempDir::new().expect("temp dir");
         let store = test_store(temp_dir.path());
-        let session = store.create_session("main", "feature/test", "deadbeef").expect("session");
+        let session = store
+            .create_session("main", "feature/test", "deadbeef")
+            .expect("session");
 
         store
             .upsert_draft_comment(
@@ -1075,7 +1176,11 @@ mod tests {
 
         assert!(!store.draft_review_path(session.id).exists());
         assert!(
-            store.load_draft_review(session.id).expect("reload draft review").comments.is_empty()
+            store
+                .load_draft_review(session.id)
+                .expect("reload draft review")
+                .comments
+                .is_empty()
         );
     }
 }

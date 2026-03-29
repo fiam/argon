@@ -60,7 +60,11 @@ pub enum DiffError {
     #[error("diff parse error: {0}")]
     Parse(String),
     #[error("diff index out of bounds at file={file}, hunk={hunk}, line={line}")]
-    OutOfBounds { file: usize, hunk: usize, line: usize },
+    OutOfBounds {
+        file: usize,
+        hunk: usize,
+        line: usize,
+    },
 }
 
 pub fn build_review_diff(
@@ -118,10 +122,17 @@ fn resolve_commit_sha(repo_root: &Path, reference: &str) -> Result<String, DiffE
 }
 
 fn git_capture(repo_root: &Path, args: &[&str]) -> Result<String, DiffError> {
-    let output = Command::new("git").arg("-C").arg(repo_root).args(args).output()?;
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(args)
+        .output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(DiffError::Git(format!("git {} failed: {stderr}", args.join(" "))));
+        return Err(DiffError::Git(format!(
+            "git {} failed: {stderr}",
+            args.join(" ")
+        )));
     }
 
     let stdout = String::from_utf8(output.stdout)?;
@@ -140,7 +151,11 @@ pub fn parse_unified_diff(payload: &str) -> Result<Vec<FileDiff>, DiffError> {
                 files.push(file);
             }
             let (old_path, new_path) = parse_diff_header(raw_line)?;
-            current_file = Some(FileDiff { old_path, new_path, hunks: Vec::new() });
+            current_file = Some(FileDiff {
+                old_path,
+                new_path,
+                hunks: Vec::new(),
+            });
             continue;
         }
 
@@ -169,7 +184,9 @@ pub fn parse_unified_diff(payload: &str) -> Result<Vec<FileDiff>, DiffError> {
                 continue;
             }
             if raw_line.is_empty() {
-                return Err(DiffError::Parse("unexpected empty diff line inside hunk".to_string()));
+                return Err(DiffError::Parse(
+                    "unexpected empty diff line inside hunk".to_string(),
+                ));
             }
             let marker = raw_line
                 .chars()
@@ -212,7 +229,9 @@ pub fn parse_unified_diff(payload: &str) -> Result<Vec<FileDiff>, DiffError> {
                     hunk.lines.push(line);
                 }
                 other => {
-                    return Err(DiffError::Parse(format!("unexpected hunk line marker '{other}'")));
+                    return Err(DiffError::Parse(format!(
+                        "unexpected hunk line marker '{other}'"
+                    )));
                 }
             }
         }
@@ -326,7 +345,12 @@ fn parse_hunk_header(line: &str) -> Result<ParsedHunk, DiffError> {
         .ok_or_else(|| DiffError::Parse("invalid hunk range pair".to_string()))?;
     let (old_start, old_lines) = parse_range(old_range)?;
     let (new_start, new_lines) = parse_range(new_range)?;
-    Ok(ParsedHunk { old_start, old_lines, new_start, new_lines })
+    Ok(ParsedHunk {
+        old_start,
+        old_lines,
+        new_start,
+        new_lines,
+    })
 }
 
 fn parse_range(range: &str) -> Result<(u32, u32), DiffError> {
