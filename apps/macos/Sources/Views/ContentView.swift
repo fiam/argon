@@ -60,13 +60,11 @@ struct ReviewLayout: View {
         } detail: {
             VStack(spacing: 0) {
                 SessionHeader(session: session, fileCount: appState.files.count)
-                    .overlay(alignment: .bottom) {
-                        if appState.isLoading {
-                            ProgressView()
-                                .scaleEffect(0.5)
-                                .frame(height: 2)
-                        }
-                    }
+                if appState.isLoading {
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                        .frame(height: 2)
+                }
                 Divider()
                 DiffDetailView()
             }
