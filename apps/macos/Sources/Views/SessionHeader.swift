@@ -395,19 +395,13 @@ struct DiffStatView: View {
   var body: some View {
     if !files.isEmpty {
       HStack(spacing: 6) {
-        Text("\(files.count) files")
+        RollingNumber(files.count, color: .secondary)
+        Text("files")
           .font(.caption)
           .foregroundStyle(.secondary)
 
-        Text("+\(added)")
-          .font(.caption)
-          .fontWeight(.medium)
-          .foregroundStyle(.green)
-
-        Text("-\(removed)")
-          .font(.caption)
-          .fontWeight(.medium)
-          .foregroundStyle(.red)
+        RollingNumber(added, prefix: "+", color: .green)
+        RollingNumber(removed, prefix: "-", color: .red)
 
         DiffStatBar(added: added, removed: removed)
       }
