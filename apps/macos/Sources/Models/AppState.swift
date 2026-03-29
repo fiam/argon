@@ -161,11 +161,13 @@ final class AppState {
         mode: ReviewMode, repoRoot: String, sessionId: String?,
         detectedBase: String?, detectedHead: String?
     ) -> Result<SwitchData, SwitchError> {
+
         let target: ResolvedTarget?
         switch mode {
         case .branch:
             let base = detectedBase ?? "main"
             let head = detectedHead ?? "HEAD"
+
             target = GitService.resolveBranchTarget(repoRoot: repoRoot, baseRef: base, headRef: head)
         case .commit:
             target = GitService.resolveCommitTarget(repoRoot: repoRoot)

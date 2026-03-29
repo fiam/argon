@@ -135,12 +135,14 @@ enum GitService {
 
         do {
             try process.run()
-            process.waitUntilExit()
         } catch {
             return ""
         }
 
+        // Read stdout before waitUntilExit to avoid deadlock when
+        // output exceeds the pipe buffer (~64KB).
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
         return String(data: data, encoding: .utf8) ?? ""
     }
 }

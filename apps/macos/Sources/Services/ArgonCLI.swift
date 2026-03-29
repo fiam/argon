@@ -133,18 +133,17 @@ enum ArgonCLI {
         process.standardError = stderr
 
         try process.run()
+
+        // Read pipes before waitUntilExit to avoid deadlock when
+        // output exceeds the pipe buffer.
+        let outputData = stdout.fileHandleForReading.readDataToEndOfFile()
+        let errorData = stderr.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
 
-        let output = String(
-            data: stdout.fileHandleForReading.readDataToEndOfFile(),
-            encoding: .utf8
-        ) ?? ""
+        let output = String(data: outputData, encoding: .utf8) ?? ""
 
         if process.terminationStatus != 0 {
-            let err = String(
-                data: stderr.fileHandleForReading.readDataToEndOfFile(),
-                encoding: .utf8
-            ) ?? "unknown error"
+            let err = String(data: errorData, encoding: .utf8) ?? "unknown error"
             throw CLIError.commandFailed(err.trimmingCharacters(in: .whitespacesAndNewlines))
         }
 
