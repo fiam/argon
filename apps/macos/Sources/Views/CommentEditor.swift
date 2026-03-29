@@ -28,6 +28,9 @@ struct CommentEditorPopover: View {
                 )
 
             HStack {
+                Text("Shift-Return to submit")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
                 Spacer()
                 Button("Cancel", action: onCancel)
                     .keyboardShortcut(.cancelAction)
@@ -40,5 +43,12 @@ struct CommentEditorPopover: View {
             }
         }
         .padding(16)
+        .onKeyPress(.return, phases: .down) { keyPress in
+            if keyPress.modifiers.contains(.shift) && !isEmpty {
+                onSubmit()
+                return .handled
+            }
+            return .ignored
+        }
     }
 }
