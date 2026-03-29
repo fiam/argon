@@ -128,31 +128,19 @@ struct CommentButton: View {
         }
         .controlSize(.small)
         .popover(isPresented: $showPopover, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Global Comment")
-                    .font(.headline)
-                TextEditor(text: $commentText)
-                    .font(.system(.body, design: .monospaced))
-                    .frame(width: 360, height: 100)
-                    .border(Color(nsColor: .separatorColor))
-                HStack {
-                    Spacer()
-                    Button("Cancel") {
-                        showPopover = false
-                        commentText = ""
-                    }
-                    .keyboardShortcut(.cancelAction)
-                    Button("Submit") {
-                        guard !commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                        appState.addComment(message: commentText)
-                        showPopover = false
-                        commentText = ""
-                    }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            CommentEditorPopover(
+                title: "Comment",
+                commentText: $commentText,
+                onSubmit: {
+                    appState.addComment(message: commentText)
+                    showPopover = false
+                    commentText = ""
+                },
+                onCancel: {
+                    showPopover = false
+                    commentText = ""
                 }
-            }
-            .padding()
+            )
         }
     }
 }

@@ -127,13 +127,10 @@ struct DiffLineView: View {
             isHovering = hovering
         }
         .popover(isPresented: $showCommentPopover, arrowEdge: .trailing) {
-            LineCommentPopover(
-                filePath: filePath,
-                lineNew: line.newLine,
-                lineOld: line.oldLine,
+            CommentEditorPopover(
+                title: lineCommentTitle,
                 commentText: $commentText,
                 onSubmit: {
-                    guard !commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
                     appState.addComment(
                         message: commentText,
                         filePath: filePath,
@@ -174,44 +171,11 @@ struct DiffLineView: View {
         case .removed: .red.opacity(0.08)
         }
     }
-}
 
-struct LineCommentPopover: View {
-    let filePath: String
-    let lineNew: UInt32?
-    let lineOld: UInt32?
-    @Binding var commentText: String
-    let onSubmit: () -> Void
-    let onCancel: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Comment on")
-                    .font(.headline)
-                Text(locationLabel)
-                    .font(.system(.callout, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-            TextEditor(text: $commentText)
-                .font(.system(.body, design: .monospaced))
-                .frame(width: 360, height: 80)
-                .border(Color(nsColor: .separatorColor))
-            HStack {
-                Spacer()
-                Button("Cancel", action: onCancel)
-                    .keyboardShortcut(.cancelAction)
-                Button("Add Comment", action: onSubmit)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding()
-    }
-
-    private var locationLabel: String {
-        var parts: [String] = [filePath]
-        if let n = lineNew { parts.append("L\(n)") }
+    private var lineCommentTitle: String {
+        var parts = [filePath]
+        if let n = line.newLine { parts.append("L\(n)") }
         return parts.joined(separator: ":")
     }
 }
+
