@@ -396,15 +396,11 @@ struct DiffLineView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            // Gutter icon — popover anchors here
             Image(systemName: "plus.bubble.fill")
                 .font(.system(size: 10))
                 .foregroundStyle(.blue)
                 .opacity(isHovering && !showCommentPopover ? 1 : 0)
                 .frame(width: 24, height: 18)
-                .popover(isPresented: $showCommentPopover, arrowEdge: .leading) {
-                    commentPopover
-                }
 
             Text(line.oldLine.map { String($0) } ?? "")
                 .frame(width: 44, alignment: .trailing)
@@ -415,6 +411,9 @@ struct DiffLineView: View {
                 .frame(width: 44, alignment: .trailing)
                 .padding(.trailing, 8)
                 .foregroundStyle(.tertiary)
+                .popover(isPresented: $showCommentPopover, arrowEdge: .bottom) {
+                    commentPopover
+                }
 
             Text(marker)
                 .frame(width: 14)
