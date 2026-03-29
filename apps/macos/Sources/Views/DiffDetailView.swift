@@ -396,14 +396,14 @@ struct DiffLineView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
+            // Gutter icon — popover anchors here
             Image(systemName: "plus.bubble.fill")
                 .font(.system(size: 10))
                 .foregroundStyle(.blue)
                 .opacity(isHovering && !showCommentPopover ? 1 : 0)
                 .frame(width: 24, height: 18)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    showCommentPopover = true
+                .popover(isPresented: $showCommentPopover, arrowEdge: .leading) {
+                    commentPopover
                 }
 
             Text(line.oldLine.map { String($0) } ?? "")
@@ -431,26 +431,30 @@ struct DiffLineView: View {
         .onHover { hovering in
             isHovering = hovering
         }
-        .popover(isPresented: $showCommentPopover, arrowEdge: .trailing) {
-            CommentEditorPopover(
-                title: lineCommentTitle,
-                commentText: $commentText,
-                onSubmit: {
-                    appState.addDraft(
-                        message: commentText,
-                        filePath: filePath,
-                        lineNew: line.newLine,
-                        lineOld: line.oldLine
-                    )
-                    showCommentPopover = false
-                    commentText = ""
-                },
-                onCancel: {
-                    showCommentPopover = false
-                    commentText = ""
-                }
-            )
+        .onTapGesture {
+            showCommentPopover = true
         }
+    }
+
+    private var commentPopover: some View {
+        CommentEditorPopover(
+            title: lineCommentTitle,
+            commentText: $commentText,
+            onSubmit: {
+                appState.addDraft(
+                    message: commentText,
+                    filePath: filePath,
+                    lineNew: line.newLine,
+                    lineOld: line.oldLine
+                )
+                showCommentPopover = false
+                commentText = ""
+            },
+            onCancel: {
+                showCommentPopover = false
+                commentText = ""
+            }
+        )
     }
 
     private var marker: String {
