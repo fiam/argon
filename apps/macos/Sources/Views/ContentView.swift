@@ -51,10 +51,11 @@ struct ContentView: View {
 struct ReviewLayout: View {
     @Environment(AppState.self) private var appState
     let session: ReviewSession
+    @State private var showFileTree = true
+    @State private var showThreads = true
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header always visible so mode picker is accessible
             SessionHeader(session: session, fileCount: appState.files.count)
             Divider()
 
@@ -66,18 +67,36 @@ struct ReviewLayout: View {
                 )
             } else {
                 HSplitView {
-                    // Left: file tree
-                    FileTreeSidebar()
-                        .frame(minWidth: 200, idealWidth: 230, maxWidth: 300)
+                    if showFileTree {
+                        FileTreeSidebar()
+                            .frame(minWidth: 180, idealWidth: 230, maxWidth: 300)
+                    }
 
-                    // Center: diff
                     DiffDetailView()
-                        .frame(minWidth: 500)
+                        .frame(minWidth: 400)
 
-                    // Right: threads
-                    ThreadsSidebar(session: session)
-                        .frame(minWidth: 220, idealWidth: 260, maxWidth: 320)
+                    if showThreads {
+                        ThreadsSidebar(session: session)
+                            .frame(minWidth: 200, idealWidth: 260, maxWidth: 320)
+                    }
                 }
+            }
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .automatic) {
+                Button {
+                    withAnimation { showFileTree.toggle() }
+                } label: {
+                    Image(systemName: "sidebar.leading")
+                }
+                .help(showFileTree ? "Hide file tree" : "Show file tree")
+
+                Button {
+                    withAnimation { showThreads.toggle() }
+                } label: {
+                    Image(systemName: "sidebar.trailing")
+                }
+                .help(showThreads ? "Hide comments" : "Show comments")
             }
         }
     }
