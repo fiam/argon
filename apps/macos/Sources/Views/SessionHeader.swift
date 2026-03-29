@@ -392,22 +392,24 @@ struct DiffStatView: View {
     }
 
     var body: some View {
-        HStack(spacing: 6) {
-            Text("\(files.count) files")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        if !files.isEmpty {
+            HStack(spacing: 6) {
+                Text("\(files.count) files")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
-            Text("+\(added)")
-                .font(.caption)
-                .fontWeight(.medium)
-                .foregroundStyle(.green)
+                Text("+\(added)")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.green)
 
-            Text("-\(removed)")
-                .font(.caption)
-                .fontWeight(.medium)
-                .foregroundStyle(.red)
+                Text("-\(removed)")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.red)
 
-            DiffStatBar(added: added, removed: removed)
+                DiffStatBar(added: added, removed: removed)
+            }
         }
     }
 }
