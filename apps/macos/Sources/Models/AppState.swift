@@ -30,7 +30,8 @@ final class AppState {
     var repoRoot: String?
 
     private var pollTask: Task<Void, Never>?
-    private var diffPollTask: Task<Void, Never>?
+    private var fileWatcher: FileWatcher?
+    private var diffRefreshTask: Task<Void, Never>?
     private var lastDiffFingerprint: String = ""
 
     init() {
@@ -248,13 +249,24 @@ final class AppState {
             }
         }
 
-        // Diff poll (working tree changes)
-        diffPollTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(3))
-                guard !Task.isCancelled else { break }
-                await self?.checkDiffChanged()
+        // File watcher for working tree changes
+        if let repoRoot, fileWatcher == nil {
+            fileWatcher = FileWatcher(path: repoRoot) { [weak self] in
+                Task { @MainActor [weak self] in
+                    await self?.onFileSystemChange()
+                }
             }
+            fileWatcher?.start()
+        }
+    }
+
+    private func onFileSystemChange() async {
+        // Debounce: cancel any pending refresh and start a new one
+        diffRefreshTask?.cancel()
+        diffRefreshTask = Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            await checkDiffChanged()
         }
     }
 
@@ -299,8 +311,10 @@ final class AppState {
     func stopPolling() {
         pollTask?.cancel()
         pollTask = nil
-        diffPollTask?.cancel()
-        diffPollTask = nil
+        diffRefreshTask?.cancel()
+        diffRefreshTask = nil
+        fileWatcher?.stop()
+        fileWatcher = nil
         isPolling = false
     }
 
