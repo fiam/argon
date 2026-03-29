@@ -189,6 +189,7 @@ struct OutdatedThreadsSection: View {
 // MARK: - Hunk
 
 struct DiffHunkView: View {
+    @Environment(AppState.self) private var appState
     let hunk: DiffHunk
     let filePath: String
     let anchored: [UInt32: [InlineItem]]
@@ -207,6 +208,11 @@ struct DiffHunkView: View {
 
             ForEach(hunk.lines) { line in
                 DiffLineView(line: line, filePath: filePath)
+
+                // Inline comment editor
+                if appState.activeCommentLineId == line.id {
+                    InlineCommentEditor(filePath: filePath, line: line)
+                }
 
                 if let lineNum = line.newLine, let items = anchored[lineNum] {
                     ForEach(items) { item in
@@ -397,6 +403,87 @@ struct InlineDraftView: View {
     }
 }
 
+// MARK: - Inline Comment Editor
+
+struct InlineCommentEditor: View {
+    @Environment(AppState.self) private var appState
+    let filePath: String
+    let line: DiffLine
+
+    private var isEmpty: Bool {
+        appState.activeCommentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var title: String {
+        var parts = [filePath]
+        if let n = line.newLine { parts.append("L\(n)") }
+        return parts.joined(separator: ":")
+    }
+
+    var body: some View {
+        @Bindable var state = appState
+
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "text.bubble.fill")
+                    .foregroundStyle(.blue)
+                Text(title)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+
+            FocusedTextEditor(
+                text: $state.activeCommentText,
+                onCommandReturn: {
+                    submitIfNotEmpty()
+                }
+            )
+            .frame(height: 70)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+            )
+
+            HStack(spacing: 4) {
+                Text("\u{2318}\u{23CE}")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(Color(nsColor: .separatorColor).opacity(0.3))
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                Text("to submit")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Button("Cancel") {
+                    appState.closeCommentEditor()
+                }
+                .controlSize(.small)
+                Button("Add Comment") {
+                    submitIfNotEmpty()
+                }
+                .controlSize(.small)
+                .disabled(isEmpty)
+            }
+        }
+        .padding(12)
+        .background(Color.blue.opacity(0.03))
+    }
+
+    private func submitIfNotEmpty() {
+        guard !isEmpty else { return }
+        appState.addDraft(
+            message: appState.activeCommentText,
+            filePath: filePath,
+            lineNew: line.newLine,
+            lineOld: line.oldLine
+        )
+        appState.closeCommentEditor()
+    }
+}
+
 // MARK: - Diff Line
 
 struct DiffLineView: View {
@@ -410,8 +497,6 @@ struct DiffLineView: View {
     }
 
     var body: some View {
-        @Bindable var state = appState
-
         HStack(alignment: .top, spacing: 0) {
             Image(systemName: "plus.bubble.fill")
                 .font(.system(size: 10))
@@ -446,29 +531,6 @@ struct DiffLineView: View {
         }
         .onTapGesture {
             appState.requestCommentEditor(for: line.id)
-        }
-        .popover(isPresented: Binding(
-            get: { isActive },
-            set: { if !$0 { appState.closeCommentEditor() } }
-        ), arrowEdge: .bottom) {
-            CommentEditorPopover(
-                title: lineCommentTitle,
-                commentText: $state.activeCommentText,
-                onSubmit: {
-                    let text = appState.activeCommentText
-                    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                    appState.addDraft(
-                        message: text,
-                        filePath: filePath,
-                        lineNew: line.newLine,
-                        lineOld: line.oldLine
-                    )
-                    appState.closeCommentEditor()
-                },
-                onCancel: {
-                    appState.closeCommentEditor()
-                }
-            )
         }
     }
 
