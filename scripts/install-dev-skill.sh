@@ -12,7 +12,11 @@ install_to() {
     mkdir -p "$home"
     rm -rf "$dest"
     cp -R "$SKILL_SRC" "$dest"
-    echo "installed argon-dev-review for $name at $dest"
+
+    # Stamp the checkout path so the skill knows where to find argon
+    printf '%s\n' "$REPO_ROOT" > "$dest/.argon-src"
+
+    echo "installed argon-dev-review for $name at $dest (source: $REPO_ROOT)"
 }
 
 # Claude Code

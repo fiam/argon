@@ -11,18 +11,18 @@ local Argon development build.
 ## Preconditions
 
 - You are working in a Git repository.
-- The Argon source is at `~/Source/argon-native` (or set `ARGON_SRC`).
+- The skill was installed via `scripts/install-dev-skill.sh` from the
+  Argon checkout (which records the checkout path automatically).
 - Xcode command line tools and `xcodegen` are installed.
 
 ## Workflow
 
 ### 1. Build and launch
 
-Run the dev script from the Argon source checkout, pointing it at the
-current repo:
+The checkout path is recorded in `$SKILL_DIR/.argon-src` during install.
 
 ```bash
-ARGON_SRC="${ARGON_SRC:-$HOME/Source/argon-native}"
+ARGON_SRC="$(cat "$SKILL_DIR/.argon-src")"
 bash "$ARGON_SRC/scripts/dev-argon.sh" "$(pwd)"
 ```
 
@@ -71,14 +71,10 @@ Keep waiting for reviewer feedback until the session is approved or
 closed. Do not stop early. On approval, commit your changes. On close,
 stop without committing.
 
-## Quick one-liner
-
-```bash
-ARGON_SRC="${ARGON_SRC:-$HOME/Source/argon-native}" && bash "$ARGON_SRC/scripts/dev-argon.sh" "$(pwd)"
-```
-
 ## Failure Handling
 
+- If `$SKILL_DIR/.argon-src` is missing: re-run `scripts/install-dev-skill.sh`
+  from the Argon checkout
 - If `xcodegen` is missing: `brew install xcodegen`
-- If the build fails: check `$ARGON_SRC` points to the argon-native checkout
+- If the build fails: check the path in `.argon-src` points to a valid checkout
 - If the session is `closed`: stop immediately
