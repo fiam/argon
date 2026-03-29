@@ -9,7 +9,7 @@ struct DiffDetailView: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     DiffFileHeader(file: file)
                     ForEach(file.hunks) { hunk in
-                        DiffHunkView(hunk: hunk)
+                        DiffHunkView(hunk: hunk, filePath: file.newPath)
                     }
                 }
                 .padding(.bottom, 20)
@@ -35,7 +35,7 @@ struct DiffFileHeader: View {
                 .font(.system(.body, design: .monospaced))
                 .fontWeight(.medium)
             Spacer()
-            Text("\(addedCount) additions, \(removedCount) deletions")
+            Text("+\(addedCount) -\(removedCount)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -55,10 +55,10 @@ struct DiffFileHeader: View {
 
 struct DiffHunkView: View {
     let hunk: DiffHunk
+    let filePath: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Hunk header
             HStack(spacing: 0) {
                 Text(hunk.header)
                     .font(.system(.caption, design: .monospaced))
@@ -69,28 +69,49 @@ struct DiffHunkView: View {
             }
             .background(Color.blue.opacity(0.06))
 
-            // Lines
             ForEach(hunk.lines) { line in
-                DiffLineView(line: line)
+                DiffLineView(line: line, filePath: filePath)
             }
         }
     }
 }
 
 struct DiffLineView: View {
+    @Environment(AppState.self) private var appState
     let line: DiffLine
+    let filePath: String
+    @State private var showCommentPopover = false
+    @State private var commentText = ""
+    @State private var isHovering = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
+            // Comment gutter — clickable
+            ZStack {
+                if isHovering && !showCommentPopover {
+                    Image(systemName: "plus.bubble")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.blue)
+                }
+            }
+            .frame(width: 20)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                showCommentPopover = true
+            }
+            .onHover { hovering in
+                isHovering = hovering
+            }
+
             // Old line number
             Text(line.oldLine.map { String($0) } ?? "")
-                .frame(width: 50, alignment: .trailing)
+                .frame(width: 44, alignment: .trailing)
                 .padding(.trailing, 4)
                 .foregroundStyle(.tertiary)
 
             // New line number
             Text(line.newLine.map { String($0) } ?? "")
-                .frame(width: 50, alignment: .trailing)
+                .frame(width: 44, alignment: .trailing)
                 .padding(.trailing, 8)
                 .foregroundStyle(.tertiary)
 
@@ -104,9 +125,32 @@ struct DiffLineView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(.system(.body, design: .monospaced))
-        .padding(.horizontal, 8)
+        .padding(.trailing, 8)
         .padding(.vertical, 0.5)
         .background(backgroundColor)
+        .popover(isPresented: $showCommentPopover, arrowEdge: .trailing) {
+            LineCommentPopover(
+                filePath: filePath,
+                lineNew: line.newLine,
+                lineOld: line.oldLine,
+                commentText: $commentText,
+                onSubmit: {
+                    guard !commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                    appState.addComment(
+                        message: commentText,
+                        filePath: filePath,
+                        lineNew: line.newLine,
+                        lineOld: line.oldLine
+                    )
+                    showCommentPopover = false
+                    commentText = ""
+                },
+                onCancel: {
+                    showCommentPopover = false
+                    commentText = ""
+                }
+            )
+        }
     }
 
     private var marker: String {
@@ -131,5 +175,45 @@ struct DiffLineView: View {
         case .added: .green.opacity(0.08)
         case .removed: .red.opacity(0.08)
         }
+    }
+}
+
+struct LineCommentPopover: View {
+    let filePath: String
+    let lineNew: UInt32?
+    let lineOld: UInt32?
+    @Binding var commentText: String
+    let onSubmit: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Comment on")
+                    .font(.headline)
+                Text(locationLabel)
+                    .font(.system(.callout, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            TextEditor(text: $commentText)
+                .font(.system(.body, design: .monospaced))
+                .frame(width: 360, height: 80)
+                .border(Color(nsColor: .separatorColor))
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Add Comment", action: onSubmit)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding()
+    }
+
+    private var locationLabel: String {
+        var parts: [String] = [filePath]
+        if let n = lineNew { parts.append("L\(n)") }
+        return parts.joined(separator: ":")
     }
 }

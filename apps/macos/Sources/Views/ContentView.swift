@@ -22,16 +22,7 @@ struct ContentView: View {
                         detail: "No differences found between \(session.baseRef) and working tree."
                     )
                 } else {
-                    NavigationSplitView {
-                        FileSidebar()
-                    } detail: {
-                        DiffDetailView()
-                    }
-                    .toolbar {
-                        ToolbarItem(placement: .automatic) {
-                            SessionInfoBar(session: session, fileCount: appState.files.count)
-                        }
-                    }
+                    ReviewLayout(session: session)
                 }
             } else {
                 EmptyStateView(
@@ -51,6 +42,44 @@ struct ContentView: View {
         guard let session = appState.session else { return "Argon" }
         let repo = URL(fileURLWithPath: session.repoRoot).lastPathComponent
         return "Argon — \(repo)"
+    }
+}
+
+struct ReviewLayout: View {
+    @Environment(AppState.self) private var appState
+    let session: ReviewSession
+
+    var body: some View {
+        VStack(spacing: 0) {
+            SessionHeader(session: session, fileCount: appState.files.count)
+            Divider()
+            NavigationSplitView {
+                SidebarContent()
+            } detail: {
+                DiffDetailView()
+            }
+        }
+    }
+}
+
+struct SidebarContent: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        @Bindable var state = appState
+        VStack(spacing: 0) {
+            List(appState.files, selection: $state.selectedFile) { file in
+                FileRow(file: file)
+                    .tag(file)
+            }
+            .listStyle(.sidebar)
+
+            if let session = appState.session {
+                Divider()
+                ThreadsPanel(session: session)
+            }
+        }
+        .frame(minWidth: 240)
     }
 }
 
@@ -74,36 +103,5 @@ struct EmptyStateView: View {
                 .frame(maxWidth: 400)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-struct SessionInfoBar: View {
-    let session: ReviewSession
-    let fileCount: Int
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Label(modeLabel, systemImage: "arrow.triangle.branch")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            if let summary = session.changeSummary {
-                Text(summary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Text("\(fileCount) files changed")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            StatusBadge(status: session.status)
-        }
-    }
-
-    private var modeLabel: String {
-        switch session.mode {
-        case .branch: "\(session.baseRef)...\(session.headRef)"
-        case .commit: "\(session.baseRef) to working tree"
-        case .uncommitted: "uncommitted changes"
-        }
     }
 }

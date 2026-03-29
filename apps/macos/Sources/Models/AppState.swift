@@ -47,8 +47,42 @@ final class AppState {
             if let session {
                 let rawDiff = GitService.diff(session: session)
                 files = DiffParser.parse(rawDiff)
-                selectedFile = files.first
+                if selectedFile == nil || !files.contains(where: { $0.id == selectedFile?.id }) {
+                    selectedFile = files.first
+                }
             }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func reload() {
+        errorMessage = nil
+        loadSession()
+    }
+
+    func submitDecision(outcome: String, summary: String? = nil) {
+        guard let sessionId, let repoRoot else { return }
+        do {
+            try ArgonCLI.setDecision(
+                sessionId: sessionId, repoRoot: repoRoot,
+                outcome: outcome, summary: summary
+            )
+            reload()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func addComment(message: String, filePath: String? = nil, lineNew: UInt32? = nil, lineOld: UInt32? = nil, threadId: String? = nil) {
+        guard let sessionId, let repoRoot else { return }
+        do {
+            try ArgonCLI.addComment(
+                sessionId: sessionId, repoRoot: repoRoot,
+                message: message, filePath: filePath,
+                lineNew: lineNew, lineOld: lineOld, threadId: threadId
+            )
+            reload()
         } catch {
             errorMessage = error.localizedDescription
         }
