@@ -93,23 +93,111 @@ struct ReviewLayout: View {
 
 struct FileTreeSidebar: View {
   @Environment(AppState.self) private var appState
+  @State private var filterText = ""
+
+  private var filteredFiles: [FileDiff] {
+    filterFiles(appState.files, pattern: filterText)
+  }
+
+  private var treeNodes: [FileTreeNode] {
+    buildFileTree(from: filteredFiles)
+  }
 
   var body: some View {
-    ScrollView {
-      LazyVStack(alignment: .leading, spacing: 1) {
-        ForEach(appState.files) { file in
-          FileTreeRow(file: file)
+    VStack(spacing: 0) {
+      // Filter field
+      HStack(spacing: 4) {
+        Image(systemName: "line.3.horizontal.decrease")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+        TextField("Filter files...", text: $filterText)
+          .textFieldStyle(.plain)
+          .font(.system(.caption, design: .monospaced))
+        if !filterText.isEmpty {
+          Button {
+            filterText = ""
+          } label: {
+            Image(systemName: "xmark.circle.fill")
+              .font(.caption)
+              .foregroundStyle(.tertiary)
+          }
+          .buttonStyle(.plain)
         }
       }
-      .padding(.vertical, 4)
+      .padding(.horizontal, 10)
+      .padding(.vertical, 6)
+      .background(Color(nsColor: .textBackgroundColor))
+
+      Divider()
+
+      // Tree
+      ScrollView {
+        LazyVStack(alignment: .leading, spacing: 0) {
+          ForEach(treeNodes) { node in
+            FileTreeNodeView(node: node, depth: 0)
+          }
+        }
+        .padding(.vertical, 2)
+      }
     }
     .background(Color(nsColor: .controlBackgroundColor).opacity(0.3))
   }
 }
 
-struct FileTreeRow: View {
+struct FileTreeNodeView: View {
+  @Environment(AppState.self) private var appState
+  @Bindable var node: FileTreeNode
+  let depth: Int
+
+  var body: some View {
+    if node.isDirectory {
+      // Directory row
+      Button {
+        withAnimation(.easeInOut(duration: 0.15)) {
+          node.isExpanded.toggle()
+        }
+      } label: {
+        HStack(spacing: 4) {
+          Image(systemName: node.isExpanded ? "chevron.down" : "chevron.right")
+            .font(.system(size: 8, weight: .semibold))
+            .frame(width: 12)
+            .foregroundStyle(.tertiary)
+          Image(systemName: node.isExpanded ? "folder.fill" : "folder")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          Text(node.name)
+            .font(.system(.caption, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+          Spacer()
+          Text("\(node.fileCount)")
+            .font(.caption2)
+            .foregroundStyle(.quaternary)
+        }
+        .padding(.leading, CGFloat(depth) * 14 + 6)
+        .padding(.trailing, 10)
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+
+      if node.isExpanded {
+        ForEach(node.children) { child in
+          FileTreeNodeView(node: child, depth: depth + 1)
+        }
+      }
+    } else if let file = node.file {
+      // File row
+      FileTreeFileRow(file: file, name: node.name, depth: depth)
+    }
+  }
+}
+
+struct FileTreeFileRow: View {
   @Environment(AppState.self) private var appState
   let file: FileDiff
+  let name: String
+  let depth: Int
 
   private var isSelected: Bool {
     appState.selectedFile?.id == file.id
@@ -120,14 +208,14 @@ struct FileTreeRow: View {
       appState.selectedFile = file
       appState.scrollToFile = file.id
     } label: {
-      HStack(spacing: 6) {
-        Image(systemName: "doc.text")
-          .foregroundStyle(.secondary)
+      HStack(spacing: 4) {
+        Spacer().frame(width: 12)  // align with chevron
+        Image(systemName: fileIcon)
           .font(.caption)
-        Text(file.displayPath)
+          .foregroundStyle(fileIconColor)
+        Text(name)
           .font(.system(.caption, design: .monospaced))
           .lineLimit(1)
-          .truncationMode(.middle)
         Spacer()
         HStack(spacing: 2) {
           if file.addedCount > 0 {
@@ -138,12 +226,42 @@ struct FileTreeRow: View {
           }
         }
       }
-      .padding(.horizontal, 10)
-      .padding(.vertical, 4)
+      .padding(.leading, CGFloat(depth) * 14 + 6)
+      .padding(.trailing, 10)
+      .padding(.vertical, 3)
       .background(isSelected ? Color.accentColor.opacity(0.12) : .clear)
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
+  }
+
+  private var fileIcon: String {
+    let ext = (name as NSString).pathExtension.lowercased()
+    switch ext {
+    case "swift": return "swift"
+    case "rs": return "gearshape.2"
+    case "toml", "yml", "yaml", "json": return "doc.text"
+    case "md": return "doc.richtext"
+    case "sh": return "terminal"
+    case "go": return "chevron.left.forwardslash.chevron.right"
+    case "py": return "text.word.spacing"
+    case "js", "ts", "jsx", "tsx": return "curlybraces"
+    default: return "doc"
+    }
+  }
+
+  private var fileIconColor: Color {
+    let ext = (name as NSString).pathExtension.lowercased()
+    switch ext {
+    case "swift": return .orange
+    case "rs": return .brown
+    case "go": return .cyan
+    case "py": return .blue
+    case "js", "jsx": return .yellow
+    case "ts", "tsx": return .blue
+    case "md": return .purple
+    default: return .secondary
+    }
   }
 }
 
