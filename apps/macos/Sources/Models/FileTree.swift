@@ -165,11 +165,10 @@ enum FilterMode: String {
     case .regex:
       """
       Regular expression
-      Case-insensitive by default.
-      Append /i explicitly (no effect, already insensitive).
-      Use (?-i) in pattern for case-sensitive.
+      Case-sensitive by default.
+      Append /i for case-insensitive.
 
-      Examples: /\\.rs$, /(main|lib), /^src/
+      Examples: /\\.rs$, /(main|lib), /README/i
 
       Switch modes:
       · Remove leading / for fuzzy mode
@@ -296,19 +295,18 @@ private func globToRegex(_ glob: String) -> String {
 // MARK: - Regex
 
 private func filterByRegex(_ files: [FileDiff], rawPattern: String) -> [FileDiff] {
-  // Strip leading /
   var pattern = String(rawPattern.dropFirst())
+  var options: String.CompareOptions = [.regularExpression]
 
-  // Strip trailing /i (already case-insensitive, but accept the syntax)
+  // /pattern/i for case-insensitive
   if pattern.hasSuffix("/i") {
     pattern = String(pattern.dropLast(2))
+    options.insert(.caseInsensitive)
   }
 
   guard !pattern.isEmpty else { return files }
 
   return files.filter { file in
-    file.displayPath.range(
-      of: pattern, options: [.regularExpression, .caseInsensitive]
-    ) != nil
+    file.displayPath.range(of: pattern, options: options) != nil
   }
 }

@@ -169,9 +169,15 @@ struct RegexFilterTests {
     #expect(result.count == 4)
   }
 
-  @Test("regex case insensitive")
-  func regexCaseInsensitive() {
+  @Test("regex is case sensitive by default")
+  func regexCaseSensitive() {
     let result = filterFiles(files, pattern: "/readme")
+    #expect(result.isEmpty)
+  }
+
+  @Test("regex case insensitive with /i flag")
+  func regexCaseInsensitiveFlag() {
+    let result = filterFiles(files, pattern: "/readme/i")
     #expect(result.count == 1)
   }
 
