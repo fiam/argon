@@ -31,6 +31,12 @@ struct SessionHeader: View {
 
             Spacer()
 
+            // Handoff command
+            if session.status != .approved && session.status != .closed {
+                HandoffButton()
+                Divider().frame(height: 16)
+            }
+
             // Right: review actions
             if session.status != .approved && session.status != .closed {
                 reviewActions
@@ -244,6 +250,26 @@ struct DiffStatBar: View {
                 }
             }
         }
+    }
+}
+
+struct HandoffButton: View {
+    @Environment(AppState.self) private var appState
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(appState.handoffCommand, forType: .string)
+            copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                copied = false
+            }
+        } label: {
+            Label(copied ? "Copied" : "Copy Agent Command", systemImage: copied ? "checkmark" : "doc.on.doc")
+        }
+        .controlSize(.small)
+        .help(appState.handoffCommand)
     }
 }
 

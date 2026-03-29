@@ -34,6 +34,17 @@ struct ContentView: View {
         }
         .onAppear {
             appState.loadSession()
+            appState.startPolling()
+        }
+        .onDisappear {
+            let isTerminal = appState.session.map {
+                $0.status == .approved || $0.status == .closed
+            } ?? true
+            if !isTerminal {
+                appState.closeSession()
+            } else {
+                appState.stopPolling()
+            }
         }
         .navigationTitle(windowTitle)
     }

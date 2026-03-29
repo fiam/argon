@@ -8,9 +8,12 @@ final class AppState {
     var selectedFile: FileDiff?
     var errorMessage: String?
     var isLoading = false
+    var isPolling = false
 
     var sessionId: String?
     var repoRoot: String?
+
+    private var pollTask: Task<Void, Never>?
 
     init() {
         parseArguments()
@@ -43,13 +46,12 @@ final class AppState {
         defer { isLoading = false }
 
         do {
-            session = try SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
-            if let session {
-                let rawDiff = GitService.diff(session: session)
-                files = DiffParser.parse(rawDiff)
-                if selectedFile == nil || !files.contains(where: { $0.id == selectedFile?.id }) {
-                    selectedFile = files.first
-                }
+            let newSession = try SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
+            session = newSession
+            let rawDiff = GitService.diff(session: newSession)
+            files = DiffParser.parse(rawDiff)
+            if selectedFile == nil || !files.contains(where: { $0.id == selectedFile?.id }) {
+                selectedFile = files.first
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -59,6 +61,45 @@ final class AppState {
     func reload() {
         errorMessage = nil
         loadSession()
+    }
+
+    /// Refresh only session metadata (threads, status, decision) without re-running git diff.
+    func refreshSession() {
+        guard let sessionId, let repoRoot else { return }
+        do {
+            session = try SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
+        } catch {
+            // Ignore transient read errors during polling
+        }
+    }
+
+    func startPolling() {
+        guard pollTask == nil else { return }
+        isPolling = true
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1.5))
+                guard !Task.isCancelled else { break }
+                self?.refreshSession()
+            }
+        }
+    }
+
+    func stopPolling() {
+        pollTask?.cancel()
+        pollTask = nil
+        isPolling = false
+    }
+
+    func closeSession() {
+        guard let sessionId, let repoRoot else { return }
+        do {
+            try ArgonCLI.closeSession(sessionId: sessionId, repoRoot: repoRoot)
+            refreshSession()
+        } catch {
+            // Best effort on close
+        }
+        stopPolling()
     }
 
     func submitDecision(outcome: String, summary: String? = nil) {
@@ -86,5 +127,11 @@ final class AppState {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    var handoffCommand: String {
+        guard let sessionId, let repoRoot else { return "" }
+        let cli = ProcessInfo.processInfo.environment["ARGON_CLI_CMD"] ?? "argon"
+        return "\(cli) --repo \(repoRoot) agent prompt --session \(sessionId)"
     }
 }
