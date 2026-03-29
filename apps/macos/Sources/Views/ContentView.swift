@@ -133,14 +133,10 @@ struct FileTreeRow: View {
           let added = file.hunks.flatMap(\.lines).filter { $0.kind == .added }.count
           let removed = file.hunks.flatMap(\.lines).filter { $0.kind == .removed }.count
           if added > 0 {
-            Text("+\(added)")
-              .font(.caption2)
-              .foregroundStyle(.green)
+            RollingNumber(added, prefix: "+", color: .green, font: .caption2)
           }
           if removed > 0 {
-            Text("-\(removed)")
-              .font(.caption2)
-              .foregroundStyle(.red)
+            RollingNumber(removed, prefix: "-", color: .red, font: .caption2)
           }
         }
       }

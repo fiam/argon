@@ -131,14 +131,8 @@ struct DiffFileHeader: View {
         .fontWeight(.medium)
       Spacer()
       HStack(spacing: 4) {
-        Text("+\(addedCount)")
-          .font(.caption)
-          .fontWeight(.medium)
-          .foregroundStyle(.green)
-        Text("-\(removedCount)")
-          .font(.caption)
-          .fontWeight(.medium)
-          .foregroundStyle(.red)
+        RollingNumber(addedCount, prefix: "+", color: .green)
+        RollingNumber(removedCount, prefix: "-", color: .red)
       }
     }
     .padding(.horizontal, 16)
