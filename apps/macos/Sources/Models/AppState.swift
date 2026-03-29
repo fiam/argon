@@ -30,6 +30,8 @@ final class AppState {
     var repoRoot: String?
 
     private var pollTask: Task<Void, Never>?
+    private var diffPollTask: Task<Void, Never>?
+    private var lastDiffFingerprint: String = ""
 
     init() {
         parseArguments()
@@ -79,6 +81,7 @@ final class AppState {
                 activeMergeBaseSha = data.session.mergeBaseSha
                 detectedBaseRef = data.detectedBase
                 detectedHeadRef = data.detectedHead
+                lastDiffFingerprint = data.diffFingerprint
                 applyNewFiles(data.files)
             case .failure(let error):
                 errorMessage = error.localizedDescription
@@ -148,6 +151,7 @@ final class AppState {
         let files: [FileDiff]
         let detectedBase: String?
         let detectedHead: String?
+        let diffFingerprint: String
     }
 
     private struct SwitchData: Sendable {
@@ -163,7 +167,12 @@ final class AppState {
             let files = DiffParser.parse(rawDiff)
             let detectedBase = GitService.inferBaseRef(repoRoot: repoRoot)
             let detectedHead = GitService.currentBranchName(repoRoot: repoRoot)
-            return .success(LoadData(session: session, files: files, detectedBase: detectedBase, detectedHead: detectedHead))
+            let fingerprint = GitService.diffFingerprint(
+                repoRoot: repoRoot, mode: session.mode,
+                baseRef: session.baseRef, headRef: session.headRef,
+                mergeBaseSha: session.mergeBaseSha
+            )
+            return .success(LoadData(session: session, files: files, detectedBase: detectedBase, detectedHead: detectedHead, diffFingerprint: fingerprint))
         } catch {
             return .failure(error)
         }
@@ -228,11 +237,23 @@ final class AppState {
     func startPolling() {
         guard pollTask == nil else { return }
         isPolling = true
+
+        // Session poll (threads, status, decision)
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1.5))
                 guard !Task.isCancelled else { break }
                 self?.refreshSession()
+                self?.reloadDrafts()
+            }
+        }
+
+        // Diff poll (working tree changes)
+        diffPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled else { break }
+                await self?.checkDiffChanged()
             }
         }
     }
@@ -278,7 +299,37 @@ final class AppState {
     func stopPolling() {
         pollTask?.cancel()
         pollTask = nil
+        diffPollTask?.cancel()
+        diffPollTask = nil
         isPolling = false
+    }
+
+    private func checkDiffChanged() async {
+        guard let repoRoot else { return }
+        let mode = activeMode
+        let base = activeBaseRef
+        let head = activeHeadRef
+        let mergeBase = activeMergeBaseSha
+
+        let fingerprint = await Task.detached {
+            GitService.diffFingerprint(
+                repoRoot: repoRoot, mode: mode,
+                baseRef: base, headRef: head, mergeBaseSha: mergeBase
+            )
+        }.value
+
+        if fingerprint != lastDiffFingerprint && !lastDiffFingerprint.isEmpty {
+            // Diff changed — refresh in background
+            let newFiles = await Task.detached {
+                let rawDiff = GitService.diff(
+                    repoRoot: repoRoot, mode: mode,
+                    baseRef: base, headRef: head, mergeBaseSha: mergeBase
+                )
+                return DiffParser.parse(rawDiff)
+            }.value
+            applyNewFiles(newFiles)
+        }
+        lastDiffFingerprint = fingerprint
     }
 
     func closeSession() {

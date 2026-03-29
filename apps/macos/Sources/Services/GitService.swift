@@ -9,6 +9,30 @@ struct ResolvedTarget {
 
 enum GitService {
 
+    // MARK: - Diff Fingerprint (lightweight check for changes)
+
+    /// Returns a short stat string that changes when the diff content changes.
+    static func diffFingerprint(repoRoot: String, mode: ReviewMode, baseRef: String, headRef: String, mergeBaseSha: String) -> String {
+        var args = ["-C", repoRoot, "diff", "--stat", "--no-color"]
+
+        switch mode {
+        case .branch:
+            args.append(mergeBaseSha)
+            if let currentHead = resolveRef(repoRoot: repoRoot, ref: "HEAD"),
+               let targetHead = resolveRef(repoRoot: repoRoot, ref: headRef),
+               currentHead != targetHead
+            {
+                args.append(headRef)
+            }
+        case .commit:
+            args.append(baseRef)
+        case .uncommitted:
+            args.append("HEAD")
+        }
+
+        return runGit(args)
+    }
+
     // MARK: - Diff
 
     static func diff(repoRoot: String, mode: ReviewMode, baseRef: String, headRef: String, mergeBaseSha: String) -> String {

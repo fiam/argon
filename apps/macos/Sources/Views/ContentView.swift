@@ -59,11 +59,13 @@ struct ReviewLayout: View {
                 .navigationSplitViewColumnWidth(min: 180, ideal: 230, max: 300)
         } detail: {
             VStack(spacing: 0) {
-                SessionHeader(session: session, fileCount: appState.files.count)
-                if appState.isLoading {
-                    ProgressView()
-                        .progressViewStyle(.linear)
-                        .frame(height: 2)
+                HStack(spacing: 0) {
+                    SessionHeader(session: session, fileCount: appState.files.count)
+                    if appState.isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                            .padding(.trailing, 8)
+                    }
                 }
                 Divider()
                 DiffDetailView()
