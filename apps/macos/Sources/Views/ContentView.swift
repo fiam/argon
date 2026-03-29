@@ -5,10 +5,7 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if appState.isLoading {
-                ProgressView("Loading session...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let error = appState.errorMessage {
+            if let error = appState.errorMessage, appState.session == nil {
                 EmptyStateView(
                     icon: "exclamationmark.triangle",
                     title: "Something went wrong",
@@ -16,6 +13,9 @@ struct ContentView: View {
                 )
             } else if let session = appState.session {
                 ReviewLayout(session: session)
+            } else if appState.isLoading {
+                ProgressView("Loading session...")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 EmptyStateView(
                     icon: "arrow.right.circle",
