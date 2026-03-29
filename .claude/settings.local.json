@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc -l /Users/alberto/Source/argon/crates/argon/tests/*.rs)",
+      "Bash(find /Users/alberto/Source/argon/crates -name \"*.rs\" -type f ! -path '*/target/*' -exec wc -l {} +)",
+      "Bash(/tmp/COMPLETE_ARGON_FILES.txt:*)",
+      "Bash(git init:*)",
+      "Bash(cargo build:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo run:*)",
+      "Bash(git add:*)",
+      "Bash(git:*)",
+      "*",
+      "Bash(xcodegen --version)",
+      "Bash(xcodegen generate:*)",
+      "Bash(xcodebuild -project Argon.xcodeproj -scheme Argon -configuration Debug build)",
+      "Bash(APP_PATH=\"/Users/alberto/Library/Developer/Xcode/DerivedData/Argon-cnicgduidyfpdpbejxsuxyeoepyt/Build/Products/Debug/Argon.app\")",
+      "Bash(open \"$APP_PATH\" --args --session-id \"e2f80b70-ae0a-4bdc-9a49-8c730e0dce6b\" --repo-root \"/Users/alberto/Source/argon-native\")",
+      "Bash(ARGON_APP=\"$APP_PATH\" cargo run --bin argon -- --repo /Users/alberto/Source/argon-native review --mode uncommitted)",
+      "Bash(chmod:*)",
+      "Bash(./scripts/dev-argon.sh . 2>&1)",
+      "Bash(bash /Users/alberto/Source/argon-native/scripts/dev-argon.sh /Users/alberto/Source/argon-native 2>&1)",
+      "Bash(bash scripts/dev-argon.sh .)",
+      "Bash(bash /Users/alberto/Source/argon-native/scripts/install-dev-skill.sh 2>&1)"
+    ]
+  }
+}

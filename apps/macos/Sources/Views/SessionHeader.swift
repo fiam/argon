@@ -13,9 +13,7 @@ struct SessionHeader: View {
             HStack(spacing: 12) {
                 StatusBadge(status: session.status)
 
-                Label(modeLabel, systemImage: modeIcon)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                ModePicker()
 
                 DiffStatView(files: appState.files)
             }
@@ -98,24 +96,73 @@ struct SessionHeader: View {
         }
     }
 
-    private var modeLabel: String {
-        switch session.mode {
-        case .branch: "\(shorten(session.baseRef))...\(shorten(session.headRef))"
-        case .commit: "\(shorten(session.baseRef)) → working tree"
-        case .uncommitted: "uncommitted changes"
+}
+
+struct ModePicker: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        Menu {
+            Button {
+                appState.switchMode(.branch)
+            } label: {
+                Label(branchLabel, systemImage: "arrow.triangle.branch")
+            }
+            .disabled(appState.detectedBaseRef == nil)
+
+            Button {
+                appState.switchMode(.commit)
+            } label: {
+                Label("Commit → working tree", systemImage: "clock.arrow.circlepath")
+            }
+
+            Button {
+                appState.switchMode(.uncommitted)
+            } label: {
+                Label("Uncommitted changes", systemImage: "pencil.and.outline")
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: activeModeIcon)
+                Text(activeModeLabel)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
+    private var activeModeLabel: String {
+        switch appState.activeMode {
+        case .branch:
+            "\(shorten(appState.activeBaseRef))...\(shorten(appState.activeHeadRef))"
+        case .commit:
+            "\(shorten(appState.activeBaseRef)) → working tree"
+        case .uncommitted:
+            "uncommitted changes"
         }
     }
 
-    private var modeIcon: String {
-        switch session.mode {
+    private var activeModeIcon: String {
+        switch appState.activeMode {
         case .branch: "arrow.triangle.branch"
         case .commit: "clock.arrow.circlepath"
         case .uncommitted: "pencil.and.outline"
         }
     }
 
+    private var branchLabel: String {
+        if let base = appState.detectedBaseRef, let head = appState.detectedHeadRef {
+            return "\(shorten(base))...\(shorten(head))"
+        }
+        return "Branch (not available)"
+    }
+
     private func shorten(_ ref: String) -> String {
-        if ref.count > 20 { return String(ref.prefix(17)) + "..." }
+        if ref.count > 25 { return String(ref.prefix(22)) + "..." }
         return ref
     }
 }

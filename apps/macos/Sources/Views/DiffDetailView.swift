@@ -4,34 +4,40 @@ struct DiffDetailView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        if let file = appState.selectedFile {
-            let anchored = anchoredItems(for: file)
+        if appState.files.isEmpty {
+            Text("No files")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    DiffFileHeader(file: file)
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    ForEach(appState.files) { file in
+                        Section {
+                            let anchored = anchoredItems(for: file)
 
-                    // Outdated threads (anchored to this file but line no longer in diff)
-                    let outdated = outdatedThreads(for: file)
-                    if !outdated.isEmpty {
-                        OutdatedThreadsSection(threads: outdated)
-                    }
+                            let outdated = outdatedThreads(for: file)
+                            if !outdated.isEmpty {
+                                OutdatedThreadsSection(threads: outdated)
+                            }
 
-                    ForEach(file.hunks) { hunk in
-                        DiffHunkView(hunk: hunk, filePath: file.newPath, anchored: anchored)
+                            ForEach(file.hunks) { hunk in
+                                DiffHunkView(hunk: hunk, filePath: file.newPath, anchored: anchored)
+                            }
+
+                            // Spacer between files
+                            Color.clear.frame(height: 12)
+                        } header: {
+                            DiffFileHeader(file: file)
+                        }
                     }
                 }
                 .padding(.bottom, 20)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(Color(nsColor: .textBackgroundColor))
-        } else {
-            Text("Select a file")
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    /// Build a lookup of line → items (threads + drafts) for the selected file.
     private func anchoredItems(for file: FileDiff) -> [UInt32: [InlineItem]] {
         var result: [UInt32: [InlineItem]] = [:]
 
@@ -53,7 +59,6 @@ struct DiffDetailView: View {
         return result
     }
 
-    /// Threads anchored to this file but whose line is no longer present in the diff.
     private func outdatedThreads(for file: FileDiff) -> [ReviewThread] {
         guard let session = appState.session else { return [] }
         let linesInDiff = Set(file.hunks.flatMap(\.lines).compactMap(\.newLine))
@@ -79,7 +84,7 @@ enum InlineItem: Identifiable {
     }
 }
 
-// MARK: - File Header
+// MARK: - File Header (sticky)
 
 struct DiffFileHeader: View {
     let file: FileDiff
@@ -92,13 +97,20 @@ struct DiffFileHeader: View {
                 .font(.system(.body, design: .monospaced))
                 .fontWeight(.medium)
             Spacer()
-            Text("+\(addedCount) -\(removedCount)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 4) {
+                Text("+\(addedCount)")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.green)
+                Text("-\(removedCount)")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.red)
+            }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .padding(.vertical, 8)
+        .background(.bar)
     }
 
     private var addedCount: Int {
@@ -169,7 +181,6 @@ struct DiffHunkView: View {
             ForEach(hunk.lines) { line in
                 DiffLineView(line: line, filePath: filePath)
 
-                // Inline items after this line
                 if let lineNum = line.newLine, let items = anchored[lineNum] {
                     ForEach(items) { item in
                         switch item {
@@ -200,7 +211,6 @@ struct InlineThreadView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Thread header — clickable to expand/collapse
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) {
                     isCollapsed.toggle()

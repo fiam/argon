@@ -19,7 +19,7 @@ struct ContentView: View {
                     EmptyStateView(
                         icon: "checkmark.circle",
                         title: "No changes",
-                        detail: "No differences found between \(session.baseRef) and working tree."
+                        detail: "No differences found between \(appState.activeBaseRef) and working tree."
                     )
                 } else {
                     ReviewLayout(session: session)
@@ -64,33 +64,187 @@ struct ReviewLayout: View {
         VStack(spacing: 0) {
             SessionHeader(session: session, fileCount: appState.files.count)
             Divider()
-            NavigationSplitView {
-                SidebarContent()
-            } detail: {
+            HSplitView {
                 DiffDetailView()
+                    .frame(minWidth: 500)
+
+                ThreadsSidebar(session: session)
+                    .frame(minWidth: 220, idealWidth: 260, maxWidth: 320)
             }
         }
     }
 }
 
-struct SidebarContent: View {
+struct ThreadsSidebar: View {
     @Environment(AppState.self) private var appState
+    let session: ReviewSession
+    @State private var showCommentPopover = false
+    @State private var commentText = ""
 
     var body: some View {
-        @Bindable var state = appState
         VStack(spacing: 0) {
-            List(appState.files, selection: $state.selectedFile) { file in
-                FileRow(file: file)
-                    .tag(file)
-            }
-            .listStyle(.sidebar)
-
-            if let session = appState.session {
+            // Add comment button
+            if session.status != .approved && session.status != .closed {
+                Button {
+                    showCommentPopover = true
+                } label: {
+                    Label("Add Comment", systemImage: "plus.bubble")
+                        .font(.callout)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+                .padding(10)
+                .popover(isPresented: $showCommentPopover, arrowEdge: .trailing) {
+                    CommentEditorPopover(
+                        title: "Comment",
+                        commentText: $commentText,
+                        onSubmit: {
+                            appState.addDraft(message: commentText)
+                            showCommentPopover = false
+                            commentText = ""
+                        },
+                        onCancel: {
+                            showCommentPopover = false
+                            commentText = ""
+                        }
+                    )
+                }
                 Divider()
-                ThreadsPanel(session: session)
+            }
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    // Pending drafts
+                    if !appState.pendingDrafts.isEmpty {
+                        Text("Pending Review")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundStyle(.purple)
+                        ForEach(appState.pendingDrafts) { draft in
+                            DraftRow(draft: draft)
+                        }
+                        if !session.threads.isEmpty {
+                            Divider()
+                        }
+                    }
+
+                    // Submitted threads
+                    if !session.threads.isEmpty {
+                        Text("Threads")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundStyle(.secondary)
+                        ForEach(session.threads) { thread in
+                            SidebarThreadRow(thread: thread)
+                        }
+                    }
+
+                    if appState.pendingDrafts.isEmpty && session.threads.isEmpty {
+                        Text("No comments yet")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 20)
+                    }
+                }
+                .padding(10)
             }
         }
-        .frame(minWidth: 240)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.3))
+    }
+}
+
+struct DraftRow: View {
+    @Environment(AppState.self) private var appState
+    let draft: DraftComment
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
+                if let file = draft.anchor.filePath {
+                    HStack(spacing: 2) {
+                        Text(file)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        if let line = draft.anchor.lineNew {
+                            Text(":\(line)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                Text(draft.body)
+                    .font(.caption2)
+                    .lineLimit(2)
+            }
+            Spacer()
+            Button {
+                appState.deleteDraft(draft.id.uuidString)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(6)
+        .background(Color.purple.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+}
+
+struct SidebarThreadRow: View {
+    let thread: ReviewThread
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                threadStateBadge
+                if let anchor = thread.comments.first?.anchor,
+                   let file = anchor.filePath {
+                    Text(file)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+            }
+            ForEach(thread.comments) { comment in
+                HStack(alignment: .top, spacing: 4) {
+                    Text(commentAuthorLabel(comment))
+                        .font(.caption2)
+                        .fontWeight(.medium)
+                        .foregroundStyle(comment.author == .reviewer ? .orange : .blue)
+                    Text(comment.body)
+                        .font(.caption2)
+                        .lineLimit(2)
+                }
+            }
+        }
+        .padding(6)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+
+    @ViewBuilder
+    private var threadStateBadge: some View {
+        let (label, color): (String, Color) = switch thread.state {
+        case .open: ("Open", .orange)
+        case .addressed: ("Addressed", .blue)
+        case .resolved: ("Resolved", .green)
+        }
+        Text(label)
+            .font(.system(size: 9, weight: .medium))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(color.opacity(0.15))
+            .foregroundStyle(color)
+            .clipShape(Capsule())
+    }
+
+    private func commentAuthorLabel(_ comment: ReviewComment) -> String {
+        if let name = comment.authorName { return name }
+        return comment.author == .reviewer ? "reviewer" : "agent"
     }
 }
 

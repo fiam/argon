@@ -264,6 +264,23 @@ struct ReviewerDecideArgs {
 enum DevCommands {
     Comment(DevCommentArgs),
     Decide(DevDecideArgs),
+    UpdateTarget(DevUpdateTargetArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct DevUpdateTargetArgs {
+    #[arg(long)]
+    session: Uuid,
+    #[arg(long)]
+    mode: ReviewModeArg,
+    #[arg(long)]
+    base_ref: String,
+    #[arg(long)]
+    head_ref: String,
+    #[arg(long)]
+    merge_base_sha: String,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -652,14 +669,12 @@ fn run_draft(command: DraftCommands, runtime: &RuntimeOptions) -> Result<()> {
                     println!("decision: {:?}", session.decision.as_ref().map(|d| &d.outcome));
                     println!("status: {:?}", session.status);
                 }
+            } else if args.json {
+                let payload = CliResponse::new(CliCommand::ReviewerComment, &session);
+                println!("{}", serde_json::to_string_pretty(&payload)?);
             } else {
-                if args.json {
-                    let payload = CliResponse::new(CliCommand::ReviewerComment, &session);
-                    println!("{}", serde_json::to_string_pretty(&payload)?);
-                } else {
-                    println!("submitted: {count} comments");
-                    println!("status: {:?}", session.status);
-                }
+                println!("submitted: {count} comments");
+                println!("status: {:?}", session.status);
             }
             Ok(())
         }
@@ -1627,6 +1642,16 @@ fn run_dev(command: DevCommands, runtime: &RuntimeOptions) -> Result<()> {
                 }
             }
             Ok(())
+        }
+        DevCommands::UpdateTarget(args) => {
+            let session = store.update_session_target(
+                args.session,
+                args.mode.into(),
+                args.base_ref,
+                args.head_ref,
+                args.merge_base_sha,
+            )?;
+            print_session(CliCommand::Review, &session, args.json)
         }
     }
 }

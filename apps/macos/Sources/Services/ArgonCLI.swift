@@ -55,6 +55,21 @@ enum ArgonCLI {
         try run(repoRoot: repoRoot, args: args)
     }
 
+    static func updateSessionTarget(
+        sessionId: String, repoRoot: String,
+        mode: String, baseRef: String, headRef: String, mergeBaseSha: String
+    ) throws {
+        try run(repoRoot: repoRoot, args: [
+            "agent", "dev", "update-target",
+            "--session", sessionId,
+            "--mode", mode,
+            "--base-ref", baseRef,
+            "--head-ref", headRef,
+            "--merge-base-sha", mergeBaseSha,
+            "--json",
+        ])
+    }
+
     static func setDecision(
         sessionId: String, repoRoot: String, outcome: String, summary: String?
     ) throws {
