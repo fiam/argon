@@ -55,6 +55,8 @@ enum Commands {
     #[command(subcommand)]
     Reviewer(ReviewerCommands),
     #[command(subcommand)]
+    Draft(DraftCommands),
+    #[command(subcommand)]
     Skill(SkillCommands),
 }
 
@@ -294,6 +296,62 @@ struct DevDecideArgs {
     json: bool,
 }
 
+#[derive(Subcommand, Debug)]
+enum DraftCommands {
+    Add(DraftAddArgs),
+    Delete(DraftDeleteArgs),
+    List(DraftListArgs),
+    Submit(DraftSubmitArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct DraftAddArgs {
+    #[arg(long)]
+    session: Uuid,
+    #[arg(long)]
+    message: String,
+    #[arg(long)]
+    thread: Option<Uuid>,
+    #[arg(long)]
+    file: Option<String>,
+    #[arg(long)]
+    line_new: Option<u32>,
+    #[arg(long)]
+    line_old: Option<u32>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args, Debug)]
+struct DraftDeleteArgs {
+    #[arg(long)]
+    session: Uuid,
+    #[arg(long)]
+    draft_id: Uuid,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args, Debug)]
+struct DraftListArgs {
+    #[arg(long)]
+    session: Uuid,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args, Debug)]
+struct DraftSubmitArgs {
+    #[arg(long)]
+    session: Uuid,
+    #[arg(long)]
+    outcome: Option<OutcomeArg>,
+    #[arg(long)]
+    summary: Option<String>,
+    #[arg(long)]
+    json: bool,
+}
+
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum OutcomeArg {
     Approved,
@@ -412,6 +470,7 @@ fn run() -> Result<()> {
         Commands::Review(args) => run_review(args, &runtime),
         Commands::Agent(command) => run_agent(command, &runtime),
         Commands::Reviewer(command) => run_reviewer(command, &runtime),
+        Commands::Draft(command) => run_draft(command, &runtime),
         Commands::Skill(command) => run_skill(command),
     }
 }
@@ -485,7 +544,7 @@ fn maybe_direct_path_invocation(raw_args: &[String]) -> Option<(PathBuf, LaunchO
 }
 
 fn is_command_token(token: &str) -> bool {
-    matches!(token, "review" | "agent" | "reviewer" | "skill" | "help")
+    matches!(token, "review" | "agent" | "reviewer" | "draft" | "skill" | "help")
 }
 
 fn run_path_review(path: PathBuf, launch: &LaunchOptions) -> Result<()> {
@@ -525,6 +584,85 @@ fn run_reviewer(command: ReviewerCommands, runtime: &RuntimeOptions) -> Result<(
         ReviewerCommands::Wait(args) => run_reviewer_wait(args, runtime),
         ReviewerCommands::Comment(args) => run_reviewer_comment(args, runtime),
         ReviewerCommands::Decide(args) => run_reviewer_decide(args, runtime),
+    }
+}
+
+fn run_draft(command: DraftCommands, runtime: &RuntimeOptions) -> Result<()> {
+    let store = open_store_for_current_repo(runtime)?;
+    match command {
+        DraftCommands::Add(args) => {
+            let anchor = argon_core::CommentAnchor {
+                file_path: args.file,
+                line_new: args.line_new,
+                line_old: args.line_old,
+            };
+            let draft = store.upsert_draft_comment(
+                args.session,
+                None,
+                args.thread,
+                args.message,
+                anchor,
+            )?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&draft)?);
+            } else {
+                println!("draft-comments: {}", draft.comments.len());
+                if let Some(last) = draft.comments.last() {
+                    println!("draft-id: {}", last.id);
+                }
+            }
+            Ok(())
+        }
+        DraftCommands::Delete(args) => {
+            let draft = store.delete_draft_comment(args.session, args.draft_id)?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&draft)?);
+            } else {
+                println!("draft-comments: {}", draft.comments.len());
+            }
+            Ok(())
+        }
+        DraftCommands::List(args) => {
+            let draft = store.load_draft_review(args.session)?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&draft)?);
+            } else {
+                println!("session: {}", draft.session_id);
+                println!("draft-comments: {}", draft.comments.len());
+                for comment in &draft.comments {
+                    let anchor = match (&comment.anchor.file_path, comment.anchor.line_new) {
+                        (Some(path), Some(line)) => format!("{path}:{line}"),
+                        (Some(path), None) => path.clone(),
+                        _ => "global".to_string(),
+                    };
+                    println!("  {} [{}] {}", comment.id, anchor, comment.body);
+                }
+            }
+            Ok(())
+        }
+        DraftCommands::Submit(args) => {
+            let (session, count) = store.submit_draft_review(args.session)?;
+            if let Some(outcome) = args.outcome {
+                let session = store.set_decision(args.session, outcome.into(), args.summary)?;
+                if args.json {
+                    let payload = CliResponse::new(CliCommand::ReviewerDecide, &session);
+                    println!("{}", serde_json::to_string_pretty(&payload)?);
+                } else {
+                    println!("submitted: {count} comments");
+                    println!("decision: {:?}", session.decision.as_ref().map(|d| &d.outcome));
+                    println!("status: {:?}", session.status);
+                }
+            } else {
+                if args.json {
+                    let payload = CliResponse::new(CliCommand::ReviewerComment, &session);
+                    println!("{}", serde_json::to_string_pretty(&payload)?);
+                } else {
+                    println!("submitted: {count} comments");
+                    println!("status: {:?}", session.status);
+                }
+            }
+            Ok(())
+        }
     }
 }
 

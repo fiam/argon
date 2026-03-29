@@ -1,6 +1,60 @@
 import Foundation
 
 enum ArgonCLI {
+    static func addDraftComment(
+        sessionId: String, repoRoot: String, message: String,
+        filePath: String? = nil, lineNew: UInt32? = nil, lineOld: UInt32? = nil,
+        threadId: String? = nil
+    ) throws {
+        var args = [
+            "draft", "add",
+            "--session", sessionId,
+            "--message", message,
+            "--json",
+        ]
+        if let threadId {
+            args.append(contentsOf: ["--thread", threadId])
+        }
+        if let filePath {
+            args.append(contentsOf: ["--file", filePath])
+        }
+        if let lineNew {
+            args.append(contentsOf: ["--line-new", String(lineNew)])
+        }
+        if let lineOld {
+            args.append(contentsOf: ["--line-old", String(lineOld)])
+        }
+        try run(repoRoot: repoRoot, args: args)
+    }
+
+    static func deleteDraftComment(
+        sessionId: String, repoRoot: String, draftId: String
+    ) throws {
+        try run(repoRoot: repoRoot, args: [
+            "draft", "delete",
+            "--session", sessionId,
+            "--draft-id", draftId,
+            "--json",
+        ])
+    }
+
+    static func submitReview(
+        sessionId: String, repoRoot: String, outcome: String?, summary: String?
+    ) throws {
+        var args = [
+            "draft", "submit",
+            "--session", sessionId,
+            "--json",
+        ]
+        if let outcome {
+            args.append(contentsOf: ["--outcome", outcome])
+        }
+        if let summary {
+            args.append(contentsOf: ["--summary", summary])
+        }
+        try run(repoRoot: repoRoot, args: args)
+    }
+
     static func setDecision(
         sessionId: String, repoRoot: String, outcome: String, summary: String?
     ) throws {
@@ -83,21 +137,17 @@ enum ArgonCLI {
     }
 
     private static func findCLI() -> String {
-        // ARGON_CLI_CMD (set by the argon CLI when it launches the app)
         if let cli = ProcessInfo.processInfo.environment["ARGON_CLI_CMD"], !cli.isEmpty {
-            // Strip surrounding quotes if present
             let trimmed = cli.trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
             if FileManager.default.fileExists(atPath: trimmed) {
                 return trimmed
             }
         }
 
-        // ARGON_CLI env var (explicit override)
         if let cli = ProcessInfo.processInfo.environment["ARGON_CLI"], !cli.isEmpty {
             return cli
         }
 
-        // Bundled CLI in .app
         if let bundlePath = Bundle.main.executableURL?
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -107,7 +157,6 @@ enum ArgonCLI {
             return bundlePath
         }
 
-        // Try to find argon on PATH by checking common locations
         for dir in ["/usr/local/bin", "/opt/homebrew/bin"] {
             let path = "\(dir)/argon"
             if FileManager.default.fileExists(atPath: path) {
@@ -115,7 +164,6 @@ enum ArgonCLI {
             }
         }
 
-        // Last resort
         return "/usr/local/bin/argon"
     }
 

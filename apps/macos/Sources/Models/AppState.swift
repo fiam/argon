@@ -9,6 +9,7 @@ final class AppState {
     var errorMessage: String?
     var isLoading = false
     var isPolling = false
+    var pendingDrafts: [DraftComment] = []
 
     var sessionId: String?
     var repoRoot: String?
@@ -63,7 +64,6 @@ final class AppState {
         loadSession()
     }
 
-    /// Refresh only session metadata (threads, status, decision) without re-running git diff.
     func refreshSession() {
         guard let sessionId, let repoRoot else { return }
         do {
@@ -102,19 +102,58 @@ final class AppState {
         stopPolling()
     }
 
-    func submitDecision(outcome: String, summary: String? = nil) {
+    // MARK: - Draft Review
+
+    func addDraft(message: String, filePath: String? = nil, lineNew: UInt32? = nil, lineOld: UInt32? = nil, threadId: String? = nil) {
         guard let sessionId, let repoRoot else { return }
         do {
-            try ArgonCLI.setDecision(
+            try ArgonCLI.addDraftComment(
+                sessionId: sessionId, repoRoot: repoRoot,
+                message: message, filePath: filePath,
+                lineNew: lineNew, lineOld: lineOld, threadId: threadId
+            )
+            reloadDrafts()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func deleteDraft(_ draftId: String) {
+        guard let sessionId, let repoRoot else { return }
+        do {
+            try ArgonCLI.deleteDraftComment(sessionId: sessionId, repoRoot: repoRoot, draftId: draftId)
+            reloadDrafts()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func submitReview(outcome: String?, summary: String? = nil) {
+        guard let sessionId, let repoRoot else { return }
+        do {
+            try ArgonCLI.submitReview(
                 sessionId: sessionId, repoRoot: repoRoot,
                 outcome: outcome, summary: summary
             )
+            pendingDrafts = []
             reload()
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
+    func reloadDrafts() {
+        guard let sessionId, let repoRoot else { return }
+        do {
+            let draft = try SessionLoader.loadDraftReview(sessionId: sessionId, repoRoot: repoRoot)
+            pendingDrafts = draft
+        } catch {
+            // Ignore — no drafts
+            pendingDrafts = []
+        }
+    }
+
+    // Legacy immediate comment (kept for dev commands if needed)
     func addComment(message: String, filePath: String? = nil, lineNew: UInt32? = nil, lineOld: UInt32? = nil, threadId: String? = nil) {
         guard let sessionId, let repoRoot else { return }
         do {

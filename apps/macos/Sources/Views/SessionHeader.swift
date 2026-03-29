@@ -4,13 +4,12 @@ struct SessionHeader: View {
     @Environment(AppState.self) private var appState
     let session: ReviewSession
     let fileCount: Int
-    @State private var showDecisionSheet = false
-    @State private var decisionSummary = ""
-    @State private var pendingOutcome: String?
+    @State private var showSubmitSheet = false
+    @State private var submitSummary = ""
+    @State private var submitOutcome: String = "commented"
 
     var body: some View {
         HStack(spacing: 16) {
-            // Left: session info
             HStack(spacing: 12) {
                 StatusBadge(status: session.status)
 
@@ -31,14 +30,9 @@ struct SessionHeader: View {
 
             Spacer()
 
-            // Handoff command
             if session.status != .approved && session.status != .closed {
                 HandoffButton()
                 Divider().frame(height: 16)
-            }
-
-            // Right: review actions
-            if session.status != .approved && session.status != .closed {
                 reviewActions
             } else if session.status == .approved {
                 Label("Approved", systemImage: "checkmark.circle.fill")
@@ -54,46 +48,53 @@ struct SessionHeader: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color(nsColor: .controlBackgroundColor))
-        .sheet(isPresented: $showDecisionSheet) {
-            DecisionSheet(
-                outcome: pendingOutcome ?? "approved",
-                summary: $decisionSummary,
+        .sheet(isPresented: $showSubmitSheet) {
+            SubmitReviewSheet(
+                draftCount: appState.pendingDrafts.count,
+                outcome: $submitOutcome,
+                summary: $submitSummary,
                 onSubmit: {
-                    if let outcome = pendingOutcome {
-                        appState.submitDecision(outcome: outcome, summary: decisionSummary.isEmpty ? nil : decisionSummary)
-                    }
-                    showDecisionSheet = false
-                    decisionSummary = ""
+                    appState.submitReview(
+                        outcome: submitOutcome,
+                        summary: submitSummary.isEmpty ? nil : submitSummary
+                    )
+                    showSubmitSheet = false
+                    submitSummary = ""
+                    submitOutcome = "commented"
                 },
                 onCancel: {
-                    showDecisionSheet = false
-                    decisionSummary = ""
+                    showSubmitSheet = false
+                    submitSummary = ""
                 }
             )
+        }
+        .onAppear {
+            appState.reloadDrafts()
         }
     }
 
     @ViewBuilder
     private var reviewActions: some View {
         HStack(spacing: 8) {
-            CommentButton()
+            // Pending drafts badge
+            if !appState.pendingDrafts.isEmpty {
+                Text("\(appState.pendingDrafts.count) pending")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.purple.opacity(0.15))
+                    .foregroundStyle(.purple)
+                    .clipShape(Capsule())
+            }
 
             Button {
-                pendingOutcome = "changes-requested"
-                showDecisionSheet = true
+                submitOutcome = "approved"
+                showSubmitSheet = true
             } label: {
-                Label("Request Changes", systemImage: "arrow.uturn.backward")
+                Label("Submit Review", systemImage: "paperplane")
             }
             .controlSize(.small)
-
-            Button {
-                pendingOutcome = "approved"
-                showDecisionSheet = true
-            } label: {
-                Label("Approve", systemImage: "checkmark")
-            }
-            .controlSize(.small)
-            .tint(.green)
         }
     }
 
@@ -119,136 +120,71 @@ struct SessionHeader: View {
     }
 }
 
-struct CommentButton: View {
-    @Environment(AppState.self) private var appState
-    @State private var showPopover = false
-    @State private var commentText = ""
-
-    var body: some View {
-        Button {
-            showPopover = true
-        } label: {
-            Label("Comment", systemImage: "text.bubble")
-        }
-        .controlSize(.small)
-        .popover(isPresented: $showPopover, arrowEdge: .bottom) {
-            CommentEditorPopover(
-                title: "Comment",
-                commentText: $commentText,
-                onSubmit: {
-                    appState.addComment(message: commentText)
-                    showPopover = false
-                    commentText = ""
-                },
-                onCancel: {
-                    showPopover = false
-                    commentText = ""
-                }
-            )
-        }
-    }
-}
-
-struct DecisionSheet: View {
-    let outcome: String
+struct SubmitReviewSheet: View {
+    let draftCount: Int
+    @Binding var outcome: String
     @Binding var summary: String
     let onSubmit: () -> Void
     let onCancel: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(outcome == "approved" ? "Approve Review" : "Request Changes")
+            Text("Submit Review")
                 .font(.title2)
                 .fontWeight(.semibold)
 
-            Text("Optional summary:")
+            if draftCount > 0 {
+                Text("\(draftCount) pending comment\(draftCount == 1 ? "" : "s") will be submitted.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("No pending comments. You can still submit a decision.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Picker("Decision:", selection: $outcome) {
+                Text("Approve").tag("approved")
+                Text("Request Changes").tag("changes-requested")
+                Text("Comment").tag("commented")
+            }
+            .pickerStyle(.segmented)
+
+            Text("Summary (optional):")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
             TextEditor(text: $summary)
                 .font(.system(.body, design: .monospaced))
-                .frame(width: 400, height: 80)
-                .border(Color(nsColor: .separatorColor))
+                .frame(width: 440, height: 70)
+                .scrollContentBackground(.hidden)
+                .padding(8)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                )
 
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
                     .keyboardShortcut(.cancelAction)
-                Button(outcome == "approved" ? "Approve" : "Request Changes") {
+                Button(submitLabel) {
                     onSubmit()
                 }
                 .keyboardShortcut(.defaultAction)
-                .tint(outcome == "approved" ? .green : .orange)
+                .tint(outcome == "approved" ? .green : outcome == "changes-requested" ? .orange : .blue)
             }
         }
         .padding(24)
     }
-}
 
-struct DiffStatView: View {
-    let files: [FileDiff]
-
-    private var added: Int {
-        files.flatMap(\.hunks).flatMap(\.lines).filter { $0.kind == .added }.count
-    }
-
-    private var removed: Int {
-        files.flatMap(\.hunks).flatMap(\.lines).filter { $0.kind == .removed }.count
-    }
-
-    private var total: Int { added + removed }
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Text("\(files.count) files")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Text("+\(added)")
-                .font(.caption)
-                .fontWeight(.medium)
-                .foregroundStyle(.green)
-
-            Text("-\(removed)")
-                .font(.caption)
-                .fontWeight(.medium)
-                .foregroundStyle(.red)
-
-            // GitHub-style block bar
-            DiffStatBar(added: added, removed: removed)
-        }
-    }
-}
-
-struct DiffStatBar: View {
-    let added: Int
-    let removed: Int
-    private let blockCount = 5
-    private let blockSize: CGFloat = 8
-
-    var body: some View {
-        HStack(spacing: 1) {
-            let total = added + removed
-            let greenBlocks = total > 0 ? max(0, min(blockCount, Int(round(Double(added) / Double(total) * Double(blockCount))))) : 0
-            let redBlocks = total > 0 ? blockCount - greenBlocks : 0
-
-            ForEach(0..<greenBlocks, id: \.self) { _ in
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(.green)
-                    .frame(width: blockSize, height: blockSize)
-            }
-            ForEach(0..<redBlocks, id: \.self) { _ in
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(.red)
-                    .frame(width: blockSize, height: blockSize)
-            }
-            if total == 0 {
-                ForEach(0..<blockCount, id: \.self) { _ in
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(Color(nsColor: .separatorColor))
-                        .frame(width: blockSize, height: blockSize)
-                }
-            }
+    private var submitLabel: String {
+        switch outcome {
+        case "approved": "Approve"
+        case "changes-requested": "Request Changes"
+        default: "Submit"
         }
     }
 }
@@ -302,6 +238,71 @@ struct StatusBadge: View {
         case .awaitingAgent: .blue
         case .approved: .green
         case .closed: .secondary
+        }
+    }
+}
+
+struct DiffStatView: View {
+    let files: [FileDiff]
+
+    private var added: Int {
+        files.flatMap(\.hunks).flatMap(\.lines).filter { $0.kind == .added }.count
+    }
+
+    private var removed: Int {
+        files.flatMap(\.hunks).flatMap(\.lines).filter { $0.kind == .removed }.count
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("\(files.count) files")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Text("+\(added)")
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundStyle(.green)
+
+            Text("-\(removed)")
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundStyle(.red)
+
+            DiffStatBar(added: added, removed: removed)
+        }
+    }
+}
+
+struct DiffStatBar: View {
+    let added: Int
+    let removed: Int
+    private let blockCount = 5
+    private let blockSize: CGFloat = 8
+
+    var body: some View {
+        HStack(spacing: 1) {
+            let total = added + removed
+            let greenBlocks = total > 0 ? max(0, min(blockCount, Int(round(Double(added) / Double(total) * Double(blockCount))))) : 0
+            let redBlocks = total > 0 ? blockCount - greenBlocks : 0
+
+            ForEach(0..<greenBlocks, id: \.self) { _ in
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(.green)
+                    .frame(width: blockSize, height: blockSize)
+            }
+            ForEach(0..<redBlocks, id: \.self) { _ in
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(.red)
+                    .frame(width: blockSize, height: blockSize)
+            }
+            if total == 0 {
+                ForEach(0..<blockCount, id: \.self) { _ in
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(Color(nsColor: .separatorColor))
+                        .frame(width: blockSize, height: blockSize)
+                }
+            }
         }
     }
 }

@@ -131,7 +131,7 @@ struct DiffLineView: View {
                 title: lineCommentTitle,
                 commentText: $commentText,
                 onSubmit: {
-                    appState.addComment(
+                    appState.addDraft(
                         message: commentText,
                         filePath: filePath,
                         lineNew: line.newLine,

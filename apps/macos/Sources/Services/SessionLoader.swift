@@ -30,6 +30,40 @@ enum SessionLoader {
         return try decoder.decode(ReviewSession.self, from: data)
     }
 
+    static func loadDraftReview(sessionId: String, repoRoot: String) throws -> [DraftComment] {
+        let storageRoot = argonStorageRoot()
+        let repoKey = Self.repoStorageKey(repoRoot: repoRoot)
+        let draftFile = storageRoot
+            .appendingPathComponent("sessions")
+            .appendingPathComponent(repoKey)
+            .appendingPathComponent("drafts")
+            .appendingPathComponent("\(sessionId).json")
+
+        guard FileManager.default.fileExists(atPath: draftFile.path) else {
+            return []
+        }
+
+        let data = try Data(contentsOf: draftFile)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let string = try container.decode(String.self)
+            if let date = ISO8601DateFormatter().date(from: string) {
+                return date
+            }
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions.insert(.withFractionalSeconds)
+            if let date = formatter.date(from: string) {
+                return date
+            }
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "Invalid date: \(string)")
+            )
+        }
+        let draft = try decoder.decode(DraftReviewData.self, from: data)
+        return draft.comments
+    }
+
     private static func argonStorageRoot() -> URL {
         if let home = ProcessInfo.processInfo.environment["ARGON_HOME"], !home.isEmpty {
             return URL(fileURLWithPath: home)

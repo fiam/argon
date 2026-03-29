@@ -35,27 +35,126 @@ struct FileRow: View {
 struct ThreadsPanel: View {
     @Environment(AppState.self) private var appState
     let session: ReviewSession
+    @State private var showCommentPopover = false
+    @State private var commentText = ""
 
     var body: some View {
-        if session.threads.isEmpty {
-            VStack(spacing: 6) {
-                Text("No comments yet")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-        } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(session.threads) { thread in
-                        ThreadRow(thread: thread)
+        VStack(spacing: 0) {
+            // Pending drafts
+            if !appState.pendingDrafts.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Pending Review")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundStyle(.purple)
+                        Spacer()
+                        Text("\(appState.pendingDrafts.count)")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Color.purple.opacity(0.15))
+                            .foregroundStyle(.purple)
+                            .clipShape(Capsule())
+                    }
+                    ForEach(appState.pendingDrafts) { draft in
+                        DraftRow(draft: draft)
                     }
                 }
                 .padding(8)
+                Divider()
             }
-            .frame(maxHeight: 200)
+
+            // Add comment button
+            if session.status != .approved && session.status != .closed {
+                Button {
+                    showCommentPopover = true
+                } label: {
+                    Label("Add Comment", systemImage: "plus.bubble")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .padding(.vertical, 8)
+                .popover(isPresented: $showCommentPopover, arrowEdge: .trailing) {
+                    CommentEditorPopover(
+                        title: "Comment",
+                        commentText: $commentText,
+                        onSubmit: {
+                            appState.addDraft(message: commentText)
+                            showCommentPopover = false
+                            commentText = ""
+                        },
+                        onCancel: {
+                            showCommentPopover = false
+                            commentText = ""
+                        }
+                    )
+                }
+            }
+
+            // Submitted threads
+            if !session.threads.isEmpty {
+                Divider()
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        Text("Threads")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundStyle(.secondary)
+                        ForEach(session.threads) { thread in
+                            ThreadRow(thread: thread)
+                        }
+                    }
+                    .padding(8)
+                }
+                .frame(maxHeight: 200)
+            } else if appState.pendingDrafts.isEmpty {
+                Text("No comments yet")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.vertical, 8)
+            }
         }
+    }
+}
+
+struct DraftRow: View {
+    @Environment(AppState.self) private var appState
+    let draft: DraftComment
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
+                if let file = draft.anchor.filePath {
+                    HStack(spacing: 2) {
+                        Text(file)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        if let line = draft.anchor.lineNew {
+                            Text(":\(line)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                Text(draft.body)
+                    .font(.caption2)
+                    .lineLimit(2)
+            }
+            Spacer()
+            Button {
+                appState.deleteDraft(draft.id.uuidString)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(4)
+        .background(Color.purple.opacity(0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 }
 
