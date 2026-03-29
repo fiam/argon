@@ -12,6 +12,12 @@ final class AppState {
     var pendingDrafts: [DraftComment] = []
     var scrollToFile: UUID?
 
+    // Active inline comment editor
+    var activeCommentLineId: UUID?
+    var activeCommentText: String = ""
+    var showDiscardAlert = false
+    var pendingCommentLineId: UUID?
+
     var activeMode: ReviewMode = .uncommitted
     var activeBaseRef: String = "HEAD"
     var activeHeadRef: String = "WORKTREE"
@@ -229,6 +235,44 @@ final class AppState {
                 self?.refreshSession()
             }
         }
+    }
+
+    // MARK: - Inline Comment Editor
+
+    func requestCommentEditor(for lineId: UUID) {
+        // Same line — toggle off
+        if activeCommentLineId == lineId {
+            return
+        }
+        // Another line with unsaved text — confirm discard
+        if activeCommentLineId != nil && !activeCommentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            pendingCommentLineId = lineId
+            showDiscardAlert = true
+            return
+        }
+        // Open on new line
+        openCommentEditor(for: lineId)
+    }
+
+    func confirmDiscard() {
+        if let pending = pendingCommentLineId {
+            openCommentEditor(for: pending)
+        }
+        pendingCommentLineId = nil
+    }
+
+    func cancelDiscard() {
+        pendingCommentLineId = nil
+    }
+
+    func closeCommentEditor() {
+        activeCommentLineId = nil
+        activeCommentText = ""
+    }
+
+    private func openCommentEditor(for lineId: UUID) {
+        activeCommentText = ""
+        activeCommentLineId = lineId
     }
 
     func stopPolling() {

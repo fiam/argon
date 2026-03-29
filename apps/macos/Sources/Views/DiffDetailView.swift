@@ -49,6 +49,19 @@ struct DiffDetailView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(Color(nsColor: .textBackgroundColor))
+            .alert("Discard comment?", isPresented: Binding(
+                get: { appState.showDiscardAlert },
+                set: { appState.showDiscardAlert = $0 }
+            )) {
+                Button("Discard", role: .destructive) {
+                    appState.confirmDiscard()
+                }
+                Button("Keep Editing", role: .cancel) {
+                    appState.cancelDiscard()
+                }
+            } message: {
+                Text("You have an unsaved comment. Discard it and start a new one?")
+            }
         }
     }
 
@@ -390,16 +403,20 @@ struct DiffLineView: View {
     @Environment(AppState.self) private var appState
     let line: DiffLine
     let filePath: String
-    @State private var showCommentPopover = false
-    @State private var commentText = ""
     @State private var isHovering = false
 
+    private var isActive: Bool {
+        appState.activeCommentLineId == line.id
+    }
+
     var body: some View {
+        @Bindable var state = appState
+
         HStack(alignment: .top, spacing: 0) {
             Image(systemName: "plus.bubble.fill")
                 .font(.system(size: 10))
                 .foregroundStyle(.blue)
-                .opacity(isHovering && !showCommentPopover ? 1 : 0)
+                .opacity(isHovering && !isActive ? 1 : 0)
                 .frame(width: 24, height: 18)
 
             Text(line.oldLine.map { String($0) } ?? "")
@@ -411,9 +428,6 @@ struct DiffLineView: View {
                 .frame(width: 44, alignment: .trailing)
                 .padding(.trailing, 8)
                 .foregroundStyle(.tertiary)
-                .popover(isPresented: $showCommentPopover, arrowEdge: .bottom) {
-                    commentPopover
-                }
 
             Text(marker)
                 .frame(width: 14)
@@ -431,29 +445,31 @@ struct DiffLineView: View {
             isHovering = hovering
         }
         .onTapGesture {
-            showCommentPopover = true
+            appState.requestCommentEditor(for: line.id)
         }
-    }
-
-    private var commentPopover: some View {
-        CommentEditorPopover(
-            title: lineCommentTitle,
-            commentText: $commentText,
-            onSubmit: {
-                appState.addDraft(
-                    message: commentText,
-                    filePath: filePath,
-                    lineNew: line.newLine,
-                    lineOld: line.oldLine
-                )
-                showCommentPopover = false
-                commentText = ""
-            },
-            onCancel: {
-                showCommentPopover = false
-                commentText = ""
-            }
-        )
+        .popover(isPresented: Binding(
+            get: { isActive },
+            set: { if !$0 { appState.closeCommentEditor() } }
+        ), arrowEdge: .bottom) {
+            CommentEditorPopover(
+                title: lineCommentTitle,
+                commentText: $state.activeCommentText,
+                onSubmit: {
+                    let text = appState.activeCommentText
+                    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                    appState.addDraft(
+                        message: text,
+                        filePath: filePath,
+                        lineNew: line.newLine,
+                        lineOld: line.oldLine
+                    )
+                    appState.closeCommentEditor()
+                },
+                onCancel: {
+                    appState.closeCommentEditor()
+                }
+            )
+        }
     }
 
     private var marker: String {
