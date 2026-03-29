@@ -12,13 +12,11 @@ final class AppState {
     var pendingDrafts: [DraftComment] = []
     var scrollToFile: UUID?
 
-    // Active review target (may differ from the session's original target)
     var activeMode: ReviewMode = .uncommitted
     var activeBaseRef: String = "HEAD"
     var activeHeadRef: String = "WORKTREE"
     var activeMergeBaseSha: String = ""
 
-    // Available branch info for the mode picker
     var detectedBaseRef: String?
     var detectedHeadRef: String?
 
@@ -48,6 +46,8 @@ final class AppState {
         }
     }
 
+    // MARK: - Load
+
     func loadSession() {
         guard let sessionId, let repoRoot else {
             errorMessage = "No session. Run: argon . from a git repo"
@@ -55,105 +55,112 @@ final class AppState {
         }
 
         isLoading = true
+        let sid = sessionId
+        let root = repoRoot
 
-        Task.detached { [sessionId, repoRoot] in
-            let result = Self.loadSessionInBackground(sessionId: sessionId, repoRoot: repoRoot)
-            await MainActor.run { [self] in
-                self.isLoading = false
-                switch result {
-                case .success(let data):
-                    self.session = data.session
-                    self.activeMode = data.session.mode
-                    self.activeBaseRef = data.session.baseRef
-                    self.activeHeadRef = data.session.headRef
-                    self.activeMergeBaseSha = data.session.mergeBaseSha
-                    self.detectedBaseRef = data.detectedBase
-                    self.detectedHeadRef = data.detectedHead
-                    self.files = data.files
-                    if self.selectedFile == nil || !data.files.contains(where: { $0.id == self.selectedFile?.id }) {
-                        self.selectedFile = data.files.first
-                    }
-                case .failure(let error):
-                    self.errorMessage = error.localizedDescription
+        Task {
+            let result = await Task.detached {
+                Self.doLoadSession(sessionId: sid, repoRoot: root)
+            }.value
+
+            isLoading = false
+            switch result {
+            case .success(let data):
+                session = data.session
+                activeMode = data.session.mode
+                activeBaseRef = data.session.baseRef
+                activeHeadRef = data.session.headRef
+                activeMergeBaseSha = data.session.mergeBaseSha
+                detectedBaseRef = data.detectedBase
+                detectedHeadRef = data.detectedHead
+                files = data.files
+                if selectedFile == nil || !data.files.contains(where: { $0.id == selectedFile?.id }) {
+                    selectedFile = data.files.first
                 }
+            case .failure(let error):
+                errorMessage = error.localizedDescription
             }
         }
     }
+
+    // MARK: - Switch Mode
 
     func switchMode(_ mode: ReviewMode) {
         guard let repoRoot else { return }
         isLoading = true
 
-        let sessionId = self.sessionId
-        let detectedBase = self.detectedBaseRef
-        let detectedHead = self.detectedHeadRef
+        let sid = sessionId
+        let root = repoRoot
+        let dBase = detectedBaseRef
+        let dHead = detectedHeadRef
 
-        Task.detached { [repoRoot] in
-            let result = Self.switchModeInBackground(
-                mode: mode, repoRoot: repoRoot, sessionId: sessionId,
-                detectedBase: detectedBase, detectedHead: detectedHead
-            )
-            await MainActor.run { [self] in
-                self.isLoading = false
-                switch result {
-                case .success(let data):
-                    self.activeMode = data.target.mode
-                    self.activeBaseRef = data.target.baseRef
-                    self.activeHeadRef = data.target.headRef
-                    self.activeMergeBaseSha = data.target.mergeBaseSha
-                    self.files = data.files
-                    if self.selectedFile == nil || !data.files.contains(where: { $0.id == self.selectedFile?.id }) {
-                        self.selectedFile = data.files.first
-                    }
-                    if let session = data.updatedSession {
-                        self.session = session
-                    }
-                case .failure(let error):
-                    self.errorMessage = error.localizedDescription
+        Task {
+            let result = await Task.detached {
+                Self.doSwitchMode(
+                    mode: mode, repoRoot: root, sessionId: sid,
+                    detectedBase: dBase, detectedHead: dHead
+                )
+            }.value
+
+            isLoading = false
+            switch result {
+            case .success(let data):
+                activeMode = data.target.mode
+                activeBaseRef = data.target.baseRef
+                activeHeadRef = data.target.headRef
+                activeMergeBaseSha = data.target.mergeBaseSha
+                files = data.files
+                if selectedFile == nil || !data.files.contains(where: { $0.id == selectedFile?.id }) {
+                    selectedFile = data.files.first
                 }
+                if let s = data.updatedSession {
+                    session = s
+                }
+            case .failure(let err):
+                errorMessage = err.localizedDescription
             }
         }
     }
 
-    // MARK: - Background Work
+    // MARK: - Background helpers
 
-    private struct LoadResult {
+    private enum SwitchError: LocalizedError {
+        case failed(String)
+        var errorDescription: String? {
+            switch self { case .failed(let msg): msg }
+        }
+    }
+
+    private struct LoadData: Sendable {
         let session: ReviewSession
         let files: [FileDiff]
         let detectedBase: String?
         let detectedHead: String?
     }
 
-    private struct SwitchResult {
+    private struct SwitchData: Sendable {
         let target: ResolvedTarget
         let files: [FileDiff]
         let updatedSession: ReviewSession?
     }
 
-    nonisolated private static func loadSessionInBackground(sessionId: String, repoRoot: String) -> Result<LoadResult, Error> {
+    nonisolated private static func doLoadSession(sessionId: String, repoRoot: String) -> Result<LoadData, Error> {
         do {
             let session = try SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
             let rawDiff = GitService.diff(session: session)
             let files = DiffParser.parse(rawDiff)
             let detectedBase = GitService.inferBaseRef(repoRoot: repoRoot)
             let detectedHead = GitService.currentBranchName(repoRoot: repoRoot)
-            return .success(LoadResult(session: session, files: files, detectedBase: detectedBase, detectedHead: detectedHead))
+            return .success(LoadData(session: session, files: files, detectedBase: detectedBase, detectedHead: detectedHead))
         } catch {
             return .failure(error)
         }
     }
 
-    private enum SwitchError: LocalizedError {
-        case resolveFailed(String)
-        var errorDescription: String? {
-            switch self { case .resolveFailed(let msg): msg }
-        }
-    }
-
-    nonisolated private static func switchModeInBackground(
+    nonisolated private static func doSwitchMode(
         mode: ReviewMode, repoRoot: String, sessionId: String?,
         detectedBase: String?, detectedHead: String?
-    ) -> Result<SwitchResult, SwitchError> {
+    ) -> Result<SwitchData, SwitchError> {
         let target: ResolvedTarget?
         switch mode {
         case .branch:
@@ -167,7 +174,7 @@ final class AppState {
         }
 
         guard let target else {
-            return .failure(.resolveFailed("Could not resolve \(mode.rawValue) target"))
+            return .failure(.failed("Could not resolve \(mode.rawValue) target"))
         }
 
         let rawDiff = GitService.diff(
@@ -187,7 +194,7 @@ final class AppState {
             updatedSession = try? SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
         }
 
-        return .success(SwitchResult(target: target, files: files, updatedSession: updatedSession))
+        return .success(SwitchData(target: target, files: files, updatedSession: updatedSession))
     }
 
     // MARK: - Polling
