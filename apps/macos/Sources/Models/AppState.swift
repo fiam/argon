@@ -10,6 +10,7 @@ final class AppState {
     var isLoading = false
     var isPolling = false
     var pendingDrafts: [DraftComment] = []
+    var scrollToFile: UUID?
 
     // Active review target (may differ from the session's original target)
     var activeMode: ReviewMode = .uncommitted

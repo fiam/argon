@@ -9,29 +9,39 @@ struct DiffDetailView: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    ForEach(appState.files) { file in
-                        Section {
-                            let anchored = anchoredItems(for: file)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        ForEach(appState.files) { file in
+                            Section {
+                                let anchored = anchoredItems(for: file)
 
-                            let outdated = outdatedThreads(for: file)
-                            if !outdated.isEmpty {
-                                OutdatedThreadsSection(threads: outdated)
+                                let outdated = outdatedThreads(for: file)
+                                if !outdated.isEmpty {
+                                    OutdatedThreadsSection(threads: outdated)
+                                }
+
+                                ForEach(file.hunks) { hunk in
+                                    DiffHunkView(hunk: hunk, filePath: file.newPath, anchored: anchored)
+                                }
+
+                                Color.clear.frame(height: 12)
+                            } header: {
+                                DiffFileHeader(file: file)
+                                    .id(file.id)
                             }
-
-                            ForEach(file.hunks) { hunk in
-                                DiffHunkView(hunk: hunk, filePath: file.newPath, anchored: anchored)
-                            }
-
-                            // Spacer between files
-                            Color.clear.frame(height: 12)
-                        } header: {
-                            DiffFileHeader(file: file)
                         }
                     }
+                    .padding(.bottom, 20)
                 }
-                .padding(.bottom, 20)
+                .onChange(of: appState.scrollToFile) { _, fileId in
+                    if let fileId {
+                        withAnimation {
+                            proxy.scrollTo(fileId, anchor: .top)
+                        }
+                        appState.scrollToFile = nil
+                    }
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(Color(nsColor: .textBackgroundColor))

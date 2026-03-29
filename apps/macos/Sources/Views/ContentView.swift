@@ -15,15 +15,7 @@ struct ContentView: View {
                     detail: error
                 )
             } else if let session = appState.session {
-                if appState.files.isEmpty {
-                    EmptyStateView(
-                        icon: "checkmark.circle",
-                        title: "No changes",
-                        detail: "No differences found between \(appState.activeBaseRef) and working tree."
-                    )
-                } else {
-                    ReviewLayout(session: session)
-                }
+                ReviewLayout(session: session)
             } else {
                 EmptyStateView(
                     icon: "arrow.right.circle",
@@ -62,18 +54,100 @@ struct ReviewLayout: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Header always visible so mode picker is accessible
             SessionHeader(session: session, fileCount: appState.files.count)
             Divider()
-            HSplitView {
-                DiffDetailView()
-                    .frame(minWidth: 500)
 
-                ThreadsSidebar(session: session)
-                    .frame(minWidth: 220, idealWidth: 260, maxWidth: 320)
+            if appState.files.isEmpty {
+                EmptyStateView(
+                    icon: "checkmark.circle",
+                    title: "No changes",
+                    detail: "No differences found for the current review mode."
+                )
+            } else {
+                HSplitView {
+                    // Left: file tree
+                    FileTreeSidebar()
+                        .frame(minWidth: 200, idealWidth: 230, maxWidth: 300)
+
+                    // Center: diff
+                    DiffDetailView()
+                        .frame(minWidth: 500)
+
+                    // Right: threads
+                    ThreadsSidebar(session: session)
+                        .frame(minWidth: 220, idealWidth: 260, maxWidth: 320)
+                }
             }
         }
     }
 }
+
+// MARK: - File Tree Sidebar
+
+struct FileTreeSidebar: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 1) {
+                ForEach(appState.files) { file in
+                    FileTreeRow(file: file)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.3))
+    }
+}
+
+struct FileTreeRow: View {
+    @Environment(AppState.self) private var appState
+    let file: FileDiff
+
+    private var isSelected: Bool {
+        appState.selectedFile?.id == file.id
+    }
+
+    var body: some View {
+        Button {
+            appState.selectedFile = file
+            appState.scrollToFile = file.id
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "doc.text")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+                Text(file.displayPath)
+                    .font(.system(.caption, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+                HStack(spacing: 2) {
+                    let added = file.hunks.flatMap(\.lines).filter { $0.kind == .added }.count
+                    let removed = file.hunks.flatMap(\.lines).filter { $0.kind == .removed }.count
+                    if added > 0 {
+                        Text("+\(added)")
+                            .font(.caption2)
+                            .foregroundStyle(.green)
+                    }
+                    if removed > 0 {
+                        Text("-\(removed)")
+                            .font(.caption2)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(isSelected ? Color.accentColor.opacity(0.12) : .clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Threads Sidebar
 
 struct ThreadsSidebar: View {
     @Environment(AppState.self) private var appState
@@ -83,7 +157,6 @@ struct ThreadsSidebar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Add comment button
             if session.status != .approved && session.status != .closed {
                 Button {
                     showCommentPopover = true
@@ -114,7 +187,6 @@ struct ThreadsSidebar: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    // Pending drafts
                     if !appState.pendingDrafts.isEmpty {
                         Text("Pending Review")
                             .font(.caption)
@@ -128,7 +200,6 @@ struct ThreadsSidebar: View {
                         }
                     }
 
-                    // Submitted threads
                     if !session.threads.isEmpty {
                         Text("Threads")
                             .font(.caption)
@@ -153,6 +224,8 @@ struct ThreadsSidebar: View {
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.3))
     }
 }
+
+// MARK: - Sidebar Rows
 
 struct DraftRow: View {
     @Environment(AppState.self) private var appState
@@ -247,6 +320,8 @@ struct SidebarThreadRow: View {
         return comment.author == .reviewer ? "reviewer" : "agent"
     }
 }
+
+// MARK: - Empty State
 
 struct EmptyStateView: View {
     let icon: String
