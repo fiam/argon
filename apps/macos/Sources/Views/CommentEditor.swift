@@ -5,6 +5,7 @@ struct CommentEditorPopover: View {
     @Binding var commentText: String
     let onSubmit: () -> Void
     let onCancel: () -> Void
+    @FocusState private var isFocused: Bool
 
     private var isEmpty: Bool {
         commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -26,9 +27,10 @@ struct CommentEditorPopover: View {
                     RoundedRectangle(cornerRadius: 6)
                         .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
                 )
+                .focused($isFocused)
 
             HStack {
-                Text("Shift-Return to submit")
+                Text("\u{2318}Return to submit")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                 Spacer()
@@ -43,8 +45,11 @@ struct CommentEditorPopover: View {
             }
         }
         .padding(16)
+        .onAppear {
+            isFocused = true
+        }
         .onKeyPress(.return, phases: .down) { keyPress in
-            if keyPress.modifiers.contains(.shift) && !isEmpty {
+            if keyPress.modifiers.contains(.command) && !isEmpty {
                 onSubmit()
                 return .handled
             }

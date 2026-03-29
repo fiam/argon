@@ -128,56 +128,97 @@ struct SubmitReviewSheet: View {
     let onCancel: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Submit Review")
-                .font(.title2)
-                .fontWeight(.semibold)
-
-            if draftCount > 0 {
-                Text("\(draftCount) pending comment\(draftCount == 1 ? "" : "s") will be submitted.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("No pending comments. You can still submit a decision.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 20) {
+            // Header
+            HStack(spacing: 10) {
+                Image(systemName: "paperplane.circle.fill")
+                    .font(.title)
+                    .foregroundStyle(.blue)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Submit Review")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                    if draftCount > 0 {
+                        Text("\(draftCount) pending comment\(draftCount == 1 ? "" : "s") will be submitted.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Submit a decision without comments.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
 
-            Picker("Decision:", selection: $outcome) {
-                Text("Approve").tag("approved")
-                Text("Request Changes").tag("changes-requested")
-                Text("Comment").tag("commented")
+            // Decision buttons
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Decision")
+                    .font(.callout)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 8) {
+                    DecisionOption(
+                        icon: "checkmark.circle.fill",
+                        label: "Approve",
+                        color: .green,
+                        tag: "approved",
+                        selected: $outcome
+                    )
+                    DecisionOption(
+                        icon: "arrow.uturn.backward.circle.fill",
+                        label: "Request Changes",
+                        color: .orange,
+                        tag: "changes-requested",
+                        selected: $outcome
+                    )
+                    DecisionOption(
+                        icon: "text.bubble.fill",
+                        label: "Comment",
+                        color: .blue,
+                        tag: "commented",
+                        selected: $outcome
+                    )
+                }
             }
-            .pickerStyle(.segmented)
 
-            Text("Summary (optional):")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            // Summary
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Summary (optional)")
+                    .font(.callout)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
 
-            TextEditor(text: $summary)
-                .font(.system(.body, design: .monospaced))
-                .frame(width: 440, height: 70)
-                .scrollContentBackground(.hidden)
-                .padding(8)
-                .background(Color(nsColor: .textBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
-                )
+                TextEditor(text: $summary)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(width: 460, height: 70)
+                    .scrollContentBackground(.hidden)
+                    .padding(8)
+                    .background(Color(nsColor: .textBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                    )
+            }
 
+            // Actions
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
                     .keyboardShortcut(.cancelAction)
-                Button(submitLabel) {
+                Button {
                     onSubmit()
+                } label: {
+                    Label(submitLabel, systemImage: submitIcon)
                 }
                 .keyboardShortcut(.defaultAction)
-                .tint(outcome == "approved" ? .green : outcome == "changes-requested" ? .orange : .blue)
+                .buttonStyle(.borderedProminent)
+                .tint(submitColor)
             }
         }
         .padding(24)
+        .frame(width: 520)
     }
 
     private var submitLabel: String {
@@ -186,6 +227,56 @@ struct SubmitReviewSheet: View {
         case "changes-requested": "Request Changes"
         default: "Submit"
         }
+    }
+
+    private var submitIcon: String {
+        switch outcome {
+        case "approved": "checkmark.circle"
+        case "changes-requested": "arrow.uturn.backward"
+        default: "paperplane"
+        }
+    }
+
+    private var submitColor: Color {
+        switch outcome {
+        case "approved": .green
+        case "changes-requested": .orange
+        default: .blue
+        }
+    }
+}
+
+struct DecisionOption: View {
+    let icon: String
+    let label: String
+    let color: Color
+    let tag: String
+    @Binding var selected: String
+
+    private var isSelected: Bool { selected == tag }
+
+    var body: some View {
+        Button {
+            selected = tag
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .foregroundStyle(isSelected ? color : .secondary)
+                Text(label)
+                    .fontWeight(isSelected ? .medium : .regular)
+            }
+            .font(.callout)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(isSelected ? color.opacity(0.12) : Color(nsColor: .controlBackgroundColor))
+            .foregroundStyle(isSelected ? color : .primary)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isSelected ? color.opacity(0.4) : Color(nsColor: .separatorColor), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
