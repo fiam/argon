@@ -95,6 +95,10 @@ struct FileTreeSidebar: View {
   @Environment(AppState.self) private var appState
   @State private var filterText = ""
 
+  private var isRegexMode: Bool {
+    filterText.hasPrefix("/")
+  }
+
   private var filteredFiles: [FileDiff] {
     filterFiles(appState.files, pattern: filterText)
   }
@@ -108,36 +112,66 @@ struct FileTreeSidebar: View {
   var body: some View {
     VStack(spacing: 0) {
       // Filter field
-      HStack(spacing: 6) {
-        Image(systemName: "magnifyingglass")
-          .font(.system(size: 11))
-          .foregroundStyle(filterText.isEmpty ? .quaternary : .secondary)
+      VStack(spacing: 0) {
+        HStack(spacing: 6) {
+          Image(systemName: "magnifyingglass")
+            .font(.system(size: 11))
+            .foregroundStyle(filterText.isEmpty ? .quaternary : .secondary)
 
-        TextField(
-          filterText.hasPrefix("/") ? "Regex pattern..." : "Fuzzy filter...",
-          text: $filterText
-        )
-        .textFieldStyle(.plain)
-        .font(.system(.caption, design: .monospaced))
-        .focused($filterFocused)
+          TextField("Filter files", text: $filterText)
+            .textFieldStyle(.plain)
+            .font(.system(.caption, design: .monospaced))
+            .focused($filterFocused)
 
-        if !filterText.isEmpty {
-          Text("\(filteredFiles.count)/\(appState.files.count)")
-            .font(.system(size: 10, design: .monospaced))
-            .foregroundStyle(.tertiary)
+          if !filterText.isEmpty {
+            if isRegexMode {
+              Text("regex")
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .padding(.horizontal, 4)
+                .padding(.vertical, 1)
+                .background(Color.purple.opacity(0.15))
+                .foregroundStyle(.purple)
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+            }
 
-          Button {
-            filterText = ""
-          } label: {
-            Image(systemName: "xmark.circle.fill")
-              .font(.system(size: 11))
+            Text("\(filteredFiles.count)/\(appState.files.count)")
+              .font(.system(size: 10, design: .monospaced))
               .foregroundStyle(.tertiary)
+
+            Button {
+              filterText = ""
+            } label: {
+              Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.plain)
           }
-          .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+
+        if filterText.isEmpty {
+          HStack(spacing: 3) {
+            Text("Type to filter")
+              .foregroundStyle(.quaternary)
+            Text("·")
+              .foregroundStyle(.quaternary)
+            Text("/")
+              .font(.system(.caption2, design: .monospaced))
+              .fontWeight(.medium)
+              .padding(.horizontal, 3)
+              .padding(.vertical, 0.5)
+              .background(Color(nsColor: .separatorColor).opacity(0.3))
+              .clipShape(RoundedRectangle(cornerRadius: 2))
+              .foregroundStyle(.quaternary)
+            Text("for regex")
+              .foregroundStyle(.quaternary)
+          }
+          .font(.system(size: 9))
+          .padding(.bottom, 4)
         }
       }
-      .padding(.horizontal, 8)
-      .padding(.vertical, 5)
       .background(Color(nsColor: .textBackgroundColor))
       .overlay(alignment: .bottom) {
         Rectangle()
