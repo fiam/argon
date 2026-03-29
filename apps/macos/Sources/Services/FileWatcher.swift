@@ -34,7 +34,7 @@ final class FileWatcher: @unchecked Sendable {
       &fsContext,
       paths,
       FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-      0.5,  // latency — coalesce events within 500ms
+      0.3,  // latency — coalesce events within 300ms
       UInt32(
         kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents
           | kFSEventStreamCreateFlagNoDefer)

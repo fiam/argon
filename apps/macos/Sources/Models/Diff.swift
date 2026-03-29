@@ -23,18 +23,30 @@ struct DiffHunk: Identifiable {
 }
 
 struct FileDiff: Identifiable, Hashable {
-  let id = UUID()
+  /// Stable identity derived from file path so animations work across refreshes.
+  let id: String
   let oldPath: String
   let newPath: String
   let hunks: [DiffHunk]
+  /// Incremented each time the file content changes, so SwiftUI re-renders.
+  let lineCount: Int
+
+  init(oldPath: String, newPath: String, hunks: [DiffHunk]) {
+    self.id = newPath
+    self.oldPath = oldPath
+    self.newPath = newPath
+    self.hunks = hunks
+    self.lineCount = hunks.reduce(0) { $0 + $1.lines.count }
+  }
 
   var displayPath: String { newPath }
 
   static func == (lhs: FileDiff, rhs: FileDiff) -> Bool {
-    lhs.id == rhs.id
+    lhs.id == rhs.id && lhs.lineCount == rhs.lineCount
   }
 
   func hash(into hasher: inout Hasher) {
     hasher.combine(id)
+    hasher.combine(lineCount)
   }
 }

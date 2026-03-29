@@ -6,19 +6,20 @@ import Testing
 @Suite("Diff Model")
 struct DiffModelTests {
 
-  @Test("FileDiff equality is by id")
-  func fileDiffEqualityById() {
+  @Test("FileDiff equality is by path")
+  func fileDiffEqualityByPath() {
     let a = FileDiff(oldPath: "a.txt", newPath: "a.txt", hunks: [])
     let b = FileDiff(oldPath: "a.txt", newPath: "a.txt", hunks: [])
+    let c = FileDiff(oldPath: "b.txt", newPath: "b.txt", hunks: [])
 
-    // Two separately constructed FileDiffs have different UUIDs
-    #expect(a != b)
-    // A FileDiff equals itself
-    #expect(a == a)
+    // Same newPath means equal
+    #expect(a == b)
+    // Different newPath means not equal
+    #expect(a != c)
   }
 
-  @Test("FileDiff hash is by id")
-  func fileDiffHashById() {
+  @Test("FileDiff hash is by path")
+  func fileDiffHashByPath() {
     let a = FileDiff(oldPath: "x.rs", newPath: "x.rs", hunks: [])
     let b = FileDiff(oldPath: "x.rs", newPath: "x.rs", hunks: [])
 
@@ -26,12 +27,16 @@ struct DiffModelTests {
     set.insert(a)
     set.insert(b)
 
-    // Both should be in the set since they have different ids
-    #expect(set.count == 2)
+    // Same path = same identity, so only one in the set
+    #expect(set.count == 1)
+  }
 
-    // Inserting the same instance again should not increase count
-    set.insert(a)
-    #expect(set.count == 2)
+  @Test("FileDiff id is stable from path")
+  func fileDiffStableId() {
+    let a = FileDiff(oldPath: "foo.txt", newPath: "foo.txt", hunks: [])
+    let b = FileDiff(oldPath: "foo.txt", newPath: "foo.txt", hunks: [])
+    #expect(a.id == b.id)
+    #expect(a.id == "foo.txt")
   }
 
   @Test("displayPath returns newPath")

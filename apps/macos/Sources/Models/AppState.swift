@@ -10,7 +10,7 @@ final class AppState {
   var isLoading = false
   var isPolling = false
   var pendingDrafts: [DraftComment] = []
-  var scrollToFile: UUID?
+  var scrollToFile: String?
 
   // Active inline comment editor
   var activeCommentLineId: UUID?
@@ -269,10 +269,9 @@ final class AppState {
   }
 
   private func onFileSystemChange() async {
-    // Debounce: cancel any pending refresh and start a new one
     diffRefreshTask?.cancel()
     diffRefreshTask = Task {
-      try? await Task.sleep(for: .milliseconds(500))
+      try? await Task.sleep(for: .milliseconds(300))
       guard !Task.isCancelled else { return }
       await checkDiffChanged()
     }
