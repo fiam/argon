@@ -103,32 +103,47 @@ struct FileTreeSidebar: View {
     buildFileTree(from: filteredFiles)
   }
 
+  @FocusState private var filterFocused: Bool
+
   var body: some View {
     VStack(spacing: 0) {
       // Filter field
-      HStack(spacing: 4) {
-        Image(systemName: "line.3.horizontal.decrease")
-          .font(.caption)
-          .foregroundStyle(.tertiary)
-        TextField("Filter files...", text: $filterText)
-          .textFieldStyle(.plain)
-          .font(.system(.caption, design: .monospaced))
+      HStack(spacing: 6) {
+        Image(systemName: "magnifyingglass")
+          .font(.system(size: 11))
+          .foregroundStyle(filterText.isEmpty ? .quaternary : .secondary)
+
+        TextField(
+          filterText.hasPrefix("/") ? "Regex pattern..." : "Fuzzy filter...",
+          text: $filterText
+        )
+        .textFieldStyle(.plain)
+        .font(.system(.caption, design: .monospaced))
+        .focused($filterFocused)
+
         if !filterText.isEmpty {
+          Text("\(filteredFiles.count)/\(appState.files.count)")
+            .font(.system(size: 10, design: .monospaced))
+            .foregroundStyle(.tertiary)
+
           Button {
             filterText = ""
           } label: {
             Image(systemName: "xmark.circle.fill")
-              .font(.caption)
+              .font(.system(size: 11))
               .foregroundStyle(.tertiary)
           }
           .buttonStyle(.plain)
         }
       }
-      .padding(.horizontal, 10)
-      .padding(.vertical, 6)
+      .padding(.horizontal, 8)
+      .padding(.vertical, 5)
       .background(Color(nsColor: .textBackgroundColor))
-
-      Divider()
+      .overlay(alignment: .bottom) {
+        Rectangle()
+          .fill(Color(nsColor: .separatorColor))
+          .frame(height: 0.5)
+      }
 
       // Tree
       ScrollView {

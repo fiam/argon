@@ -114,61 +114,90 @@ private func flattenSingleChildDirs(_ nodes: [FileTreeNode]) -> [FileTreeNode] {
   }
 }
 
-// MARK: - Glob Filtering
+// MARK: - File Filtering
 
-/// Filter files using a glob-like pattern.
-/// Supports: * (any chars in segment), ** (any path segments), ? (single char)
+enum FilterMode {
+  case fuzzy
+  case regex
+}
+
+/// Detect filter mode and filter files accordingly.
+/// Prefix with `/` for regex mode, otherwise fuzzy match.
 func filterFiles(_ files: [FileDiff], pattern: String) -> [FileDiff] {
   let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
   if trimmed.isEmpty { return files }
 
-  // Convert glob to regex
-  let regex = globToRegex(trimmed)
-
-  return files.filter { file in
-    file.displayPath.range(of: regex, options: .regularExpression, range: nil, locale: nil) != nil
+  if trimmed.hasPrefix("/") {
+    let regexPattern = String(trimmed.dropFirst())
+    guard !regexPattern.isEmpty else { return files }
+    return filterByRegex(files, pattern: regexPattern)
   }
+
+  return filterByFuzzy(files, query: trimmed)
 }
 
-private func globToRegex(_ glob: String) -> String {
-  var result = "^"
-  var i = glob.startIndex
+/// Fuzzy match: each character in the query must appear in order in the path.
+/// Matches across path separators. Case-insensitive.
+func fuzzyMatch(_ path: String, query: String) -> (matches: Bool, score: Int) {
+  let pathLower = path.lowercased()
+  let queryLower = query.lowercased()
 
-  while i < glob.endIndex {
-    let c = glob[i]
-    switch c {
-    case "*":
-      let next = glob.index(after: i)
-      if next < glob.endIndex && glob[next] == "*" {
-        // ** matches any path segments
-        result += ".*"
-        i = glob.index(after: next)
-        // Skip trailing /
-        if i < glob.endIndex && glob[i] == "/" {
-          i = glob.index(after: i)
-        }
-        continue
-      } else {
-        // * matches anything except /
-        result += "[^/]*"
+  var pathIndex = pathLower.startIndex
+  var queryIndex = queryLower.startIndex
+  var score = 0
+  var prevMatched = false
+  var prevWasSeparator = true  // start counts as separator
+
+  while pathIndex < pathLower.endIndex && queryIndex < queryLower.endIndex {
+    let pc = pathLower[pathIndex]
+    let qc = queryLower[queryIndex]
+
+    if pc == qc {
+      // Bonus for consecutive matches
+      if prevMatched { score += 5 }
+      // Bonus for matching after separator (path segment start)
+      if prevWasSeparator { score += 10 }
+      // Bonus for matching at start of a "word" (after . or _ or -)
+      if pathIndex > pathLower.startIndex {
+        let prev = pathLower[pathLower.index(before: pathIndex)]
+        if prev == "." || prev == "_" || prev == "-" { score += 8 }
       }
-    case "?":
-      result += "[^/]"
-    case ".":
-      result += "\\."
-    case "/":
-      result += "/"
-    default:
-      // Case-insensitive matching for letters
-      if c.isLetter {
-        result += "[\(c.lowercased())\(c.uppercased())]"
-      } else {
-        result += String(c)
-      }
+      score += 1
+      queryIndex = queryLower.index(after: queryIndex)
+      prevMatched = true
+    } else {
+      prevMatched = false
     }
-    i = glob.index(after: i)
+
+    prevWasSeparator = pc == "/"
+    pathIndex = pathLower.index(after: pathIndex)
   }
 
-  result += "$"
-  return result
+  let matched = queryIndex == queryLower.endIndex
+  // Prefer shorter paths (less noise)
+  if matched {
+    score -= path.count / 4
+  }
+  return (matched, score)
+}
+
+private func filterByFuzzy(_ files: [FileDiff], query: String) -> [FileDiff] {
+  var scored: [(file: FileDiff, score: Int)] = []
+  for file in files {
+    let (matches, score) = fuzzyMatch(file.displayPath, query: query)
+    if matches {
+      scored.append((file, score))
+    }
+  }
+  // Sort by score descending (best matches first)
+  scored.sort { $0.score > $1.score }
+  return scored.map(\.file)
+}
+
+private func filterByRegex(_ files: [FileDiff], pattern: String) -> [FileDiff] {
+  files.filter { file in
+    file.displayPath.range(
+      of: pattern, options: [.regularExpression, .caseInsensitive]
+    ) != nil
+  }
 }
