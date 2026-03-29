@@ -1,65 +1,84 @@
 ---
 name: argon-dev-review
-description: Rebuild and launch a local development Argon review session. Use when working on the argon-native repo to test UI changes — rebuilds the Rust CLI and macOS app, kills any running instance, and opens a fresh session.
+description: Build and launch a local Argon review session from the development checkout. Use from any project to trigger a human review — rebuilds the CLI and macOS app, kills any running instance, and opens the review UI. The agent then enters the review loop, waiting for feedback.
 ---
 
 # Argon Dev Review
 
-Use this skill when you need to rebuild and launch Argon from the local
-checkout to test changes to the CLI or macOS app.
+Use this skill to launch a human review of your current work using the
+local Argon development build.
 
-## When to use
+## Preconditions
 
-- After making changes to the SwiftUI app (apps/macos/)
-- After making changes to the Rust CLI or core (crates/)
-- When the reviewer asks to see the current state of the app
-- When you need to verify a UI fix
+- You are working in a Git repository.
+- The Argon source is at `~/Source/argon-native` (or set `ARGON_SRC`).
+- Xcode command line tools and `xcodegen` are installed.
 
-## Command
+## Workflow
 
-```bash
-./scripts/dev-argon.sh [target-repo-path]
-```
+### 1. Build and launch
 
-If no target repo is given, it reviews the current directory.
-
-The script:
-1. Builds the `argon` CLI in release mode
-2. Regenerates the Xcode project via `xcodegen`
-3. Builds `Argon.app` via `xcodebuild`
-4. Kills any running Argon instance
-5. Creates a new uncommitted-mode review session for the target repo
-6. Launches the freshly built app with that session
-
-## Examples
-
-Review the argon-native repo itself (most common during development):
+Run the dev script from the Argon source checkout, pointing it at the
+current repo:
 
 ```bash
-./scripts/dev-argon.sh .
+ARGON_SRC="${ARGON_SRC:-$HOME/Source/argon-native}"
+bash "$ARGON_SRC/scripts/dev-argon.sh" "$(pwd)"
 ```
 
-Review a different repo:
+This will:
+1. Build the `argon` CLI in release mode
+2. Build `Argon.app` via xcodegen + xcodebuild
+3. Kill any running Argon instance
+4. Create an uncommitted-mode review session for the current repo
+5. Launch the app with the session
+
+Save the session ID from the output.
+
+### 2. Enter the review loop
+
+After launching, use the printed commands to enter the agent review loop:
 
 ```bash
-./scripts/dev-argon.sh ~/Source/other-project
+ARGON_CLI="$ARGON_SRC/target/release/argon"
+
+# Wait for reviewer feedback (blocks until reviewer acts)
+"$ARGON_CLI" --repo "$(pwd)" agent wait --session <session-id> --json
 ```
 
-## After launching
+### 3. Handle feedback
 
-The script prints the session details including the session ID. You can
-use the dev commands to simulate reviewer activity:
+When the wait command returns:
+
+- If status is `approved`: commit your changes and stop.
+- If status is `closed`: stop immediately, do not commit.
+- If there are open threads: acknowledge each, implement fixes, reply, then wait again.
 
 ```bash
-# Add a reviewer comment
-./target/release/argon agent dev comment --session <id> --message "looks good"
+# Acknowledge
+"$ARGON_CLI" --repo "$(pwd)" agent ack --session <session-id> --thread <thread-id> --json
 
-# Submit a decision
-./target/release/argon agent dev decide --session <id> --outcome approved
+# Reply after fixing
+"$ARGON_CLI" --repo "$(pwd)" agent reply --session <session-id> --thread <thread-id> --message "<what changed>" --addressed
+
+# Wait again
+"$ARGON_CLI" --repo "$(pwd)" agent wait --session <session-id> --json
 ```
 
-## Troubleshooting
+### 4. Keep looping
 
-- If xcodegen fails, install it: `brew install xcodegen`
-- If the app doesn't appear, check that `Argon.app` exists in DerivedData
-- If the app shows "No session", verify the session ID was passed correctly
+Keep waiting for reviewer feedback until the session is approved or
+closed. Do not stop early. On approval, commit your changes. On close,
+stop without committing.
+
+## Quick one-liner
+
+```bash
+ARGON_SRC="${ARGON_SRC:-$HOME/Source/argon-native}" && bash "$ARGON_SRC/scripts/dev-argon.sh" "$(pwd)"
+```
+
+## Failure Handling
+
+- If `xcodegen` is missing: `brew install xcodegen`
+- If the build fails: check `$ARGON_SRC` points to the argon-native checkout
+- If the session is `closed`: stop immediately
