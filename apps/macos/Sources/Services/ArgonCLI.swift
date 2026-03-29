@@ -83,7 +83,16 @@ enum ArgonCLI {
     }
 
     private static func findCLI() -> String {
-        // ARGON_CLI env var
+        // ARGON_CLI_CMD (set by the argon CLI when it launches the app)
+        if let cli = ProcessInfo.processInfo.environment["ARGON_CLI_CMD"], !cli.isEmpty {
+            // Strip surrounding quotes if present
+            let trimmed = cli.trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
+            if FileManager.default.fileExists(atPath: trimmed) {
+                return trimmed
+            }
+        }
+
+        // ARGON_CLI env var (explicit override)
         if let cli = ProcessInfo.processInfo.environment["ARGON_CLI"], !cli.isEmpty {
             return cli
         }
@@ -98,8 +107,16 @@ enum ArgonCLI {
             return bundlePath
         }
 
-        // Fallback: assume on PATH
-        return "argon"
+        // Try to find argon on PATH by checking common locations
+        for dir in ["/usr/local/bin", "/opt/homebrew/bin"] {
+            let path = "\(dir)/argon"
+            if FileManager.default.fileExists(atPath: path) {
+                return path
+            }
+        }
+
+        // Last resort
+        return "/usr/local/bin/argon"
     }
 
     enum CLIError: LocalizedError {

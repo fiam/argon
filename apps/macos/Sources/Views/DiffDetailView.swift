@@ -86,22 +86,16 @@ struct DiffLineView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            // Comment gutter — clickable
-            ZStack {
-                if isHovering && !showCommentPopover {
-                    Image(systemName: "plus.bubble")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.blue)
+            // Comment gutter — clickable on the whole row via overlay
+            Image(systemName: "plus.bubble.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(.blue)
+                .opacity(isHovering && !showCommentPopover ? 1 : 0)
+                .frame(width: 24, height: 18)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    showCommentPopover = true
                 }
-            }
-            .frame(width: 20)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                showCommentPopover = true
-            }
-            .onHover { hovering in
-                isHovering = hovering
-            }
 
             // Old line number
             Text(line.oldLine.map { String($0) } ?? "")
@@ -128,6 +122,10 @@ struct DiffLineView: View {
         .padding(.trailing, 8)
         .padding(.vertical, 0.5)
         .background(backgroundColor)
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            isHovering = hovering
+        }
         .popover(isPresented: $showCommentPopover, arrowEdge: .trailing) {
             LineCommentPopover(
                 filePath: filePath,
