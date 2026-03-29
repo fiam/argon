@@ -51,52 +51,40 @@ struct ContentView: View {
 struct ReviewLayout: View {
     @Environment(AppState.self) private var appState
     let session: ReviewSession
-    @State private var showFileTree = true
-    @State private var showThreads = true
+    @State private var showInspector = true
 
     var body: some View {
-        VStack(spacing: 0) {
-            SessionHeader(session: session, fileCount: appState.files.count)
-            Divider()
+        NavigationSplitView {
+            FileTreeSidebar()
+                .navigationSplitViewColumnWidth(min: 180, ideal: 230, max: 300)
+        } detail: {
+            VStack(spacing: 0) {
+                SessionHeader(session: session, fileCount: appState.files.count)
+                Divider()
 
-            if appState.files.isEmpty {
-                EmptyStateView(
-                    icon: "checkmark.circle",
-                    title: "No changes",
-                    detail: "No differences found for the current review mode."
-                )
-            } else {
-                HSplitView {
-                    if showFileTree {
-                        FileTreeSidebar()
-                            .frame(minWidth: 180, idealWidth: 230, maxWidth: 300)
-                    }
-
+                if appState.files.isEmpty {
+                    EmptyStateView(
+                        icon: "checkmark.circle",
+                        title: "No changes",
+                        detail: "No differences found for the current review mode."
+                    )
+                } else {
                     DiffDetailView()
-                        .frame(minWidth: 400)
-
-                    if showThreads {
-                        ThreadsSidebar(session: session)
-                            .frame(minWidth: 200, idealWidth: 260, maxWidth: 320)
-                    }
                 }
+            }
+            .inspector(isPresented: $showInspector) {
+                ThreadsSidebar(session: session)
+                    .inspectorColumnWidth(min: 220, ideal: 260, max: 340)
             }
         }
         .toolbar {
-            ToolbarItemGroup(placement: .automatic) {
+            ToolbarItem(placement: .automatic) {
                 Button {
-                    withAnimation { showFileTree.toggle() }
-                } label: {
-                    Image(systemName: "sidebar.leading")
-                }
-                .help(showFileTree ? "Hide file tree" : "Show file tree")
-
-                Button {
-                    withAnimation { showThreads.toggle() }
+                    showInspector.toggle()
                 } label: {
                     Image(systemName: "sidebar.trailing")
                 }
-                .help(showThreads ? "Hide comments" : "Show comments")
+                .help(showInspector ? "Hide comments" : "Show comments")
             }
         }
     }
