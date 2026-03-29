@@ -62,7 +62,10 @@ struct ReviewLayout: View {
                 SessionHeader(session: session, fileCount: appState.files.count)
                 Divider()
 
-                if appState.files.isEmpty {
+                if appState.isLoading {
+                    ProgressView("Loading diff...")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if appState.files.isEmpty {
                     EmptyStateView(
                         icon: "checkmark.circle",
                         title: "No changes",

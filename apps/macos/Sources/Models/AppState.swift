@@ -55,36 +55,110 @@ final class AppState {
         }
 
         isLoading = true
-        defer { isLoading = false }
 
-        do {
-            let newSession = try SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
-            session = newSession
-
-            // Initialize active target from session
-            activeMode = newSession.mode
-            activeBaseRef = newSession.baseRef
-            activeHeadRef = newSession.headRef
-            activeMergeBaseSha = newSession.mergeBaseSha
-
-            // Detect branch info for mode picker
-            detectedBaseRef = GitService.inferBaseRef(repoRoot: repoRoot)
-            detectedHeadRef = GitService.currentBranchName(repoRoot: repoRoot)
-
-            refreshDiff()
-        } catch {
-            errorMessage = error.localizedDescription
+        Task.detached { [sessionId, repoRoot] in
+            let result = Self.loadSessionInBackground(sessionId: sessionId, repoRoot: repoRoot)
+            await MainActor.run { [self] in
+                self.isLoading = false
+                switch result {
+                case .success(let data):
+                    self.session = data.session
+                    self.activeMode = data.session.mode
+                    self.activeBaseRef = data.session.baseRef
+                    self.activeHeadRef = data.session.headRef
+                    self.activeMergeBaseSha = data.session.mergeBaseSha
+                    self.detectedBaseRef = data.detectedBase
+                    self.detectedHeadRef = data.detectedHead
+                    self.files = data.files
+                    if self.selectedFile == nil || !data.files.contains(where: { $0.id == self.selectedFile?.id }) {
+                        self.selectedFile = data.files.first
+                    }
+                case .failure(let error):
+                    self.errorMessage = error.localizedDescription
+                }
+            }
         }
     }
 
     func switchMode(_ mode: ReviewMode) {
         guard let repoRoot else { return }
+        isLoading = true
 
+        let sessionId = self.sessionId
+        let detectedBase = self.detectedBaseRef
+        let detectedHead = self.detectedHeadRef
+
+        Task.detached { [repoRoot] in
+            let result = Self.switchModeInBackground(
+                mode: mode, repoRoot: repoRoot, sessionId: sessionId,
+                detectedBase: detectedBase, detectedHead: detectedHead
+            )
+            await MainActor.run { [self] in
+                self.isLoading = false
+                switch result {
+                case .success(let data):
+                    self.activeMode = data.target.mode
+                    self.activeBaseRef = data.target.baseRef
+                    self.activeHeadRef = data.target.headRef
+                    self.activeMergeBaseSha = data.target.mergeBaseSha
+                    self.files = data.files
+                    if self.selectedFile == nil || !data.files.contains(where: { $0.id == self.selectedFile?.id }) {
+                        self.selectedFile = data.files.first
+                    }
+                    if let session = data.updatedSession {
+                        self.session = session
+                    }
+                case .failure(let error):
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    // MARK: - Background Work
+
+    private struct LoadResult {
+        let session: ReviewSession
+        let files: [FileDiff]
+        let detectedBase: String?
+        let detectedHead: String?
+    }
+
+    private struct SwitchResult {
+        let target: ResolvedTarget
+        let files: [FileDiff]
+        let updatedSession: ReviewSession?
+    }
+
+    nonisolated private static func loadSessionInBackground(sessionId: String, repoRoot: String) -> Result<LoadResult, Error> {
+        do {
+            let session = try SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
+            let rawDiff = GitService.diff(session: session)
+            let files = DiffParser.parse(rawDiff)
+            let detectedBase = GitService.inferBaseRef(repoRoot: repoRoot)
+            let detectedHead = GitService.currentBranchName(repoRoot: repoRoot)
+            return .success(LoadResult(session: session, files: files, detectedBase: detectedBase, detectedHead: detectedHead))
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private enum SwitchError: LocalizedError {
+        case resolveFailed(String)
+        var errorDescription: String? {
+            switch self { case .resolveFailed(let msg): msg }
+        }
+    }
+
+    nonisolated private static func switchModeInBackground(
+        mode: ReviewMode, repoRoot: String, sessionId: String?,
+        detectedBase: String?, detectedHead: String?
+    ) -> Result<SwitchResult, SwitchError> {
         let target: ResolvedTarget?
         switch mode {
         case .branch:
-            let base = detectedBaseRef ?? "main"
-            let head = detectedHeadRef ?? "HEAD"
+            let base = detectedBase ?? "main"
+            let head = detectedHead ?? "HEAD"
             target = GitService.resolveBranchTarget(repoRoot: repoRoot, baseRef: base, headRef: head)
         case .commit:
             target = GitService.resolveCommitTarget(repoRoot: repoRoot)
@@ -93,57 +167,41 @@ final class AppState {
         }
 
         guard let target else {
-            errorMessage = "Could not resolve \(mode.rawValue) target"
-            return
+            return .failure(.resolveFailed("Could not resolve \(mode.rawValue) target"))
         }
 
-        activeMode = target.mode
-        activeBaseRef = target.baseRef
-        activeHeadRef = target.headRef
-        activeMergeBaseSha = target.mergeBaseSha
-
-        // Update the session on disk so the CLI sees the new target
-        if let sid = sessionId {
-            do {
-                try ArgonCLI.updateSessionTarget(
-                    sessionId: sid, repoRoot: repoRoot,
-                    mode: target.mode.rawValue, baseRef: target.baseRef,
-                    headRef: target.headRef, mergeBaseSha: target.mergeBaseSha
-                )
-                refreshSession()
-            } catch {
-                // Non-fatal — the diff still works locally
-            }
-        }
-
-        refreshDiff()
-    }
-
-    private func refreshDiff() {
-        guard let repoRoot else { return }
         let rawDiff = GitService.diff(
-            repoRoot: repoRoot, mode: activeMode,
-            baseRef: activeBaseRef, headRef: activeHeadRef,
-            mergeBaseSha: activeMergeBaseSha
+            repoRoot: repoRoot, mode: target.mode,
+            baseRef: target.baseRef, headRef: target.headRef,
+            mergeBaseSha: target.mergeBaseSha
         )
-        files = DiffParser.parse(rawDiff)
-        if selectedFile == nil || !files.contains(where: { $0.id == selectedFile?.id }) {
-            selectedFile = files.first
+        let files = DiffParser.parse(rawDiff)
+
+        var updatedSession: ReviewSession?
+        if let sessionId {
+            try? ArgonCLI.updateSessionTarget(
+                sessionId: sessionId, repoRoot: repoRoot,
+                mode: target.mode.rawValue, baseRef: target.baseRef,
+                headRef: target.headRef, mergeBaseSha: target.mergeBaseSha
+            )
+            updatedSession = try? SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
         }
+
+        return .success(SwitchResult(target: target, files: files, updatedSession: updatedSession))
     }
 
-    func reload() {
-        errorMessage = nil
-        loadSession()
-    }
+    // MARK: - Polling
 
     func refreshSession() {
         guard let sessionId, let repoRoot else { return }
         do {
             session = try SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
-        } catch {
-            // Ignore transient read errors during polling
-        }
+        } catch {}
+    }
+
+    func reload() {
+        errorMessage = nil
+        loadSession()
     }
 
     func startPolling() {
