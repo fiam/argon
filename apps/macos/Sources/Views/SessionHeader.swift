@@ -105,17 +105,38 @@ struct SessionHeader: View {
 struct DiffModeToggle: View {
   @Environment(AppState.self) private var appState
 
+  private var hasContent: Bool {
+    !appState.files.isEmpty
+  }
+
   var body: some View {
-    @Bindable var state = appState
-    Picker("", selection: $state.diffMode) {
+    HStack(spacing: 2) {
       ForEach(DiffViewMode.allCases, id: \.self) { mode in
-        Label(mode.label, systemImage: mode.icon)
-          .tag(mode)
+        Button {
+          withAnimation(.easeInOut(duration: 0.2)) {
+            appState.diffMode = mode
+          }
+        } label: {
+          Image(systemName: mode.icon)
+            .font(.system(size: 12))
+            .frame(width: 28, height: 22)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(appState.diffMode == mode ? .primary : .tertiary)
+        .background(
+          appState.diffMode == mode
+            ? Color(nsColor: .controlAccentColor).opacity(0.12)
+            : .clear
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .help(mode.label)
       }
     }
-    .pickerStyle(.segmented)
-    .fixedSize()
-    .help("Toggle between unified and side-by-side diff view")
+    .padding(2)
+    .background(Color(nsColor: .separatorColor).opacity(0.15))
+    .clipShape(RoundedRectangle(cornerRadius: 6))
+    .disabled(!hasContent)
+    .opacity(hasContent ? 1 : 0.4)
   }
 }
 
