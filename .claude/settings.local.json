@@ -22,7 +22,26 @@
       "Bash(./scripts/dev-argon.sh . 2>&1)",
       "Bash(bash /Users/alberto/Source/argon-native/scripts/dev-argon.sh /Users/alberto/Source/argon-native 2>&1)",
       "Bash(bash scripts/dev-argon.sh .)",
-      "Bash(bash /Users/alberto/Source/argon-native/scripts/install-dev-skill.sh 2>&1)"
+      "Bash(bash /Users/alberto/Source/argon-native/scripts/install-dev-skill.sh 2>&1)",
+      "Bash(cargo fmt:*)",
+      "Bash(swift-format format:*)",
+      "Bash(cargo install:*)",
+      "Bash(make fmt:*)",
+      "Bash(make lint:*)",
+      "Bash(make deny:*)",
+      "Bash(cargo deny:*)",
+      "Bash(make test-rust:*)",
+      "Bash(make test-swift:*)",
+      "Bash(xcodebuild test:*)",
+      "Bash(make check:*)",
+      "Bash(python3 -c \"import sys,json; [print\\(json.loads\\(l\\).get\\(''''message'''',{}\\).get\\(''''content'''',[{}]\\)[-1].get\\(''''text'''',''''''''\\)[:200]\\) for l in sys.stdin if l.strip\\(\\)]\")",
+      "Bash(grep -E \"test result|passed|ok$|FAILED|TEST|advisories\")",
+      "Bash(echo \"exit: $?\")",
+      "Bash(xcodebuild -project Argon.xcodeproj -scheme Argon -configuration Debug build -quiet)",
+      "Bash(/usr/bin/log show:*)",
+      "Bash(sed -i '' '/argon-debug\\\\.log/d; /checkDiff:.*fpLen/d' apps/macos/Sources/Models/AppState.swift)",
+      "Bash(sed -i '' '/argon-debug\\\\.log/d; /let msg/d; /let logFile/d; /if let handle/d; /handle\\\\.seekToEndOfFile/d; /handle\\\\.write.*msg/d; /handle\\\\.closeFile/d; /FileManager\\\\.default\\\\.createFile.*logFile/d; /} else {$/d' apps/macos/Sources/Services/FileWatcher.swift)",
+      "Bash(cargo check:*)"
     ]
   }
 }

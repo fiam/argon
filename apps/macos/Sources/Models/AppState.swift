@@ -12,6 +12,9 @@ final class AppState {
   var pendingDrafts: [DraftComment] = []
   var scrollToFile: String?
 
+  // Diff view mode toggle
+  var diffMode: DiffViewMode = .unified
+
   // Active inline comment editor
   var activeCommentLineId: UUID?
   var activeCommentText: String = ""
@@ -55,6 +58,12 @@ final class AppState {
     }
   }
 
+  /// Returns the theme name appropriate for the current system appearance.
+  var highlightTheme: String {
+    let isDark = NSApp?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    return isDark ? "base16-ocean.dark" : "base16-ocean.light"
+  }
+
   // MARK: - Load
 
   func loadSession() {
@@ -66,10 +75,11 @@ final class AppState {
     isLoading = true
     let sid = sessionId
     let root = repoRoot
+    let theme = highlightTheme
 
     Task {
       let result = await Task.detached {
-        Self.doLoadSession(sessionId: sid, repoRoot: root)
+        Self.doLoadSession(sessionId: sid, repoRoot: root, theme: theme)
       }.value
 
       isLoading = false
@@ -100,12 +110,14 @@ final class AppState {
     let root = repoRoot
     let dBase = detectedBaseRef
     let dHead = detectedHeadRef
+    let theme = highlightTheme
 
     Task {
       let result = await Task.detached {
         Self.doSwitchMode(
           mode: mode, repoRoot: root, sessionId: sid,
-          detectedBase: dBase, detectedHead: dHead
+          detectedBase: dBase, detectedHead: dHead,
+          theme: theme
         )
       }.value
 
@@ -164,13 +176,42 @@ final class AppState {
     let updatedSession: ReviewSession?
   }
 
-  nonisolated private static func doLoadSession(sessionId: String, repoRoot: String) -> Result<
-    LoadData, Error
-  > {
+  /// Try to load highlighted diff from the CLI; fall back to raw git diff if unavailable.
+  nonisolated private static func loadFiles(
+    sessionId: String?, repoRoot: String, mode: ReviewMode,
+    baseRef: String, headRef: String, mergeBaseSha: String,
+    theme: String
+  ) -> [FileDiff] {
+    if let sessionId {
+      if let json = try? ArgonCLI.highlightedDiff(
+        sessionId: sessionId, repoRoot: repoRoot, theme: theme
+      ) {
+        let files = DiffParser.parseHighlighted(json)
+        if !files.isEmpty {
+          return files
+        }
+      }
+    }
+    // Fallback to raw git diff
+    let rawDiff = GitService.diff(
+      repoRoot: repoRoot, mode: mode,
+      baseRef: baseRef, headRef: headRef,
+      mergeBaseSha: mergeBaseSha
+    )
+    return DiffParser.parse(rawDiff)
+  }
+
+  nonisolated private static func doLoadSession(
+    sessionId: String, repoRoot: String, theme: String
+  ) -> Result<LoadData, Error> {
     do {
       let session = try SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
-      let rawDiff = GitService.diff(session: session)
-      let files = DiffParser.parse(rawDiff)
+      let files = loadFiles(
+        sessionId: sessionId, repoRoot: repoRoot,
+        mode: session.mode, baseRef: session.baseRef,
+        headRef: session.headRef, mergeBaseSha: session.mergeBaseSha,
+        theme: theme
+      )
       let detectedBase = GitService.inferBaseRef(repoRoot: repoRoot)
       let detectedHead = GitService.currentBranchName(repoRoot: repoRoot)
       let fingerprint = GitService.diffFingerprint(
@@ -189,7 +230,8 @@ final class AppState {
 
   nonisolated private static func doSwitchMode(
     mode: ReviewMode, repoRoot: String, sessionId: String?,
-    detectedBase: String?, detectedHead: String?
+    detectedBase: String?, detectedHead: String?,
+    theme: String
   ) -> Result<SwitchData, SwitchError> {
 
     let target: ResolvedTarget?
@@ -209,12 +251,12 @@ final class AppState {
       return .failure(.failed("Could not resolve \(mode.rawValue) target"))
     }
 
-    let rawDiff = GitService.diff(
-      repoRoot: repoRoot, mode: target.mode,
-      baseRef: target.baseRef, headRef: target.headRef,
-      mergeBaseSha: target.mergeBaseSha
+    let files = loadFiles(
+      sessionId: sessionId, repoRoot: repoRoot,
+      mode: target.mode, baseRef: target.baseRef,
+      headRef: target.headRef, mergeBaseSha: target.mergeBaseSha,
+      theme: theme
     )
-    let files = DiffParser.parse(rawDiff)
 
     var updatedSession: ReviewSession?
     if let sessionId {
@@ -280,11 +322,11 @@ final class AppState {
   // MARK: - Inline Comment Editor
 
   func requestCommentEditor(for lineId: UUID) {
-    // Same line — toggle off
+    // Same line -- toggle off
     if activeCommentLineId == lineId {
       return
     }
-    // Another line with unsaved text — confirm discard
+    // Another line with unsaved text -- confirm discard
     if activeCommentLineId != nil
       && !activeCommentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     {
@@ -333,6 +375,8 @@ final class AppState {
     let base = activeBaseRef
     let head = activeHeadRef
     let mergeBase = activeMergeBaseSha
+    let sid = sessionId
+    let theme = highlightTheme
 
     let fingerprint = await Task.detached {
       GitService.diffFingerprint(
@@ -342,13 +386,14 @@ final class AppState {
     }.value
 
     if fingerprint != lastDiffFingerprint && !lastDiffFingerprint.isEmpty {
-      // Diff changed — refresh in background
+      // Diff changed -- refresh in background
       let newFiles = await Task.detached {
-        let rawDiff = GitService.diff(
-          repoRoot: repoRoot, mode: mode,
-          baseRef: base, headRef: head, mergeBaseSha: mergeBase
+        Self.loadFiles(
+          sessionId: sid, repoRoot: repoRoot,
+          mode: mode, baseRef: base,
+          headRef: head, mergeBaseSha: mergeBase,
+          theme: theme
         )
-        return DiffParser.parse(rawDiff)
       }.value
       applyNewFiles(newFiles)
     }

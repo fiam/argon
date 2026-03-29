@@ -1,6 +1,25 @@
 import Foundation
 
 enum ArgonCLI {
+
+  // MARK: - Highlighted Diff
+
+  /// Runs `argon diff --session <id> --theme <theme> --json` and returns the raw JSON string.
+  static func highlightedDiff(
+    sessionId: String, repoRoot: String, theme: String
+  ) throws -> String {
+    try run(
+      repoRoot: repoRoot,
+      args: [
+        "diff",
+        "--session", sessionId,
+        "--theme", theme,
+        "--json",
+      ])
+  }
+
+  // MARK: - Draft Comments
+
   static func addDraftComment(
     sessionId: String, repoRoot: String, message: String,
     filePath: String? = nil, lineNew: UInt32? = nil, lineOld: UInt32? = nil,

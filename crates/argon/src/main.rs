@@ -53,10 +53,21 @@ enum Commands {
     Agent(AgentCommands),
     #[command(subcommand)]
     Reviewer(ReviewerCommands),
+    Diff(DiffArgs),
     #[command(subcommand)]
     Draft(DraftCommands),
     #[command(subcommand)]
     Skill(SkillCommands),
+}
+
+#[derive(clap::Args, Debug)]
+struct DiffArgs {
+    #[arg(long)]
+    session: Uuid,
+    #[arg(long, default_value = "base16-ocean.dark")]
+    theme: String,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -488,6 +499,7 @@ fn run() -> Result<()> {
         Commands::Review(args) => run_review(args, &runtime),
         Commands::Agent(command) => run_agent(command, &runtime),
         Commands::Reviewer(command) => run_reviewer(command, &runtime),
+        Commands::Diff(args) => run_diff(args, &runtime),
         Commands::Draft(command) => run_draft(command, &runtime),
         Commands::Skill(command) => run_skill(command),
     }
@@ -564,7 +576,7 @@ fn maybe_direct_path_invocation(raw_args: &[String]) -> Option<(PathBuf, LaunchO
 fn is_command_token(token: &str) -> bool {
     matches!(
         token,
-        "review" | "agent" | "reviewer" | "draft" | "skill" | "help"
+        "review" | "agent" | "reviewer" | "diff" | "draft" | "skill" | "help"
     )
 }
 
@@ -606,6 +618,45 @@ fn run_reviewer(command: ReviewerCommands, runtime: &RuntimeOptions) -> Result<(
         ReviewerCommands::Comment(args) => run_reviewer_comment(args, runtime),
         ReviewerCommands::Decide(args) => run_reviewer_decide(args, runtime),
     }
+}
+
+fn run_diff(args: DiffArgs, runtime: &RuntimeOptions) -> Result<()> {
+    let store = open_store_for_current_repo(runtime)?;
+    let session = store.load(args.session)?;
+
+    let diff = argon_core::build_review_diff(
+        Path::new(&session.repo_root),
+        session.mode,
+        &session.base_ref,
+        &session.head_ref,
+        &session.merge_base_sha,
+    )?;
+
+    let highlighted = argon_core::highlight_diff(&diff, &args.theme);
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&highlighted)?);
+    } else {
+        for file in &highlighted.files {
+            println!(
+                "--- {} (+{} -{})",
+                file.new_path, file.added_count, file.removed_count
+            );
+            for hunk in &file.unified_hunks {
+                println!("{}", hunk.header);
+                for line in &hunk.lines {
+                    let marker = match line.kind {
+                        argon_core::DiffLineKind::Context => " ",
+                        argon_core::DiffLineKind::Added => "+",
+                        argon_core::DiffLineKind::Removed => "-",
+                    };
+                    let text: String = line.spans.iter().map(|s| s.text.as_str()).collect();
+                    println!("{marker}{text}");
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn run_draft(command: DraftCommands, runtime: &RuntimeOptions) -> Result<()> {

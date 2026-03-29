@@ -28,6 +28,8 @@ struct SessionHeader: View {
 
       Spacer()
 
+      DiffModeToggle()
+
       if session.status != .approved && session.status != .closed {
         HandoffButton()
         Divider().frame(height: 16)
@@ -98,6 +100,27 @@ struct SessionHeader: View {
 
 }
 
+// MARK: - Diff Mode Toggle
+
+struct DiffModeToggle: View {
+  @Environment(AppState.self) private var appState
+
+  var body: some View {
+    @Bindable var state = appState
+    Picker("", selection: $state.diffMode) {
+      ForEach(DiffViewMode.allCases, id: \.self) { mode in
+        Label(mode.label, systemImage: mode.icon)
+          .tag(mode)
+      }
+    }
+    .pickerStyle(.segmented)
+    .fixedSize()
+    .help("Toggle between unified and side-by-side diff view")
+  }
+}
+
+// MARK: - Mode Picker
+
 struct ModePicker: View {
   @Environment(AppState.self) private var appState
 
@@ -113,7 +136,7 @@ struct ModePicker: View {
       Button {
         appState.switchMode(.commit)
       } label: {
-        Label("Commit → working tree", systemImage: "clock.arrow.circlepath")
+        Label("Commit \u{2192} working tree", systemImage: "clock.arrow.circlepath")
       }
 
       Button {
@@ -140,7 +163,7 @@ struct ModePicker: View {
     case .branch:
       "\(shorten(appState.activeBaseRef))...\(shorten(appState.activeHeadRef))"
     case .commit:
-      "\(shorten(appState.activeBaseRef)) → working tree"
+      "\(shorten(appState.activeBaseRef)) \u{2192} working tree"
     case .uncommitted:
       "uncommitted changes"
     }
@@ -385,11 +408,11 @@ struct DiffStatView: View {
   let files: [FileDiff]
 
   private var added: Int {
-    files.flatMap(\.hunks).flatMap(\.lines).filter { $0.kind == .added }.count
+    files.reduce(0) { $0 + $1.addedCount }
   }
 
   private var removed: Int {
-    files.flatMap(\.hunks).flatMap(\.lines).filter { $0.kind == .removed }.count
+    files.reduce(0) { $0 + $1.removedCount }
   }
 
   var body: some View {

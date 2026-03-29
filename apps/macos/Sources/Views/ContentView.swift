@@ -45,7 +45,7 @@ struct ContentView: View {
   private var windowTitle: String {
     guard let session = appState.session else { return "Argon" }
     let repo = URL(fileURLWithPath: session.repoRoot).lastPathComponent
-    return "Argon — \(repo)"
+    return "Argon \u{2014} \(repo)"
   }
 }
 
@@ -130,13 +130,11 @@ struct FileTreeRow: View {
           .truncationMode(.middle)
         Spacer()
         HStack(spacing: 2) {
-          let added = file.hunks.flatMap(\.lines).filter { $0.kind == .added }.count
-          let removed = file.hunks.flatMap(\.lines).filter { $0.kind == .removed }.count
-          if added > 0 {
-            RollingNumber(added, prefix: "+", color: .green, font: .caption2)
+          if file.addedCount > 0 {
+            RollingNumber(file.addedCount, prefix: "+", color: .green, font: .caption2)
           }
-          if removed > 0 {
-            RollingNumber(removed, prefix: "-", color: .red, font: .caption2)
+          if file.removedCount > 0 {
+            RollingNumber(file.removedCount, prefix: "-", color: .red, font: .caption2)
           }
         }
       }

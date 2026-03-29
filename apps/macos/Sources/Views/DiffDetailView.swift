@@ -25,8 +25,12 @@ struct DiffDetailView: View {
                   OutdatedThreadsSection(threads: outdated)
                 }
 
-                ForEach(file.hunks) { hunk in
-                  DiffHunkView(hunk: hunk, filePath: file.newPath, anchored: anchored)
+                if appState.diffMode == .unified {
+                  ForEach(file.hunks) { hunk in
+                    DiffHunkView(hunk: hunk, filePath: file.newPath, anchored: anchored)
+                  }
+                } else {
+                  SideBySideDiffView(file: file, anchored: anchored)
                 }
 
                 Color.clear.frame(height: 12)
@@ -131,21 +135,13 @@ struct DiffFileHeader: View {
         .fontWeight(.medium)
       Spacer()
       HStack(spacing: 4) {
-        RollingNumber(addedCount, prefix: "+", color: .green)
-        RollingNumber(removedCount, prefix: "-", color: .red)
+        RollingNumber(file.addedCount, prefix: "+", color: .green)
+        RollingNumber(file.removedCount, prefix: "-", color: .red)
       }
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 8)
     .background(.bar)
-  }
-
-  private var addedCount: Int {
-    file.hunks.flatMap(\.lines).filter { $0.kind == .added }.count
-  }
-
-  private var removedCount: Int {
-    file.hunks.flatMap(\.lines).filter { $0.kind == .removed }.count
   }
 }
 
@@ -186,7 +182,7 @@ struct OutdatedThreadsSection: View {
   }
 }
 
-// MARK: - Hunk
+// MARK: - Hunk (Unified Mode)
 
 struct DiffHunkView: View {
   @Environment(AppState.self) private var appState
@@ -226,6 +222,168 @@ struct DiffHunkView: View {
         }
       }
     }
+  }
+}
+
+// MARK: - Side-by-Side Diff View
+
+struct SideBySideDiffView: View {
+  @Environment(AppState.self) private var appState
+  let file: FileDiff
+  let anchored: [UInt32: [InlineItem]]
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      if file.sideBySide.isEmpty {
+        // Fallback: render unified hunks when side-by-side data is not available
+        ForEach(file.hunks) { hunk in
+          DiffHunkView(hunk: hunk, filePath: file.newPath, anchored: anchored)
+        }
+      } else {
+        ForEach(file.sideBySide) { pair in
+          SideBySideRowView(pair: pair, filePath: file.newPath)
+
+          // Show inline items for the right (new) side line
+          if let right = pair.right, let lineNum = right.newLine {
+            if appState.activeCommentLineId == right.id {
+              InlineCommentEditor(filePath: file.newPath, line: right)
+            }
+            if let items = anchored[lineNum] {
+              ForEach(items) { item in
+                switch item {
+                case .thread(let thread):
+                  InlineThreadView(thread: thread, isOutdated: false)
+                case .draft(let draft):
+                  InlineDraftView(draft: draft)
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+struct SideBySideRowView: View {
+  @Environment(AppState.self) private var appState
+  let pair: SideBySidePair
+  let filePath: String
+  @State private var isHovering = false
+
+  var body: some View {
+    HStack(spacing: 0) {
+      // Left side (old)
+      sideView(line: pair.left, isLeft: true)
+      Divider()
+      // Right side (new)
+      sideView(line: pair.right, isLeft: false)
+    }
+    .font(.system(.body, design: .monospaced))
+    .onHover { hovering in
+      isHovering = hovering
+    }
+  }
+
+  @ViewBuilder
+  private func sideView(line: DiffLine?, isLeft: Bool) -> some View {
+    if let line {
+      HStack(alignment: .top, spacing: 0) {
+        if !isLeft {
+          commentButton(for: line)
+        }
+
+        Text(lineNumber(line, isLeft: isLeft))
+          .frame(width: 44, alignment: .trailing)
+          .padding(.trailing, 4)
+          .foregroundStyle(.tertiary)
+
+        StyledSpansView(spans: line.spans)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .padding(.trailing, 4)
+      .padding(.vertical, 0.5)
+      .background(sideBackground(line.kind))
+      .contentShape(Rectangle())
+      .onTapGesture {
+        if !isLeft {
+          appState.requestCommentEditor(for: line.id)
+        }
+      }
+    } else {
+      Color(nsColor: .textBackgroundColor).opacity(0.3)
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: 20)
+    }
+  }
+
+  private func commentButton(for line: DiffLine) -> some View {
+    let isActive = appState.activeCommentLineId == line.id
+    return Image(systemName: "plus.bubble.fill")
+      .font(.system(size: 10))
+      .foregroundStyle(.blue)
+      .opacity(isHovering && !isActive ? 1 : 0)
+      .frame(width: 24, height: 18)
+  }
+
+  private func lineNumber(_ line: DiffLine, isLeft: Bool) -> String {
+    if isLeft {
+      return line.oldLine.map { String($0) } ?? ""
+    } else {
+      return line.newLine.map { String($0) } ?? ""
+    }
+  }
+
+  private func sideBackground(_ kind: DiffLineKind) -> Color {
+    switch kind {
+    case .context: .clear
+    case .added: .green.opacity(0.08)
+    case .removed: .red.opacity(0.08)
+    }
+  }
+}
+
+// MARK: - Styled Spans Rendering
+
+struct StyledSpansView: View {
+  let spans: [StyledSpan]
+
+  var body: some View {
+    spans.reduce(Text("")) { result, span in
+      result + styledText(for: span)
+    }
+  }
+
+  private func styledText(for span: StyledSpan) -> Text {
+    var text = Text(span.text)
+    if let fg = span.fg, let color = Color(hex: fg) {
+      text = text.foregroundColor(color)
+    }
+    if span.bold {
+      text = text.bold()
+    }
+    if span.italic {
+      text = text.italic()
+    }
+    return text
+  }
+}
+
+// MARK: - Color hex extension
+
+extension Color {
+  init?(hex: String) {
+    var hexStr = hex
+    if hexStr.hasPrefix("#") {
+      hexStr = String(hexStr.dropFirst())
+    }
+    guard hexStr.count == 6,
+      let val = UInt64(hexStr, radix: 16)
+    else { return nil }
+    let r = Double((val >> 16) & 0xFF) / 255.0
+    let g = Double((val >> 8) & 0xFF) / 255.0
+    let b = Double(val & 0xFF) / 255.0
+    self.init(red: r, green: g, blue: b)
   }
 }
 
@@ -485,7 +643,7 @@ struct InlineCommentEditor: View {
   }
 }
 
-// MARK: - Diff Line
+// MARK: - Diff Line (Unified Mode)
 
 struct DiffLineView: View {
   @Environment(AppState.self) private var appState
@@ -519,8 +677,13 @@ struct DiffLineView: View {
         .frame(width: 14)
         .foregroundStyle(markerColor)
 
-      Text(line.content)
-        .frame(maxWidth: .infinity, alignment: .leading)
+      if line.spans.count > 1 {
+        StyledSpansView(spans: line.spans)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      } else {
+        Text(line.content)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
     }
     .font(.system(.body, design: .monospaced))
     .padding(.trailing, 8)

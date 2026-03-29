@@ -1,4 +1,5 @@
 pub mod diff;
+pub mod highlight;
 pub mod model;
 pub mod protocol;
 pub mod store;
@@ -7,6 +8,10 @@ pub mod target;
 pub use diff::{
     DiffError, DiffHunk, DiffLine, DiffLineKind, FileDiff, ReviewDiff, anchor_at,
     anchor_for_diff_line, build_review_diff, parse_unified_diff,
+};
+pub use highlight::{
+    HighlightedDiff, HighlightedFileDiff, HighlightedHunk, HighlightedLine, SideBySidePair,
+    StyledSpan, available_themes, highlight_diff, theme_for_appearance,
 };
 pub use model::{
     CommentAnchor, CommentAuthor, CommentKind, DraftReview, DraftReviewComment, ReviewComment,

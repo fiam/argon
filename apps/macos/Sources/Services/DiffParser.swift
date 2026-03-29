@@ -1,6 +1,140 @@
 import Foundation
 
 enum DiffParser {
+
+  // MARK: - Highlighted JSON Parsing
+
+  /// Parses the highlighted JSON output from `argon diff --json`.
+  static func parseHighlighted(_ json: String) -> [FileDiff] {
+    guard let data = json.data(using: .utf8) else { return [] }
+    do {
+      let response = try JSONDecoder().decode(HighlightedDiffResponse.self, from: data)
+      return response.files.map { file in
+        let hunks = file.unifiedHunks.map { hunk in
+          DiffHunk(
+            header: hunk.header,
+            oldStart: parseOldStart(hunk.header),
+            newStart: parseNewStart(hunk.header),
+            lines: hunk.lines.map { line in
+              DiffLine(
+                kind: line.decodedKind,
+                spans: line.spans,
+                oldLine: line.oldLine,
+                newLine: line.newLine
+              )
+            }
+          )
+        }
+        let sideBySide = file.sideBySide.map { pair in
+          SideBySidePair(
+            left: pair.left.map { line in
+              DiffLine(
+                kind: line.decodedKind,
+                spans: line.spans,
+                oldLine: line.oldLine,
+                newLine: line.newLine
+              )
+            },
+            right: pair.right.map { line in
+              DiffLine(
+                kind: line.decodedKind,
+                spans: line.spans,
+                oldLine: line.oldLine,
+                newLine: line.newLine
+              )
+            }
+          )
+        }
+        return FileDiff(
+          oldPath: file.oldPath,
+          newPath: file.newPath,
+          hunks: hunks,
+          sideBySide: sideBySide,
+          addedCount: file.addedCount,
+          removedCount: file.removedCount
+        )
+      }
+    } catch {
+      return []
+    }
+  }
+
+  // MARK: - Highlighted JSON Codable Types
+
+  private struct HighlightedDiffResponse: Codable {
+    let baseRef: String
+    let headRef: String
+    let files: [HighlightedFile]
+
+    enum CodingKeys: String, CodingKey {
+      case baseRef = "base_ref"
+      case headRef = "head_ref"
+      case files
+    }
+  }
+
+  private struct HighlightedFile: Codable {
+    let oldPath: String
+    let newPath: String
+    let addedCount: Int
+    let removedCount: Int
+    let unifiedHunks: [HighlightedHunk]
+    let sideBySide: [HighlightedSideBySidePair]
+
+    enum CodingKeys: String, CodingKey {
+      case oldPath = "old_path"
+      case newPath = "new_path"
+      case addedCount = "added_count"
+      case removedCount = "removed_count"
+      case unifiedHunks = "unified_hunks"
+      case sideBySide = "side_by_side"
+    }
+  }
+
+  private struct HighlightedHunk: Codable {
+    let header: String
+    let lines: [HighlightedLine]
+  }
+
+  private struct HighlightedSideBySidePair: Codable {
+    let left: HighlightedLine?
+    let right: HighlightedLine?
+  }
+
+  private struct HighlightedLine: Codable {
+    let kind: String
+    let oldLine: UInt32?
+    let newLine: UInt32?
+    let spans: [StyledSpan]
+
+    enum CodingKeys: String, CodingKey {
+      case kind
+      case oldLine = "old_line"
+      case newLine = "new_line"
+      case spans
+    }
+
+    var decodedKind: DiffLineKind {
+      switch kind {
+      case "added": .added
+      case "removed": .removed
+      default: .context
+      }
+    }
+  }
+
+  private static func parseOldStart(_ header: String) -> UInt32 {
+    guard let parsed = parseHunkHeader(header) else { return 0 }
+    return parsed.oldStart
+  }
+
+  private static func parseNewStart(_ header: String) -> UInt32 {
+    guard let parsed = parseHunkHeader(header) else { return 0 }
+    return parsed.newStart
+  }
+
+  // MARK: - Legacy Raw Diff Parsing (fallback)
+
   static func parse(_ raw: String) -> [FileDiff] {
     var files: [FileDiff] = []
     var currentOldPath: String?
