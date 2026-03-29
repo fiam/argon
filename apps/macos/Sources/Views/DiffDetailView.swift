@@ -4,10 +4,14 @@ struct DiffDetailView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        if appState.files.isEmpty {
-            Text("No files")
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        if appState.files.isEmpty && !appState.isLoading {
+            EmptyStateView(
+                icon: "checkmark.circle",
+                title: "No changes",
+                detail: "No differences found for the current review mode."
+            )
+        } else if appState.files.isEmpty {
+            Color.clear
         } else {
             ScrollViewReader { proxy in
                 ScrollView {

@@ -60,24 +60,15 @@ struct ReviewLayout: View {
         } detail: {
             VStack(spacing: 0) {
                 SessionHeader(session: session, fileCount: appState.files.count)
-                Divider()
-
-                if appState.files.isEmpty && !appState.isLoading {
-                    EmptyStateView(
-                        icon: "checkmark.circle",
-                        title: "No changes",
-                        detail: "No differences found for the current review mode."
-                    )
-                } else {
-                    DiffDetailView()
-                        .opacity(appState.isLoading ? 0.5 : 1.0)
-                        .overlay {
-                            if appState.isLoading {
-                                ProgressView()
-                                    .controlSize(.large)
-                            }
+                    .overlay(alignment: .bottom) {
+                        if appState.isLoading {
+                            ProgressView()
+                                .scaleEffect(0.5)
+                                .frame(height: 2)
                         }
-                }
+                    }
+                Divider()
+                DiffDetailView()
             }
             .inspector(isPresented: $showInspector) {
                 ThreadsSidebar(session: session)
