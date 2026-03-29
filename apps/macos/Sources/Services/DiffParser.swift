@@ -99,9 +99,13 @@ enum DiffParser {
         let stripped = line.dropFirst("diff --git ".count)
         let parts = stripped.split(separator: " ", maxSplits: 1)
         guard parts.count == 2 else { return ("", "") }
-        let oldPath = String(parts[0]).replacingOccurrences(of: "a/", with: "", range: parts[0].startIndex..<parts[0].index(parts[0].startIndex, offsetBy: min(2, parts[0].count)))
-        let newPath = String(parts[1]).replacingOccurrences(of: "b/", with: "", range: parts[1].startIndex..<parts[1].index(parts[1].startIndex, offsetBy: min(2, parts[1].count)))
+        let oldPath = stripPrefix(String(parts[0]), prefix: "a/")
+        let newPath = stripPrefix(String(parts[1]), prefix: "b/")
         return (oldPath, newPath)
+    }
+
+    private static func stripPrefix(_ s: String, prefix: String) -> String {
+        s.hasPrefix(prefix) ? String(s.dropFirst(prefix.count)) : s
     }
 
     private struct ParsedHunk {
