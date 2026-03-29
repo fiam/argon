@@ -73,10 +73,7 @@ final class AppState {
                 activeMergeBaseSha = data.session.mergeBaseSha
                 detectedBaseRef = data.detectedBase
                 detectedHeadRef = data.detectedHead
-                files = data.files
-                if selectedFile == nil || !data.files.contains(where: { $0.id == selectedFile?.id }) {
-                    selectedFile = data.files.first
-                }
+                applyNewFiles(data.files)
             case .failure(let error):
                 errorMessage = error.localizedDescription
             }
@@ -109,10 +106,7 @@ final class AppState {
                 activeBaseRef = data.target.baseRef
                 activeHeadRef = data.target.headRef
                 activeMergeBaseSha = data.target.mergeBaseSha
-                files = data.files
-                if selectedFile == nil || !data.files.contains(where: { $0.id == selectedFile?.id }) {
-                    selectedFile = data.files.first
-                }
+                applyNewFiles(data.files)
                 if let s = data.updatedSession {
                     session = s
                 }
@@ -128,6 +122,18 @@ final class AppState {
         case failed(String)
         var errorDescription: String? {
             switch self { case .failed(let msg): msg }
+        }
+    }
+
+    /// Replace the file list while preserving the selected file by path.
+    private func applyNewFiles(_ newFiles: [FileDiff]) {
+        let previousPath = selectedFile?.displayPath
+        files = newFiles
+        if let previousPath,
+           let match = newFiles.first(where: { $0.displayPath == previousPath }) {
+            selectedFile = match
+        } else {
+            selectedFile = newFiles.first
         }
     }
 

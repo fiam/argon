@@ -62,10 +62,7 @@ struct ReviewLayout: View {
                 SessionHeader(session: session, fileCount: appState.files.count)
                 Divider()
 
-                if appState.isLoading {
-                    ProgressView("Loading diff...")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if appState.files.isEmpty {
+                if appState.files.isEmpty && !appState.isLoading {
                     EmptyStateView(
                         icon: "checkmark.circle",
                         title: "No changes",
@@ -73,6 +70,13 @@ struct ReviewLayout: View {
                     )
                 } else {
                     DiffDetailView()
+                        .opacity(appState.isLoading ? 0.5 : 1.0)
+                        .overlay {
+                            if appState.isLoading {
+                                ProgressView()
+                                    .controlSize(.large)
+                            }
+                        }
                 }
             }
             .inspector(isPresented: $showInspector) {
