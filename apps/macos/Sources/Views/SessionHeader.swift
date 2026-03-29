@@ -18,9 +18,7 @@ struct SessionHeader: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                Text("\(fileCount) files")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                DiffStatView(files: appState.files)
             }
 
             if let summary = session.changeSummary {
@@ -178,6 +176,74 @@ struct DecisionSheet: View {
             }
         }
         .padding(24)
+    }
+}
+
+struct DiffStatView: View {
+    let files: [FileDiff]
+
+    private var added: Int {
+        files.flatMap(\.hunks).flatMap(\.lines).filter { $0.kind == .added }.count
+    }
+
+    private var removed: Int {
+        files.flatMap(\.hunks).flatMap(\.lines).filter { $0.kind == .removed }.count
+    }
+
+    private var total: Int { added + removed }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("\(files.count) files")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Text("+\(added)")
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundStyle(.green)
+
+            Text("-\(removed)")
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundStyle(.red)
+
+            // GitHub-style block bar
+            DiffStatBar(added: added, removed: removed)
+        }
+    }
+}
+
+struct DiffStatBar: View {
+    let added: Int
+    let removed: Int
+    private let blockCount = 5
+    private let blockSize: CGFloat = 8
+
+    var body: some View {
+        HStack(spacing: 1) {
+            let total = added + removed
+            let greenBlocks = total > 0 ? max(0, min(blockCount, Int(round(Double(added) / Double(total) * Double(blockCount))))) : 0
+            let redBlocks = total > 0 ? blockCount - greenBlocks : 0
+
+            ForEach(0..<greenBlocks, id: \.self) { _ in
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(.green)
+                    .frame(width: blockSize, height: blockSize)
+            }
+            ForEach(0..<redBlocks, id: \.self) { _ in
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(.red)
+                    .frame(width: blockSize, height: blockSize)
+            }
+            if total == 0 {
+                ForEach(0..<blockCount, id: \.self) { _ in
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(Color(nsColor: .separatorColor))
+                        .frame(width: blockSize, height: blockSize)
+                }
+            }
+        }
     }
 }
 
