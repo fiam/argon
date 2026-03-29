@@ -44,9 +44,7 @@ struct DiffDetailView: View {
         }
         .onChange(of: appState.scrollToFile) { _, fileId in
           if let fileId {
-            withAnimation {
-              proxy.scrollTo(fileId, anchor: .top)
-            }
+            proxy.scrollTo(fileId, anchor: .top)
             appState.scrollToFile = nil
           }
         }
