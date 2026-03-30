@@ -18,8 +18,9 @@ final class AppState {
   // Search
   var showSearch = false
   var searchQuery = ""
-  var searchMatchCount = 0
+  var searchMatches: [SearchMatch] = []
   var currentSearchMatchIndex = 0
+  var scrollToSearchMatch: UUID?
 
   // Focus triggers
   var focusFileFilter = false
@@ -524,9 +525,51 @@ final class AppState {
     showSearch.toggle()
     if !showSearch {
       searchQuery = ""
-      searchMatchCount = 0
+      searchMatches = []
       currentSearchMatchIndex = 0
     }
+  }
+
+  func updateSearchMatches() {
+    let query = searchQuery.lowercased()
+    guard !query.isEmpty else {
+      searchMatches = []
+      currentSearchMatchIndex = 0
+      return
+    }
+
+    var matches: [SearchMatch] = []
+    for file in files {
+      for hunk in file.hunks {
+        for line in hunk.lines {
+          if line.content.lowercased().contains(query) {
+            matches.append(SearchMatch(lineId: line.id, filePath: file.newPath))
+          }
+        }
+      }
+    }
+    searchMatches = matches
+    if currentSearchMatchIndex >= matches.count {
+      currentSearchMatchIndex = 0
+    }
+  }
+
+  func navigateToNextMatch() {
+    guard !searchMatches.isEmpty else { return }
+    currentSearchMatchIndex = (currentSearchMatchIndex + 1) % searchMatches.count
+    scrollToCurrentMatch()
+  }
+
+  func navigateToPreviousMatch() {
+    guard !searchMatches.isEmpty else { return }
+    currentSearchMatchIndex =
+      (currentSearchMatchIndex - 1 + searchMatches.count) % searchMatches.count
+    scrollToCurrentMatch()
+  }
+
+  private func scrollToCurrentMatch() {
+    guard currentSearchMatchIndex < searchMatches.count else { return }
+    scrollToSearchMatch = searchMatches[currentSearchMatchIndex].lineId
   }
 
   func dismissAll() {
@@ -536,4 +579,10 @@ final class AppState {
       closeCommentEditor()
     }
   }
+}
+
+struct SearchMatch: Identifiable {
+  let id = UUID()
+  let lineId: UUID
+  let filePath: String
 }

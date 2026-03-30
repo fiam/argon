@@ -60,6 +60,14 @@ struct DiffDetailView: View {
               appState.scrollToFile = nil
             }
           }
+          .onChange(of: appState.scrollToSearchMatch) { _, lineId in
+            if let lineId {
+              withAnimation(.easeInOut(duration: 0.2)) {
+                proxy.scrollTo(lineId, anchor: .center)
+              }
+              appState.scrollToSearchMatch = nil
+            }
+          }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .textBackgroundColor))
@@ -154,14 +162,43 @@ struct DiffSearchBar: View {
         .font(.system(.body, design: .monospaced))
         .focused($isFocused)
         .onSubmit {
-          // Could navigate to next match
+          appState.navigateToNextMatch()
+        }
+        .onChange(of: appState.searchQuery) {
+          appState.updateSearchMatches()
         }
 
       if !appState.searchQuery.isEmpty {
-        let count = countMatches()
-        Text("\(count) match\(count == 1 ? "" : "es")")
-          .font(.caption)
-          .foregroundStyle(.tertiary)
+        if appState.searchMatches.isEmpty {
+          Text("No matches")
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+        } else {
+          Text("\(appState.currentSearchMatchIndex + 1)/\(appState.searchMatches.count)")
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(.tertiary)
+            .frame(minWidth: 40)
+
+          Button {
+            appState.navigateToPreviousMatch()
+          } label: {
+            Image(systemName: "chevron.up")
+              .font(.system(size: 10, weight: .semibold))
+          }
+          .buttonStyle(.plain)
+          .foregroundStyle(.secondary)
+          .keyboardShortcut("g", modifiers: [.command, .shift])
+
+          Button {
+            appState.navigateToNextMatch()
+          } label: {
+            Image(systemName: "chevron.down")
+              .font(.system(size: 10, weight: .semibold))
+          }
+          .buttonStyle(.plain)
+          .foregroundStyle(.secondary)
+          .keyboardShortcut("g", modifiers: .command)
+        }
 
         Button {
           appState.searchQuery = ""
@@ -192,25 +229,6 @@ struct DiffSearchBar: View {
     .onAppear {
       isFocused = true
     }
-  }
-
-  private func countMatches() -> Int {
-    let query = appState.searchQuery.lowercased()
-    guard !query.isEmpty else { return 0 }
-    var count = 0
-    for file in appState.files {
-      for hunk in file.hunks {
-        for line in hunk.lines {
-          let content = line.content.lowercased()
-          var searchRange = content.startIndex..<content.endIndex
-          while let range = content.range(of: query, range: searchRange) {
-            count += 1
-            searchRange = range.upperBound..<content.endIndex
-          }
-        }
-      }
-    }
-    return count
   }
 }
 
@@ -376,6 +394,7 @@ struct DiffHunkView: View {
 
       ForEach(hunk.lines) { line in
         DiffLineView(line: line, filePath: filePath)
+          .id(line.id)
 
         // Inline comment editor
         if appState.activeCommentLineId == line.id {
