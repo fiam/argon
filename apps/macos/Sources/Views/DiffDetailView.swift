@@ -13,68 +13,73 @@ struct DiffDetailView: View {
     } else if appState.files.isEmpty {
       Color.clear
     } else {
-      ScrollViewReader { proxy in
-        ScrollView {
-          LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-            // Orphaned threads (file no longer in diff)
-            let orphaned = orphanedThreads
-            if !orphaned.isEmpty {
-              OrphanedThreadsSection(threads: orphaned)
-                .id("__orphaned__")
-            }
+      VStack(spacing: 0) {
+        if appState.showSearch {
+          DiffSearchBar()
+        }
+        ScrollViewReader { proxy in
+          ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+              // Orphaned threads (file no longer in diff)
+              let orphaned = orphanedThreads
+              if !orphaned.isEmpty {
+                OrphanedThreadsSection(threads: orphaned)
+                  .id("__orphaned__")
+              }
 
-            ForEach(appState.files) { file in
-              Section {
-                let anchored = anchoredItems(for: file)
+              ForEach(appState.files) { file in
+                Section {
+                  let anchored = anchoredItems(for: file)
 
-                let outdated = outdatedThreads(for: file)
-                if !outdated.isEmpty {
-                  OutdatedThreadsSection(threads: outdated)
-                }
-
-                if appState.diffMode == .unified {
-                  ForEach(file.hunks) { hunk in
-                    DiffHunkView(hunk: hunk, filePath: file.newPath, anchored: anchored)
+                  let outdated = outdatedThreads(for: file)
+                  if !outdated.isEmpty {
+                    OutdatedThreadsSection(threads: outdated)
                   }
-                } else {
-                  SideBySideDiffView(file: file, anchored: anchored)
-                }
 
-                Color.clear.frame(height: 12)
-              } header: {
-                DiffFileHeader(file: file)
-                  .id(file.id)
+                  if appState.diffMode == .unified {
+                    ForEach(file.hunks) { hunk in
+                      DiffHunkView(hunk: hunk, filePath: file.newPath, anchored: anchored)
+                    }
+                  } else {
+                    SideBySideDiffView(file: file, anchored: anchored)
+                  }
+
+                  Color.clear.frame(height: 12)
+                } header: {
+                  DiffFileHeader(file: file)
+                    .id(file.id)
+                }
               }
             }
+            .padding(.bottom, 20)
+            .id(appState.diffMode)
           }
-          .padding(.bottom, 20)
-          .id(appState.diffMode)
-        }
-        .onChange(of: appState.scrollToFile) { _, fileId in
-          if let fileId {
-            proxy.scrollTo(fileId, anchor: .top)
-            appState.scrollToFile = nil
+          .onChange(of: appState.scrollToFile) { _, fileId in
+            if let fileId {
+              proxy.scrollTo(fileId, anchor: .top)
+              appState.scrollToFile = nil
+            }
           }
         }
-      }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-      .background(Color(nsColor: .textBackgroundColor))
-      .alert(
-        "Discard comment?",
-        isPresented: Binding(
-          get: { appState.showDiscardAlert },
-          set: { appState.showDiscardAlert = $0 }
-        )
-      ) {
-        Button("Discard", role: .destructive) {
-          appState.confirmDiscard()
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(nsColor: .textBackgroundColor))
+        .alert(
+          "Discard comment?",
+          isPresented: Binding(
+            get: { appState.showDiscardAlert },
+            set: { appState.showDiscardAlert = $0 }
+          )
+        ) {
+          Button("Discard", role: .destructive) {
+            appState.confirmDiscard()
+          }
+          Button("Keep Editing", role: .cancel) {
+            appState.cancelDiscard()
+          }
+        } message: {
+          Text("You have an unsaved comment. Discard it and start a new one?")
         }
-        Button("Keep Editing", role: .cancel) {
-          appState.cancelDiscard()
-        }
-      } message: {
-        Text("You have an unsaved comment. Discard it and start a new one?")
-      }
+      }  // VStack
     }
   }
 
@@ -127,6 +132,85 @@ struct DiffDetailView: View {
       guard let line = anchor.lineNew else { return true }
       return !linesInDiff.contains(line)
     }
+  }
+}
+
+// MARK: - Search Bar
+
+struct DiffSearchBar: View {
+  @Environment(AppState.self) private var appState
+  @FocusState private var isFocused: Bool
+
+  var body: some View {
+    @Bindable var state = appState
+
+    HStack(spacing: 8) {
+      Image(systemName: "magnifyingglass")
+        .font(.system(size: 12))
+        .foregroundStyle(.secondary)
+
+      TextField("Search in diff...", text: $state.searchQuery)
+        .textFieldStyle(.plain)
+        .font(.system(.body, design: .monospaced))
+        .focused($isFocused)
+        .onSubmit {
+          // Could navigate to next match
+        }
+
+      if !appState.searchQuery.isEmpty {
+        let count = countMatches()
+        Text("\(count) match\(count == 1 ? "" : "es")")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+
+        Button {
+          appState.searchQuery = ""
+        } label: {
+          Image(systemName: "xmark.circle.fill")
+            .font(.system(size: 12))
+            .foregroundStyle(.tertiary)
+        }
+        .buttonStyle(.plain)
+      }
+
+      Button {
+        appState.toggleSearch()
+      } label: {
+        Image(systemName: "xmark")
+          .font(.system(size: 10, weight: .semibold))
+          .foregroundStyle(.tertiary)
+      }
+      .buttonStyle(.plain)
+      .keyboardShortcut(.escape, modifiers: [])
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 6)
+    .background(Color(nsColor: .controlBackgroundColor))
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 0.5)
+    }
+    .onAppear {
+      isFocused = true
+    }
+  }
+
+  private func countMatches() -> Int {
+    let query = appState.searchQuery.lowercased()
+    guard !query.isEmpty else { return 0 }
+    var count = 0
+    for file in appState.files {
+      for hunk in file.hunks {
+        for line in hunk.lines {
+          let content = line.content.lowercased()
+          var searchRange = content.startIndex..<content.endIndex
+          while let range = content.range(of: query, range: searchRange) {
+            count += 1
+            searchRange = range.upperBound..<content.endIndex
+          }
+        }
+      }
+    }
+    return count
   }
 }
 
@@ -434,6 +518,7 @@ struct SideBySideRowView: View {
 // MARK: - Styled Spans Rendering
 
 struct StyledSpansView: View {
+  @Environment(AppState.self) private var appState
   let spans: [StyledSpan]
   var lineKind: DiffLineKind = .context
 
@@ -441,24 +526,68 @@ struct StyledSpansView: View {
     spans.contains(where: \.changed)
   }
 
+  private var searchQuery: String {
+    appState.searchQuery.lowercased()
+  }
+
   var body: some View {
-    if hasChangedSpans {
-      // Use HStack for per-span backgrounds on word-level changes
+    if hasChangedSpans || !searchQuery.isEmpty {
+      // Use HStack for per-span backgrounds (word changes or search highlights)
       HStack(spacing: 0) {
-        ForEach(Array(spans.enumerated()), id: \.offset) { _, span in
-          Text(span.text)
-            .foregroundColor(spanForeground(span))
-            .bold(span.bold)
-            .italic(span.italic)
-            .background(span.changed ? changedBackground : .clear)
+        ForEach(Array(splitSpansForSearch().enumerated()), id: \.offset) { _, segment in
+          Text(segment.text)
+            .foregroundColor(spanForeground(segment))
+            .bold(segment.bold)
+            .italic(segment.italic)
+            .background(segmentBackground(segment))
         }
       }
     } else {
-      // Fast path: concatenated Text (no per-span backgrounds needed)
+      // Fast path: concatenated Text
       spans.reduce(Text("")) { result, span in
         result + styledText(for: span)
       }
     }
+  }
+
+  /// Split spans at search match boundaries so each segment is either
+  /// a match or not.
+  private func splitSpansForSearch() -> [SearchSegment] {
+    var result: [SearchSegment] = []
+    for span in spans {
+      if searchQuery.isEmpty {
+        result.append(
+          SearchSegment(from: span, isSearchMatch: false))
+      } else {
+        let text = span.text
+        let lower = text.lowercased()
+        var pos = lower.startIndex
+        while pos < lower.endIndex {
+          if let range = lower.range(of: searchQuery, range: pos..<lower.endIndex) {
+            // Before match
+            if range.lowerBound > pos {
+              result.append(
+                SearchSegment(
+                  text: String(text[pos..<range.lowerBound]), from: span,
+                  isSearchMatch: false))
+            }
+            // Match
+            result.append(
+              SearchSegment(
+                text: String(text[range.lowerBound..<range.upperBound]), from: span,
+                isSearchMatch: true))
+            pos = range.upperBound
+          } else {
+            // Rest is not a match
+            result.append(
+              SearchSegment(
+                text: String(text[pos..<lower.endIndex]), from: span, isSearchMatch: false))
+            pos = lower.endIndex
+          }
+        }
+      }
+    }
+    return result
   }
 
   private func styledText(for span: StyledSpan) -> Text {
@@ -475,9 +604,19 @@ struct StyledSpansView: View {
     return text
   }
 
-  private func spanForeground(_ span: StyledSpan) -> Color? {
-    guard let fg = span.fg else { return nil }
+  private func spanForeground(_ segment: SearchSegment) -> Color? {
+    guard let fg = segment.fg else { return nil }
     return Color(hex: fg)
+  }
+
+  private func segmentBackground(_ segment: SearchSegment) -> Color {
+    if segment.isSearchMatch {
+      return Color.yellow.opacity(0.4)
+    }
+    if segment.changed {
+      return changedBackground
+    }
+    return .clear
   }
 
   private var changedBackground: Color {
@@ -486,6 +625,35 @@ struct StyledSpansView: View {
     case .removed: Color.red.opacity(0.2)
     case .context: Color.yellow.opacity(0.15)
     }
+  }
+}
+
+// MARK: - Search Segment
+
+private struct SearchSegment {
+  let text: String
+  let fg: String?
+  let bold: Bool
+  let italic: Bool
+  let changed: Bool
+  let isSearchMatch: Bool
+
+  init(from span: StyledSpan, isSearchMatch: Bool) {
+    self.text = span.text
+    self.fg = span.fg
+    self.bold = span.bold
+    self.italic = span.italic
+    self.changed = span.changed
+    self.isSearchMatch = isSearchMatch
+  }
+
+  init(text: String, from span: StyledSpan, isSearchMatch: Bool) {
+    self.text = text
+    self.fg = span.fg
+    self.bold = span.bold
+    self.italic = span.italic
+    self.changed = span.changed
+    self.isSearchMatch = isSearchMatch
   }
 }
 

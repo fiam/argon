@@ -191,6 +191,12 @@ struct FileTreeSidebar: View {
         }
       }
       .background(Color(nsColor: .textBackgroundColor))
+      .onChange(of: appState.focusFileFilter) { _, focused in
+        if focused {
+          filterFocused = true
+          appState.focusFileFilter = false
+        }
+      }
       .overlay(alignment: .bottom) {
         Rectangle()
           .fill(Color(nsColor: .separatorColor))

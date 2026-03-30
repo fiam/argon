@@ -15,6 +15,15 @@ final class AppState {
   // Diff view mode toggle
   var diffMode: DiffViewMode = .unified
 
+  // Search
+  var showSearch = false
+  var searchQuery = ""
+  var searchMatchCount = 0
+  var currentSearchMatchIndex = 0
+
+  // Focus triggers
+  var focusFileFilter = false
+
   // Active inline comment editor
   var activeCommentLineId: UUID?
   var activeCommentText: String = ""
@@ -479,5 +488,52 @@ final class AppState {
     guard let sessionId, let repoRoot else { return "" }
     let cli = ProcessInfo.processInfo.environment["ARGON_CLI_CMD"] ?? "argon"
     return "\(cli) --repo \(repoRoot) agent prompt --session \(sessionId)"
+  }
+
+  // MARK: - File Navigation
+
+  func navigateToNextFile() {
+    guard !files.isEmpty else { return }
+    if let current = selectedFile,
+      let idx = files.firstIndex(where: { $0.id == current.id }),
+      idx + 1 < files.count
+    {
+      selectedFile = files[idx + 1]
+      scrollToFile = files[idx + 1].id
+    } else {
+      selectedFile = files.first
+      scrollToFile = files.first?.id
+    }
+  }
+
+  func navigateToPreviousFile() {
+    guard !files.isEmpty else { return }
+    if let current = selectedFile,
+      let idx = files.firstIndex(where: { $0.id == current.id }),
+      idx > 0
+    {
+      selectedFile = files[idx - 1]
+      scrollToFile = files[idx - 1].id
+    } else {
+      selectedFile = files.last
+      scrollToFile = files.last?.id
+    }
+  }
+
+  func toggleSearch() {
+    showSearch.toggle()
+    if !showSearch {
+      searchQuery = ""
+      searchMatchCount = 0
+      currentSearchMatchIndex = 0
+    }
+  }
+
+  func dismissAll() {
+    if showSearch {
+      toggleSearch()
+    } else if activeCommentLineId != nil {
+      closeCommentEditor()
+    }
   }
 }
