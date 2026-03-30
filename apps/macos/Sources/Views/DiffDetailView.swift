@@ -16,6 +16,13 @@ struct DiffDetailView: View {
       ScrollViewReader { proxy in
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+            // Orphaned threads (file no longer in diff)
+            let orphaned = orphanedThreads
+            if !orphaned.isEmpty {
+              OrphanedThreadsSection(threads: orphaned)
+                .id("__orphaned__")
+            }
+
             ForEach(appState.files) { file in
               Section {
                 let anchored = anchoredItems(for: file)
@@ -93,6 +100,21 @@ struct DiffDetailView: View {
     return result
   }
 
+  /// Threads whose file is not in the current diff at all.
+  private var orphanedThreads: [ReviewThread] {
+    guard let session = appState.session else { return [] }
+    let filesInDiff = Set(appState.files.map(\.newPath))
+    return session.threads.filter { thread in
+      guard let anchor = thread.comments.first?.anchor,
+        let filePath = anchor.filePath
+      else {
+        // Global comments (no file) — not orphaned
+        return false
+      }
+      return !filesInDiff.contains(filePath)
+    }
+  }
+
   private func outdatedThreads(for file: FileDiff) -> [ReviewThread] {
     guard let session = appState.session else { return [] }
     let linesInDiff = Set(file.hunks.flatMap(\.lines).compactMap(\.newLine))
@@ -140,6 +162,73 @@ struct DiffFileHeader: View {
     .padding(.horizontal, 16)
     .padding(.vertical, 8)
     .background(.bar)
+  }
+}
+
+// MARK: - Orphaned Threads (file not in diff)
+
+struct OrphanedThreadsSection: View {
+  let threads: [ReviewThread]
+  @State private var isExpanded = true
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Button {
+        withAnimation(.easeInOut(duration: 0.15)) {
+          isExpanded.toggle()
+        }
+      } label: {
+        HStack(spacing: 6) {
+          Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+            .font(.caption2)
+          Image(systemName: "archivebox")
+            .font(.caption)
+          Text(
+            "\(threads.count) comment\(threads.count == 1 ? "" : "s") on files not in this diff"
+          )
+          .font(.caption)
+          .fontWeight(.medium)
+          Spacer()
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.06))
+      }
+      .buttonStyle(.plain)
+
+      if isExpanded {
+        VStack(alignment: .leading, spacing: 2) {
+          ForEach(threads) { thread in
+            VStack(alignment: .leading, spacing: 2) {
+              if let anchor = thread.comments.first?.anchor,
+                let filePath = anchor.filePath
+              {
+                HStack(spacing: 4) {
+                  Image(systemName: "doc.text")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                  Text(filePath)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                  if let line = anchor.lineNew {
+                    Text(":\(line)")
+                      .font(.system(.caption2, design: .monospaced))
+                      .foregroundStyle(.tertiary)
+                  }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+              }
+              InlineThreadView(thread: thread, isOutdated: true)
+            }
+          }
+        }
+        .padding(.bottom, 4)
+      }
+
+      Divider()
+    }
   }
 }
 
