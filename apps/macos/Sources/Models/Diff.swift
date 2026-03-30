@@ -48,6 +48,15 @@ struct StyledSpan: Codable, Sendable {
     self.italic = italic
     self.changed = changed
   }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    text = try container.decode(String.self, forKey: .text)
+    fg = try container.decodeIfPresent(String.self, forKey: .fg)
+    bold = try container.decodeIfPresent(Bool.self, forKey: .bold) ?? false
+    italic = try container.decodeIfPresent(Bool.self, forKey: .italic) ?? false
+    changed = try container.decodeIfPresent(Bool.self, forKey: .changed) ?? false
+  }
 }
 
 // MARK: - Diff Line

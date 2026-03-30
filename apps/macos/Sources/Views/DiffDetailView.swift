@@ -48,6 +48,7 @@ struct DiffDetailView: View {
             }
           }
           .padding(.bottom, 20)
+          .id(appState.diffMode)
         }
         .onChange(of: appState.scrollToFile) { _, fileId in
           if let fileId {
