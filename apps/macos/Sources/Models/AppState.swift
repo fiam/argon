@@ -428,6 +428,20 @@ final class AppState {
     }
   }
 
+  func resolveThread(_ threadId: String) {
+    guard let sessionId, let repoRoot else { return }
+    do {
+      try ArgonCLI.resolveThread(sessionId: sessionId, repoRoot: repoRoot, threadId: threadId)
+      refreshSession()
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  func replyToThread(_ threadId: String, message: String) {
+    addDraft(message: message, threadId: threadId)
+  }
+
   func deleteDraft(_ draftId: String) {
     guard let sessionId, let repoRoot else { return }
     do {

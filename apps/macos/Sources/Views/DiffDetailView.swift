@@ -388,9 +388,12 @@ extension Color {
 // MARK: - Inline Thread
 
 struct InlineThreadView: View {
+  @Environment(AppState.self) private var appState
   let thread: ReviewThread
   let isOutdated: Bool
   @State private var isCollapsed: Bool
+  @State private var showReplyEditor = false
+  @State private var replyText = ""
 
   init(thread: ReviewThread, isOutdated: Bool) {
     self.thread = thread
@@ -398,8 +401,14 @@ struct InlineThreadView: View {
     self._isCollapsed = State(initialValue: isOutdated || thread.state == .resolved)
   }
 
+  private var isSessionActive: Bool {
+    guard let session = appState.session else { return false }
+    return session.status != .approved && session.status != .closed
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
+      // Thread header
       Button {
         withAnimation(.easeInOut(duration: 0.15)) {
           isCollapsed.toggle()
@@ -436,8 +445,85 @@ struct InlineThreadView: View {
 
       if !isCollapsed {
         VStack(alignment: .leading, spacing: 4) {
+          // Comments
           ForEach(thread.comments) { comment in
             InlineCommentBubble(comment: comment)
+          }
+
+          // Thread actions
+          if isSessionActive {
+            HStack(spacing: 8) {
+              // Reply button
+              Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                  showReplyEditor.toggle()
+                }
+              } label: {
+                Label("Reply", systemImage: "arrowshape.turn.up.left")
+                  .font(.caption)
+              }
+              .buttonStyle(.plain)
+              .foregroundStyle(.blue)
+
+              // Resolve button
+              if thread.state != .resolved {
+                Button {
+                  appState.resolveThread(thread.id.uuidString)
+                } label: {
+                  Label("Resolve", systemImage: "checkmark.circle")
+                    .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.green)
+              }
+
+              // Reopen indicator
+              if thread.state == .resolved {
+                Text("Resolved")
+                  .font(.caption)
+                  .foregroundStyle(.green)
+              }
+            }
+            .padding(.top, 4)
+          }
+
+          // Reply editor
+          if showReplyEditor {
+            VStack(alignment: .leading, spacing: 6) {
+              FocusedTextEditor(
+                text: $replyText,
+                onCommandReturn: { submitReply() }
+              )
+              .frame(height: 60)
+              .clipShape(RoundedRectangle(cornerRadius: 6))
+              .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                  .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+              )
+
+              HStack {
+                Text("\u{2318}\u{23CE}")
+                  .font(.caption)
+                  .fontWeight(.medium)
+                  .padding(.horizontal, 4)
+                  .padding(.vertical, 1)
+                  .background(Color(nsColor: .separatorColor).opacity(0.3))
+                  .clipShape(RoundedRectangle(cornerRadius: 3))
+                  .foregroundStyle(.tertiary)
+                Spacer()
+                Button("Cancel") {
+                  showReplyEditor = false
+                  replyText = ""
+                }
+                .controlSize(.small)
+                Button("Reply") {
+                  submitReply()
+                }
+                .controlSize(.small)
+                .disabled(replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+              }
+            }
+            .padding(.top, 4)
           }
         }
         .padding(.horizontal, 16)
@@ -445,6 +531,14 @@ struct InlineThreadView: View {
       }
     }
     .background(threadBackground)
+  }
+
+  private func submitReply() {
+    let text = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else { return }
+    appState.replyToThread(thread.id.uuidString, message: text)
+    replyText = ""
+    showReplyEditor = false
   }
 
   @ViewBuilder

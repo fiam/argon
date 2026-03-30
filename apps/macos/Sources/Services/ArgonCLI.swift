@@ -134,6 +134,17 @@ enum ArgonCLI {
     try run(repoRoot: repoRoot, args: args)
   }
 
+  static func resolveThread(sessionId: String, repoRoot: String, threadId: String) throws {
+    try run(
+      repoRoot: repoRoot,
+      args: [
+        "agent", "dev", "resolve-thread",
+        "--session", sessionId,
+        "--thread", threadId,
+        "--json",
+      ])
+  }
+
   static func closeSession(sessionId: String, repoRoot: String) throws {
     try run(
       repoRoot: repoRoot,

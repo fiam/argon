@@ -275,6 +275,17 @@ enum DevCommands {
     Comment(DevCommentArgs),
     Decide(DevDecideArgs),
     UpdateTarget(DevUpdateTargetArgs),
+    ResolveThread(DevResolveThreadArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct DevResolveThreadArgs {
+    #[arg(long)]
+    session: Uuid,
+    #[arg(long)]
+    thread: Uuid,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -1755,6 +1766,10 @@ fn run_dev(command: DevCommands, runtime: &RuntimeOptions) -> Result<()> {
                 args.merge_base_sha,
             )?;
             print_session(CliCommand::Review, &session, args.json)
+        }
+        DevCommands::ResolveThread(args) => {
+            let session = store.mark_thread_resolved(args.session, args.thread)?;
+            print_session(CliCommand::ReviewerComment, &session, args.json)
         }
     }
 }
