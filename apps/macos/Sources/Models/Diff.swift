@@ -32,16 +32,21 @@ struct StyledSpan: Codable, Sendable {
   let fg: String?
   let bold: Bool
   let italic: Bool
+  let changed: Bool
 
   enum CodingKeys: String, CodingKey {
-    case text, fg, bold, italic
+    case text, fg, bold, italic, changed
   }
 
-  init(text: String, fg: String? = nil, bold: Bool = false, italic: Bool = false) {
+  init(
+    text: String, fg: String? = nil, bold: Bool = false, italic: Bool = false,
+    changed: Bool = false
+  ) {
     self.text = text
     self.fg = fg
     self.bold = bold
     self.italic = italic
+    self.changed = changed
   }
 }
 

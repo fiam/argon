@@ -12,6 +12,9 @@ pub struct StyledSpan {
     pub fg: Option<String>,
     pub bold: bool,
     pub italic: bool,
+    /// True if this span represents a word-level change within a modified line.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub changed: bool,
 }
 
 /// A diff line with syntax-highlighted spans.
@@ -128,7 +131,12 @@ fn highlight_file(file: &FileDiff, ss: &SyntaxSet, theme: &Theme) -> Highlighted
         });
     }
 
-    let side_by_side = build_side_by_side(&all_unified_lines);
+    // Apply word-level change marks to unified hunks
+    mark_word_changes_in_unified(&mut unified_hunks);
+
+    // Rebuild all_unified_lines from the now-marked hunks
+    let marked_lines: Vec<_> = unified_hunks.iter().flat_map(|h| h.lines.clone()).collect();
+    let side_by_side = build_side_by_side(&marked_lines);
 
     HighlightedFileDiff {
         old_path: file.old_path.clone(),
@@ -162,6 +170,7 @@ fn highlight_line_content(
                     italic: style
                         .font_style
                         .contains(syntect::highlighting::FontStyle::ITALIC),
+                    changed: false,
                 }
             })
             .filter(|span| !span.text.is_empty())
@@ -171,17 +180,13 @@ fn highlight_line_content(
             fg: None,
             bold: false,
             italic: false,
+            changed: false,
         }],
     }
 }
 
-/// Build side-by-side pairs from unified diff lines.
-///
-/// Rules:
-/// - Context lines appear on both sides.
-/// - Consecutive removed+added blocks are paired row-by-row.
-/// - Unpaired removed lines have `right = None`.
-/// - Unpaired added lines have `left = None`.
+/// Build side-by-side pairs from unified diff lines, with word-level
+/// change highlighting on paired removed+added lines.
 fn build_side_by_side(lines: &[HighlightedLine]) -> Vec<SideBySidePair> {
     let mut result = Vec::new();
     let mut i = 0;
@@ -196,29 +201,34 @@ fn build_side_by_side(lines: &[HighlightedLine]) -> Vec<SideBySidePair> {
                 i += 1;
             }
             DiffLineKind::Removed => {
-                // Collect consecutive removed lines
                 let mut removed = Vec::new();
                 while i < lines.len() && lines[i].kind == DiffLineKind::Removed {
                     removed.push(lines[i].clone());
                     i += 1;
                 }
-                // Collect consecutive added lines that follow
                 let mut added = Vec::new();
                 while i < lines.len() && lines[i].kind == DiffLineKind::Added {
                     added.push(lines[i].clone());
                     i += 1;
                 }
-                // Pair them
                 let max_len = removed.len().max(added.len());
                 for j in 0..max_len {
-                    result.push(SideBySidePair {
-                        left: removed.get(j).cloned(),
-                        right: added.get(j).cloned(),
-                    });
+                    let left = removed.get(j).cloned();
+                    let right = added.get(j).cloned();
+
+                    // Apply word-level diff when we have a pair
+                    let (left, right) = match (left, right) {
+                        (Some(l), Some(r)) => {
+                            let (wl, wr) = mark_word_changes(&l, &r);
+                            (Some(wl), Some(wr))
+                        }
+                        pair => pair,
+                    };
+
+                    result.push(SideBySidePair { left, right });
                 }
             }
             DiffLineKind::Added => {
-                // Added without preceding removed
                 result.push(SideBySidePair {
                     left: None,
                     right: Some(lines[i].clone()),
@@ -226,6 +236,194 @@ fn build_side_by_side(lines: &[HighlightedLine]) -> Vec<SideBySidePair> {
                 i += 1;
             }
         }
+    }
+
+    result
+}
+
+/// Also mark word-level changes in the unified hunks (for unified view).
+fn mark_word_changes_in_unified(hunks: &mut [HighlightedHunk]) {
+    for hunk in hunks.iter_mut() {
+        let mut i = 0;
+        while i < hunk.lines.len() {
+            if hunk.lines[i].kind == DiffLineKind::Removed {
+                let rem_start = i;
+                while i < hunk.lines.len() && hunk.lines[i].kind == DiffLineKind::Removed {
+                    i += 1;
+                }
+                let add_start = i;
+                while i < hunk.lines.len() && hunk.lines[i].kind == DiffLineKind::Added {
+                    i += 1;
+                }
+                let rem_end = add_start;
+                let add_end = i;
+
+                let pair_count = (rem_end - rem_start).min(add_end - add_start);
+                for j in 0..pair_count {
+                    let (new_rem, new_add) =
+                        mark_word_changes(&hunk.lines[rem_start + j], &hunk.lines[add_start + j]);
+                    hunk.lines[rem_start + j] = new_rem;
+                    hunk.lines[add_start + j] = new_add;
+                }
+            } else {
+                i += 1;
+            }
+        }
+    }
+}
+
+/// Given a removed line and an added line, compute word-level diffs and
+/// return new lines with `changed: true` on the differing spans.
+fn mark_word_changes(
+    old_line: &HighlightedLine,
+    new_line: &HighlightedLine,
+) -> (HighlightedLine, HighlightedLine) {
+    let old_text = spans_to_text(&old_line.spans);
+    let new_text = spans_to_text(&new_line.spans);
+
+    let old_words = tokenize_for_diff(&old_text);
+    let new_words = tokenize_for_diff(&new_text);
+
+    let lcs = longest_common_subsequence(&old_words, &new_words);
+
+    let old_changed = mark_changed_regions(&old_words, &lcs, true);
+    let new_changed = mark_changed_regions(&new_words, &lcs, false);
+
+    let old_spans = apply_change_marks(&old_line.spans, &old_changed);
+    let new_spans = apply_change_marks(&new_line.spans, &new_changed);
+
+    (
+        HighlightedLine {
+            kind: old_line.kind,
+            old_line: old_line.old_line,
+            new_line: old_line.new_line,
+            spans: old_spans,
+        },
+        HighlightedLine {
+            kind: new_line.kind,
+            old_line: new_line.old_line,
+            new_line: new_line.new_line,
+            spans: new_spans,
+        },
+    )
+}
+
+fn spans_to_text(spans: &[StyledSpan]) -> String {
+    spans.iter().map(|s| s.text.as_str()).collect()
+}
+
+/// Tokenize a string into words and whitespace for diffing.
+fn tokenize_for_diff(text: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let mut start = 0;
+    let bytes = text.as_bytes();
+
+    while start < bytes.len() {
+        if bytes[start].is_ascii_alphanumeric() || bytes[start] == b'_' {
+            let end = (start + 1..bytes.len())
+                .find(|&i| !(bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_'))
+                .unwrap_or(bytes.len());
+            tokens.push(&text[start..end]);
+            start = end;
+        } else {
+            tokens.push(&text[start..start + 1]);
+            start += 1;
+        }
+    }
+
+    tokens
+}
+
+/// LCS of token slices.
+fn longest_common_subsequence<'a>(a: &[&'a str], b: &[&'a str]) -> Vec<&'a str> {
+    let m = a.len();
+    let n = b.len();
+    let mut dp = vec![vec![0u32; n + 1]; m + 1];
+
+    for i in 1..=m {
+        for j in 1..=n {
+            if a[i - 1] == b[j - 1] {
+                dp[i][j] = dp[i - 1][j - 1] + 1;
+            } else {
+                dp[i][j] = dp[i - 1][j].max(dp[i][j - 1]);
+            }
+        }
+    }
+
+    let mut result = Vec::new();
+    let mut i = m;
+    let mut j = n;
+    while i > 0 && j > 0 {
+        if a[i - 1] == b[j - 1] {
+            result.push(a[i - 1]);
+            i -= 1;
+            j -= 1;
+        } else if dp[i - 1][j] > dp[i][j - 1] {
+            i -= 1;
+        } else {
+            j -= 1;
+        }
+    }
+    result.reverse();
+    result
+}
+
+/// For each character position, determine if it's changed (not in LCS).
+fn mark_changed_regions(tokens: &[&str], lcs: &[&str], is_old: bool) -> Vec<bool> {
+    let _ = is_old;
+    let mut changed = Vec::new();
+    let mut lcs_idx = 0;
+
+    for token in tokens {
+        if lcs_idx < lcs.len() && *token == lcs[lcs_idx] {
+            changed.extend(std::iter::repeat_n(false, token.len()));
+            lcs_idx += 1;
+        } else {
+            changed.extend(std::iter::repeat_n(true, token.len()));
+        }
+    }
+
+    changed
+}
+
+/// Split existing spans according to the per-character change marks.
+fn apply_change_marks(spans: &[StyledSpan], char_changed: &[bool]) -> Vec<StyledSpan> {
+    let mut result = Vec::new();
+    let mut char_idx = 0;
+
+    for span in spans {
+        let span_len = span.text.len();
+        if char_idx + span_len > char_changed.len() {
+            // Safety: if marks are shorter than text, treat rest as unchanged
+            result.push(span.clone());
+            char_idx += span_len;
+            continue;
+        }
+
+        // Split this span into changed and unchanged segments
+        let mut seg_start = 0;
+        while seg_start < span_len {
+            let is_changed = char_changed[char_idx + seg_start];
+            let mut seg_end = seg_start + 1;
+            while seg_end < span_len
+                && char_idx + seg_end < char_changed.len()
+                && char_changed[char_idx + seg_end] == is_changed
+            {
+                seg_end += 1;
+            }
+
+            result.push(StyledSpan {
+                text: span.text[seg_start..seg_end].to_string(),
+                fg: span.fg.clone(),
+                bold: span.bold,
+                italic: span.italic,
+                changed: is_changed,
+            });
+
+            seg_start = seg_end;
+        }
+
+        char_idx += span_len;
     }
 
     result
@@ -397,6 +595,7 @@ mod tests {
                     fg: None,
                     bold: false,
                     italic: false,
+                    changed: false,
                 }],
             },
             HighlightedLine {
@@ -408,6 +607,7 @@ mod tests {
                     fg: None,
                     bold: false,
                     italic: false,
+                    changed: false,
                 }],
             },
         ];
@@ -432,6 +632,7 @@ mod tests {
                     fg: None,
                     bold: false,
                     italic: false,
+                    changed: false,
                 }],
             },
             HighlightedLine {
@@ -443,6 +644,7 @@ mod tests {
                     fg: None,
                     bold: false,
                     italic: false,
+                    changed: false,
                 }],
             },
         ];
@@ -527,5 +729,65 @@ mod tests {
         let deserialized: HighlightedDiff =
             serde_json::from_str(&json).expect("should deserialize");
         assert_eq!(deserialized.files.len(), result.files.len());
+    }
+
+    #[test]
+    fn word_level_changes_marked_in_paired_lines() {
+        let diff = sample_diff();
+        let result = highlight_diff(&diff, "base16-ocean.dark");
+
+        // The sample diff has:
+        //   - println!("hello");
+        //   + println!("hello world");
+        // The word "world" should be marked as changed in the added line,
+        // and nothing extra in the removed line beyond what differs.
+
+        // Check unified hunks have some changed spans
+        let hunk = &result.files[0].unified_hunks[0];
+        let removed_line = &hunk.lines[1]; // removed
+        let added_line = &hunk.lines[2]; // first added
+
+        let removed_has_changes = removed_line.spans.iter().any(|s| s.changed);
+        let added_has_changes = added_line.spans.iter().any(|s| s.changed);
+        assert!(
+            removed_has_changes || added_has_changes,
+            "paired removed/added lines should have word-level change marks"
+        );
+    }
+
+    #[test]
+    fn word_level_changes_in_side_by_side() {
+        let diff = sample_diff();
+        let result = highlight_diff(&diff, "base16-ocean.dark");
+
+        // The paired row should have changed spans
+        let pair = &result.files[0].side_by_side[1]; // removed+added pair
+        let left = pair.left.as_ref().unwrap();
+        let right = pair.right.as_ref().unwrap();
+
+        let left_has_changes = left.spans.iter().any(|s| s.changed);
+        let right_has_changes = right.spans.iter().any(|s| s.changed);
+        assert!(
+            left_has_changes || right_has_changes,
+            "side-by-side paired lines should have word-level change marks"
+        );
+    }
+
+    #[test]
+    fn tokenize_splits_words_and_punctuation() {
+        let tokens = tokenize_for_diff("hello(world, 42)");
+        assert_eq!(tokens, vec!["hello", "(", "world", ",", " ", "42", ")"]);
+    }
+
+    #[test]
+    fn context_lines_have_no_changed_marks() {
+        let diff = sample_diff();
+        let result = highlight_diff(&diff, "base16-ocean.dark");
+
+        let context_line = &result.files[0].unified_hunks[0].lines[0]; // "fn main() {"
+        assert!(
+            !context_line.spans.iter().any(|s| s.changed),
+            "context lines should have no changed marks"
+        );
     }
 }

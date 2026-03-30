@@ -385,7 +385,7 @@ struct SideBySideRowView: View {
           .padding(.trailing, 4)
           .foregroundStyle(.tertiary)
 
-        StyledSpansView(spans: line.spans)
+        StyledSpansView(spans: line.spans, lineKind: line.kind)
           .frame(maxWidth: .infinity, alignment: .leading)
       }
       .padding(.trailing, 4)
@@ -434,10 +434,29 @@ struct SideBySideRowView: View {
 
 struct StyledSpansView: View {
   let spans: [StyledSpan]
+  var lineKind: DiffLineKind = .context
+
+  private var hasChangedSpans: Bool {
+    spans.contains(where: \.changed)
+  }
 
   var body: some View {
-    spans.reduce(Text("")) { result, span in
-      result + styledText(for: span)
+    if hasChangedSpans {
+      // Use HStack for per-span backgrounds on word-level changes
+      HStack(spacing: 0) {
+        ForEach(Array(spans.enumerated()), id: \.offset) { _, span in
+          Text(span.text)
+            .foregroundColor(spanForeground(span))
+            .bold(span.bold)
+            .italic(span.italic)
+            .background(span.changed ? changedBackground : .clear)
+        }
+      }
+    } else {
+      // Fast path: concatenated Text (no per-span backgrounds needed)
+      spans.reduce(Text("")) { result, span in
+        result + styledText(for: span)
+      }
     }
   }
 
@@ -453,6 +472,19 @@ struct StyledSpansView: View {
       text = text.italic()
     }
     return text
+  }
+
+  private func spanForeground(_ span: StyledSpan) -> Color? {
+    guard let fg = span.fg else { return nil }
+    return Color(hex: fg)
+  }
+
+  private var changedBackground: Color {
+    switch lineKind {
+    case .added: Color.green.opacity(0.2)
+    case .removed: Color.red.opacity(0.2)
+    case .context: Color.yellow.opacity(0.15)
+    }
   }
 }
 
@@ -859,7 +891,7 @@ struct DiffLineView: View {
         .foregroundStyle(markerColor)
 
       if line.spans.count > 1 {
-        StyledSpansView(spans: line.spans)
+        StyledSpansView(spans: line.spans, lineKind: line.kind)
           .frame(maxWidth: .infinity, alignment: .leading)
       } else {
         Text(line.content)
