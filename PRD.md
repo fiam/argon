@@ -1,503 +1,425 @@
-# Argon Native — PRD
+# Argon — PRD
 
 ## 1. Problem Statement
 
-Coding agents can make fast changes, but the review and approval loop is the
-bottleneck. The Tauri prototype validates the local review loop, but the
-web-view stack adds weight, startup latency, and limits platform integration.
-A native rewrite delivers a faster, more integrated experience while keeping
-the agent-facing CLI contract stable and the architecture open to future
-remote/SaaS operation.
+Coding agents are fast, but humans need to coordinate them: launch tasks,
+watch progress, review output, provide feedback, and approve results. Today
+this requires juggling multiple terminals, manually creating worktrees, and
+context-switching between agent output and review UIs.
+
+Argon is a **native macOS workspace for coordinating coding agents**. It
+gives the human a single window per project to:
+
+- See all active worktrees and the agents working in them.
+- Launch new agent tasks into isolated worktrees.
+- Watch agent progress in embedded terminals.
+- Review diffs with GitHub-style inline commenting.
+- Approve, request changes, or delegate review to other agents.
 
 ## 2. Vision
 
-Rebuild Argon with:
+A native macOS app that is the human's command center for agent-assisted
+development:
 
-- A **shared Rust core** containing all domain logic, session management, CLI,
-  and Git integration.
-- **Per-platform native UIs** (macOS first, SwiftUI primary with AppKit where
-  needed) that feel like first-class OS citizens.
-- A **CLI-launchable workflow** (`argon .`, `argon review ...`) so agents and
-  humans can open the review UI from the terminal — the same way `code .`
-  launches VS Code.
-- A **clean backend abstraction** (`ReviewBackend` trait) so the same app and
-  CLI can later connect to a remote coordinator service for SaaS/cloud
-  operation.
+- **One window per project** — shows the repo, its worktrees, and running
+  agents.
+- **Launch agents** — pick an agent (Claude Code, Codex, Gemini, custom),
+  write a prompt, and spin up a new worktree with the agent running in it.
+- **Embedded terminals** — watch agent output live via libghostty.
+- **Built-in review** — when an agent is ready for review (or the human
+  wants to inspect), open a full diff review UI with inline comments,
+  thread replies, draft batching, and approval.
+- **Agent-agnostic** — works with any CLI agent via skills. The review
+  loop is also accessible standalone from any agent outside the app.
+- **Shared Rust core** — all domain logic, git integration, session
+  management, and syntax highlighting in a portable Rust library.
 
 ## 3. Goals
 
-- Preserve the full agent ↔ reviewer loop from the Tauri prototype.
-- Achieve sub-second cold launch to diff view.
-- Use native text rendering, syntax highlighting, and scroll for diffs.
-- Support CLI-driven launch: `argon .` opens the native app with a new session.
-- Keep the CLI contract identical so existing skills work unchanged.
-- Ship a single self-contained app bundle (macOS `.app`) that includes the
-  `argon` CLI binary.
-- Architect for future platform UIs (Linux, Windows) without forking the core.
+- Sub-second cold launch to project view.
+- Native text rendering, syntax highlighting (syntect + two-face), and
+  smooth scroll for diffs.
+- Support both **app-driven** (user launches from Argon) and
+  **CLI-driven** (agent triggers review via skill) workflows.
+- Ship a single self-contained `.app` bundle with embedded CLI.
+- Keep the CLI contract stable so existing agent skills work unchanged.
+- Architect for future platform UIs (Linux, Windows) without forking
+  the core.
 
-## 4. Non-Goals (v1)
+## 4. Non-Goals (current phase)
 
-- Linux or Windows native UI (core compiles cross-platform; UI is macOS-only
-  for now).
+- Linux or Windows native UI (core compiles cross-platform; UI is
+  macOS-only for now).
 - GitHub PR sync.
+- Remote/SaaS mode (deferred — the `ReviewBackend` trait preserves the
+  option but we focus on local-first).
+- Mobile access.
 
 ## 5. Primary Users
 
-- **Human reviewer**: inspects diffs, leaves line/global comments, approves or
-  requests changes. Can also delegate partial review to reviewer agents.
-- **Coding agent**: starts a session via skill, blocks for feedback, applies
-  fixes, replies, and waits for re-review.
-- **Reviewer agent**: launched by the human (from the app or remotely) to
-  perform focused or supplementary reviews (e.g. "check error handling",
-  "review test coverage"). Posts comments but cannot give final approval.
-- **Mobile reviewer** (future): triages sessions, reads diffs, launches
-  reviewer agents, and approves from a phone.
+- **Developer (human)**: opens a project, launches agent tasks into
+  worktrees, watches progress, reviews diffs, approves or requests
+  changes. Coordinates multiple agents simultaneously.
+- **Coding agent**: works in a worktree, triggers review via CLI skill,
+  blocks for feedback, applies fixes, and waits for approval.
+- **Reviewer agent**: launched by the human (from the app or CLI) to
+  perform focused reviews. Posts comments but cannot give final approval.
 
 ## 6. Architecture
 
-The central design principle is a **backend trait** that abstracts all
-session and review operations behind a common interface. The native app and
-CLI program against this trait. We ship a local implementation first; the
-same trait gets a remote implementation later to support SaaS/cloud mode.
-
 ```
-┌───────────────────────────────────────────────────────────────────┐
-│                        macOS App (SwiftUI)                        │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │
-│  │  Window A        │  │  Window B        │  │  Window C        │  │
-│  │  LocalBackend    │  │  RemoteBackend   │  │  RemoteBackend   │  │
-│  │  (local session) │  │  (cloud proj 1)  │  │  (cloud proj 2)  │  │
-│  └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘  │
-└───────────┼─────────────────────┼─────────────────────┼──────────┘
-            │ IPC                  │ HTTPS/WSS           │ HTTPS/WSS
-    ┌───────┴───────┐     ┌───────┴──────┐      ┌───────┴──────┐
-    │ argon-core    │     │ coordinator  │      │ coordinator  │
-    │ (local)       │     │ (project 1)  │      │ (project 2)  │
-    └───────────────┘     └──────────────┘      └──────────────┘
-```
-
-**Backends are per-session, and each session maps to one app window.** A
-single running app can have windows backed by different `ReviewBackend`
-implementations simultaneously — e.g. one local session and two remote
-sessions pointing at different cloud projects. The window doesn't know or
-care which backend type it's using; it programs against the trait.
-
-### 6.1 The `ReviewBackend` Trait
-
-The trait is the load-bearing abstraction. A backend instance is created
-**per session** — each app window holds exactly one backend, and that
-backend manages one session's lifecycle. The trait defines every operation
-the window needs:
-
-```rust
-trait ReviewBackend {
-    // Session lifecycle
-    fn create_session(&self, opts: CreateSessionOpts) -> Result<ReviewSession>;
-    fn get_session(&self, id: SessionId) -> Result<ReviewSession>;
-    fn close_session(&self, id: SessionId) -> Result<()>;
-
-    // Comments and threads
-    fn add_comment(&self, comment: NewComment) -> Result<ReviewComment>;
-    fn ack_thread(&self, session: SessionId, thread: ThreadId) -> Result<()>;
-    fn reply_thread(&self, reply: ThreadReply) -> Result<ReviewComment>;
-
-    // Decisions
-    fn submit_decision(&self, decision: NewDecision) -> Result<ReviewDecision>;
-
-    // Diffs
-    fn get_diff(&self, session: SessionId) -> Result<DiffData>;
-
-    // Reactive
-    fn watch(&self, session: SessionId) -> Result<impl Stream<Item = SessionEvent>>;
-}
+┌──────────────────────────────────────────────────────────────────────┐
+│                        macOS App (SwiftUI)                           │
+│  ┌────────────────────────────────────────────────────────────────┐  │
+│  │  Project Window (one per repo)                                 │  │
+│  │  ┌──────────┐  ┌────────────────────┐  ┌───────────────────┐  │  │
+│  │  │ Worktree │  │ Terminal           │  │ Review Summary    │  │  │
+│  │  │ Sidebar  │  │ (libghostty)       │  │ / Inspector       │  │  │
+│  │  │          │  │                    │  │                   │  │  │
+│  │  │ main     │  │ $ claude ...       │  │ 3 threads open    │  │  │
+│  │  │ ├ wt-1 ◉│  │ Working on task... │  │ +42 -8            │  │  │
+│  │  │ ├ wt-2 ◎│  │                    │  │ [Review →]        │  │  │
+│  │  │ └ wt-3 ✓│  │                    │  │                   │  │  │
+│  │  └──────────┘  └────────────────────┘  └───────────────────┘  │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+│  Review Window (opens from project window or CLI skill)              │
+│  ┌──────────┐  ┌──────────────────────────┐  ┌───────────────────┐  │
+│  │ File     │  │ Diff View (unified/sbs)  │  │ Threads           │  │
+│  │ Tree     │  │ syntax highlighted       │  │ Inspector         │  │
+│  │ + filter │  │ word-level changes       │  │                   │  │
+│  └──────────┘  └──────────────────────────┘  └───────────────────┘  │
+└──────────────────────────────────────────────────────────────────────┘
+                           │
+              ┌────────────┴────────────┐
+              │      argon-core (Rust)  │
+              │  sessions · worktrees   │
+              │  diffs · highlighting   │
+              │  git · storage · CLI    │
+              └─────────────────────────┘
 ```
 
-**`LocalBackend`** (ships in M1): SQLite storage, shells out to `git`,
-`notify`-based file watcher. This is the only implementation we build
-initially.
+### 6.1 Window Model
 
-**`RemoteBackend`** (future SaaS): same trait, backed by HTTPS/WSS calls
-to the coordinator service. The app and CLI don't know the difference.
+- **Project Window**: one per repo/directory. Shows worktrees, running
+  agents, and a summary of active reviews. The main daily-driver view.
+- **Review Window**: the full diff review UI. Opens when clicking
+  "Review" on a worktree, or when an agent triggers a review via CLI
+  skill. Can exist standalone (current behavior) or be launched from
+  a project window.
 
-### 6.2 Monorepo Structure
-
-Everything lives in one repository:
+### 6.2 Rust Workspace
 
 ```
 argon-native/
 ├── crates/
-│   ├── argon-core/       # Domain types, ReviewBackend trait, LocalBackend
+│   ├── argon-core/       # Domain types, ReviewBackend trait, LocalBackend,
+│   │                     # diff engine, syntax highlighting, git adapter
 │   ├── argon/            # CLI binary
-│   └── argon-ipc/        # IPC server (Unix socket, JSON protocol)
+│   └── argon-ipc/        # IPC server (future)
 ├── apps/
-│   └── macos/            # SwiftUI app (project.yml + sources, .xcodeproj gitignored)
+│   └── macos/            # SwiftUI app (project.yml, .xcodeproj gitignored)
+│       ├── Sources/
+│       └── Tests/
 ├── skills/               # Bundled agent skills
-│   ├── argon-app-review/
-│   └── argon-dev-review/
+├── scripts/              # Dev scripts
+├── Makefile              # make check, make fmt, make test
+├── deny.toml             # cargo-deny config
 └── Cargo.toml            # Workspace root
 ```
 
-Future additions (`coordinator/`, `mobile/`) will live at the repo root
-when those milestones begin.
-
 | Crate | Role |
 |---|---|
-| `argon-core` | Domain types, `ReviewBackend` trait, `LocalBackend`, diff engine, Git adapter. Platform-agnostic. |
-| `argon` | CLI binary. Depends on `argon-core`. |
-| `argon-ipc` | IPC server (Unix domain socket) exposing `ReviewBackend` operations to native UI processes. Length-prefixed JSON. |
+| `argon-core` | Domain types, `ReviewBackend` trait, `LocalBackend`, diff engine, syntax highlighting (syntect + two-face), git adapter. Platform-agnostic. |
+| `argon` | CLI binary. All agent/reviewer/draft/diff commands. |
+| `argon-ipc` | Future: IPC server for native UI ↔ core communication. |
 
-### 6.3 Native UI (macOS)
+### 6.3 The `ReviewBackend` Trait
 
-- SwiftUI app under `apps/macos/`.
-- **XcodeGen** for project generation — the `project.yml` is checked in,
-  `.xcodeproj` is gitignored. Run `xcodegen` to regenerate after changing
-  project structure.
-- Connects to the Rust core via the IPC socket. The IPC layer exposes
-  `ReviewBackend` operations — the app doesn't know whether the backend is
-  local or remote.
-- Receives diff data, session state, and file-watcher events over the socket.
-- Sends comments, decisions, and navigation commands back.
-- **SwiftUI-primary**: use SwiftUI for all UI (toolbar, sidebar, status, lists,
-  controls). Drop to AppKit only when SwiftUI has a hard limitation (e.g.
-  NSTextView for high-performance syntax-highlighted diff scrolling, or
-  NSViewRepresentable wrappers for terminal embedding).
+Per-session abstraction. Each review window holds one backend. The trait
+defines session lifecycle, comments, threads, decisions, diffs, and
+reactive watch. `LocalBackend` is the only implementation for now.
 
-### 6.4 CLI ↔ App Launch Protocol
+### 6.4 Project Configuration
 
-Each session gets its own window. Multiple `argon .` invocations open
-multiple windows in the same app process.
+Each project directory can have an `.argon/config.toml`:
 
-1. `argon .` (or `argon review ...`) creates a session in the local store,
-   starts the IPC server if not already running, and launches the app via
-   `open -a Argon --args --session <id> --ipc <socket-path>`.
-2. The app opens a new window, creates a `LocalBackend` for that session,
-   connects to the IPC socket, and renders the diff.
-3. If the app is launched directly (from Dock / Spotlight), it presents an
-   open/create session flow, then opens a window with the appropriate backend.
-4. Closing a window marks that window's session `closed`. Other windows are
-   unaffected.
+```toml
+[project]
+name = "my-service"
 
-The bundled app ships the CLI at `Argon.app/Contents/Resources/bin/argon` so
-the full loop works from a single download.
+[agents]
+default = "claude"  # claude | codex | gemini | custom
 
-### 6.4 Storage
+[agents.claude]
+command = "claude --dangerously-skip-permissions"
+sandbox = false
 
-- Local SQLite database under `~/.cache/argon/sessions/<repo-key>/` (or
-  `$XDG_CACHE_HOME`), same layout as the Tauri prototype.
-- Write-ahead logging enabled so CLI and app can access concurrently.
+[agents.codex]
+command = "codex --yolo"
+sandbox = false
 
-### 6.5 Git Integration
+[agents.custom]
+command = "./scripts/my-agent.sh"
+sandbox = true
 
-- Shell out to `git` for diff, merge-base, branch metadata.
+[worktree]
+auto_cleanup = true      # remove worktree after merge/close
+base_branch = "main"
+```
+
+When no config exists, the app uses sensible defaults (auto-detect
+available agents, no sandboxing).
+
+### 6.5 Worktree Management
+
+- Each agent task runs in a **git worktree** — an isolated working
+  copy that shares the repo's object store.
+- The app creates worktrees via `git worktree add`, launches the
+  agent in the worktree directory, and tracks its lifecycle.
+- Worktree states: `creating`, `running` (agent active), `awaiting_review`,
+  `approved`, `closed`.
+- On approval, the worktree's branch can be merged or a PR created.
+- On close, the worktree is cleaned up (if `auto_cleanup` is on).
+
+### 6.6 Terminal Embedding (libghostty)
+
+- Embed [libghostty](https://github.com/ghostty-org/ghostty) for
+  terminal rendering — the same engine as Ghostty terminal.
+- Each running agent gets a terminal tab/panel in the project window.
+- The terminal shows live agent output (stdout/stderr).
+- The human can interact with the terminal if needed (e.g. to answer
+  agent prompts).
+
+### 6.7 Agent Launch Flow
+
+1. Human opens project window (or `argon open .` from terminal).
+2. Clicks "New Task" → picks agent, writes prompt, optionally configures
+   sandbox/YOLO mode.
+3. Argon creates a new worktree from the base branch.
+4. Argon launches the agent in the worktree with the prompt.
+5. The agent works, optionally triggers a review via `argon agent start`.
+6. The project window shows the worktree as "awaiting review".
+7. Human clicks "Review" → opens the review window for that worktree.
+8. Review loop proceeds (comments, replies, approve/close).
+9. On approval, Argon can merge the worktree branch.
+
+### 6.8 Standalone Review (current behavior)
+
+The review UI also works standalone, triggered by any agent from any
+terminal:
+
+```bash
+argon agent start --repo <dir> --mode <mode> --description "..." --wait --json
+```
+
+This opens a review window without a project window. The full CLI
+contract is preserved — existing skills continue to work.
+
+### 6.9 Storage
+
+- JSON file store under `~/.cache/argon/` (current implementation).
+- Session, thread, comment, and draft data per repo.
+- Project config in `.argon/config.toml` per repo.
+- Worktree state tracked alongside sessions.
+
+### 6.10 Git Integration
+
+- Shell out to `git` for diff, merge-base, worktree management.
 - Isolate behind a `GitAdapter` trait so tests can use fixtures.
-
-### 6.6 Remote / SaaS Mode (future — `RemoteBackend`)
-
-Cloud mode is not a separate architecture — it's a second implementation of
-`ReviewBackend` plus a coordinator service. The details (sandbox
-provisioning, container runtime, mobile client) are deferred. What matters
-now is that the `ReviewBackend` trait is clean enough that a `RemoteBackend`
-backed by HTTPS/WSS can be dropped in later without touching the CLI, IPC
-layer, or UI.
+- Support branch, commit, and uncommitted review modes.
 
 ## 7. Skill-Oriented Design
 
-Argon is designed as a **skill-driven tool**: agents interact with it
-exclusively through the CLI, and the app is the surface where humans
-orchestrate the review — including launching additional agents.
+Argon is **skill-driven**: agents interact via CLI, the app is the
+human's surface. This works for both app-launched agents (in worktrees)
+and external agents (triggered from any terminal).
 
-### 7.1 Coder Agent Skill (entry point)
+### 7.1 Coder Agent Skill
 
-A coding agent triggers the review loop via a bundled skill
-(`argon-app-review`). The skill defines the full lifecycle:
+The skill defines the full review lifecycle:
 
-**1. Start a session and open the review UI:**
+1. `argon agent start --repo <dir> --mode <mode> --description "..." --wait --json`
+2. Acknowledge → implement → reply → re-wait until `approved` or `closed`.
+3. On approval: commit. On close: stop without committing.
 
-```bash
-argon agent start --repo <directory> --mode <branch|commit|uncommitted> \
-  [--base <branch>] [--head <branch>] [--commit <sha>] \
-  --description "..." --wait --json
-```
+### 7.2 Skill Auto-Install
 
-The agent **must** provide:
-- `--repo <directory>` — the working directory to review.
-- `--mode` — one of:
-  - `branch` — diff from merge-base of `--base` to working tree.
-  - `commit` — diff from `--commit` (default `HEAD`) to working tree.
-  - `uncommitted` — `HEAD` to working tree (staged + unstaged only).
+- The bundled `.app` ships skills at `Argon.app/Contents/Resources/skills/`.
+- On first launch, auto-installs into detected agent skill homes.
+- CLI: `argon skill install [--agent <claude-code|codex|all>]`.
 
-`--wait` blocks until the reviewer submits feedback or a decision. The
-command returns a JSON payload with the session state, threads, and
-decision.
+### 7.3 Reviewer Agent Launch
 
-**2. Handle feedback — acknowledge, implement, reply:**
+From the project window or review window, the human can launch reviewer
+agents:
 
-```bash
-# Acknowledge a thread before starting work on it
-argon agent ack --session <id> --thread <id> --json
-
-# After implementing the fix, reply with what changed
-argon agent reply --session <id> --thread <id> \
-  --message "Fixed: refactored error handling in parse()" --addressed
-```
-
-The agent should acknowledge each open thread, implement the requested
-change, then reply with a concrete description of what it did. The
-`--addressed` flag marks the thread as handled from the agent's side.
-
-**3. Await re-review:**
-
-```bash
-argon agent wait --session <id> --json
-```
-
-Blocks until the reviewer responds again. Returns the same JSON structure
-as `start --wait`. The agent **must keep looping** steps 2-3 until the
-session reaches a terminal state.
-
-**4. Terminal states — the skill must instruct the agent:**
-
-- **`approved`**: the reviewer has approved and expects the agent to commit.
-  The agent should create a commit (or whatever finalization the reviewer
-  requested) and then stop.
-- **`closed`**: the reviewer closed the window / cancelled the session. The
-  agent must stop immediately — no commit, no further changes.
-- Any other state (`changes_requested`, `commented`, `awaiting_reviewer`):
-  keep looping. Never give up or stop polling while the session is still
-  active.
-
-The skill prompt must be explicit: *"Keep waiting for reviewer feedback
-until the session is approved or closed. Do not stop early. On approval,
-commit your changes. On close, stop without committing."*
-
-**5. Check status without blocking:**
-
-```bash
-argon agent status --session <id> --json
-```
-
-**6. Close a session explicitly (if needed):**
-
-```bash
-argon agent close --session <id> --json
-```
-
-The skill is the **only contract** between the coding agent and Argon. The
-agent never needs to know about the UI, IPC, or internal state — it talks
-CLI and gets structured JSON back.
-
-### 7.2 Skill Auto-Install (day 1)
-
-Skill distribution is a **day-1 requirement**, not a polish item. If the
-skill isn't installed, agents can't trigger review loops — the whole product
-is inert.
-
-- The bundled `.app` ships skills at
-  `Argon.app/Contents/Resources/skills/`.
-- On first launch (and on update), the app detects local skill homes
-  (Claude Code `~/.claude/skills`, Codex `~/.codex/skills`) and
-  installs/updates the bundled `argon-app-review` skill automatically.
-- The CLI also supports `argon skill install` for headless environments
-  (CI, cloud sandboxes) where the app may not be present.
-- A "Reveal Skill" action in the app exposes the raw skill directory for
-  manual installation into other agent frameworks.
-
-### 7.3 Reviewer Agent Launch (deferred to M5)
-
-The human reviewer can launch one or more reviewer agents directly from
-the app UI to perform focused or supplementary reviews. This is a
-first-class workflow but requires the embedded terminal infrastructure,
-so it ships after the core review loop is solid.
-
-- **Agent picker**: detects locally available agents (Claude Code, Codex,
-  custom commands).
-- **Focus prompt**: optional scoping instructions (e.g. "check error
-  handling", "verify test coverage for public APIs").
-- **Multiple concurrent agents**: each gets a nickname, runs in the same
-  repo directory, and posts findings via `argon reviewer comment ...`.
-- **Contract**: reviewer agents can inspect and test but **cannot edit
-  files** or give final `approved` — only the human can approve.
+- **Agent picker**: detects available agents.
+- **Focus prompt**: optional review scoping instructions.
+- **Terminal**: agent runs in an embedded terminal.
+- **Contract**: reviewer agents can inspect and test but cannot edit
+  files or approve — only the human can approve.
 
 ## 8. Data Model
 
-Carried over from the Tauri prototype unchanged:
+### Review (existing)
 
-- **ReviewSession** — id, repo_root, mode (`branch`/`commit`/`uncommitted`),
-  base_ref, head_ref, change_summary, status, timestamps.
-- **ReviewThread** — id, state (open/addressed/resolved),
-  agent_acknowledged_at, comments.
-- **ReviewComment** — id, session_id, author, author_name, kind, file_path,
-  line_new, line_old, body, thread_id, timestamp.
-- **ReviewDecision** — session_id, outcome, summary, timestamp.
+- **ReviewSession** — id, repo_root, mode, base_ref, head_ref,
+  change_summary, status, timestamps.
+- **ReviewThread** — id, state (open/addressed/resolved), comments.
+- **ReviewComment** — id, author, kind, anchor, body, timestamp.
+- **ReviewDecision** — outcome, summary, timestamp.
+- **DraftReview** — batched comments before submission.
 
-Session statuses: `awaiting_reviewer`, `awaiting_agent`, `approved`, `closed`.
+### Workspace (new)
+
+- **Project** — repo_root, config, list of worktrees.
+- **Worktree** — id, branch, path, agent_command, status
+  (creating/running/awaiting_review/approved/closed), session_id
+  (links to ReviewSession when in review), created_at.
+- **AgentProfile** — name, command, sandbox config, detected/custom.
 
 ## 9. CLI Contract
 
-Based on the Tauri prototype with one key addition: the `uncommitted` review
-mode. All existing commands, flags, JSON schemas, and exit codes are
-preserved.
-
-Key commands:
+Existing commands preserved. New additions for workspace management:
 
 ```
+# Existing (review)
 argon .
-argon review --repo <dir> --mode <branch|commit|uncommitted> [flags]
-argon agent start --repo <dir> --mode <branch|commit|uncommitted> [flags]
-argon agent wait|follow|status|close|ack|reply|prompt [flags]
+argon review --repo <dir> --mode <mode> [flags]
+argon agent start|wait|follow|status|close|ack|reply|prompt [flags]
 argon reviewer prompt|wait|comment|decide [flags]
-argon skill install [--agent <claude-code|codex|all>]
+argon draft add|delete|list|submit [flags]
+argon diff --session <id> --theme <theme> --json
+argon skill install [--agent <name>]
+
+# New (workspace)
+argon open <dir>                      # open project window
+argon worktree create --prompt "..."  # create worktree + launch agent
+argon worktree list --json            # list worktrees
+argon worktree status <id> --json     # worktree status
+argon worktree close <id>             # close and cleanup
 ```
-
-Review modes:
-
-- `branch` — merge-base of `--base` to working tree (requires `--base`,
-  optional `--head`).
-- `commit` — `--commit` (default `HEAD`) to working tree.
-- `uncommitted` — `HEAD` to working tree (staged + unstaged changes only).
-
-Global flags: `--repo`, `--desktop-launch`, `--agent`, `--description`,
-`--json`.
 
 ## 10. macOS UI Requirements
 
-### 10.1 Diff View
+### 10.1 Project Window
 
-- File tree sidebar (changed files grouped by directory).
-- Split or unified diff pane with syntax-highlighted hunks.
-- Line-level comment gutters (click to add, inline thread display).
-- Global comment panel.
+- **Worktree sidebar**: list of worktrees with status icons
+  (running ◉, awaiting review ◎, approved ✓, closed ✗).
+- **Terminal panel**: embedded libghostty terminal showing the
+  selected worktree's agent output.
+- **Review summary**: right inspector showing active review
+  threads, diff stats, and a "Review →" button.
+- **New Task button**: opens agent picker + prompt input.
+- **Project config**: accessible via toolbar or menu.
 
-### 10.2 Review Controls
+### 10.2 Review Window (existing, polished)
 
-- Toolbar buttons: **Approve**, **Request Changes**, **Comment**.
-- Session status badge: shows current state and who is being waited on.
-- Copy-friendly agent handoff command.
-- Change summary display when `--description` was provided.
+- File tree sidebar with fuzzy/glob/regex filtering.
+- Unified and side-by-side diff views with syntax highlighting.
+- Word-level change highlighting within modified lines.
+- Inline comment editor, draft review batching.
+- Thread replies and resolve from the UI.
+- Orphaned thread handling for files that left the diff.
+- Live diff refresh via FSEvents.
+- Search across diff content with match navigation.
+- Keyboard shortcuts (⌘F search, ⌘↑/↓ file nav, ⌘1/2 view mode).
+- Rolling number animations on diffstat changes.
 
-### 10.3 Reviewer Agent Launch (M5)
+### 10.3 Notifications
 
-- **Launch menu** in the toolbar or sidebar: lists detected agents with
-  preset profiles (e.g. "Claude Code", "Claude Code (YOLO)", "Codex",
-  "Custom command…").
-- **Focus prompt field**: optional text input shown before launch — the
-  reviewer types a focus area (e.g. "check error handling in the new
-  parser", "verify test coverage for public APIs") or leaves blank for
-  general review.
-- **Agent terminal tabs**: each running reviewer agent gets a tab in a
-  bottom/side panel. The tab shows the agent's nickname, status (running /
-  done), and a live terminal view (AppKit `NSViewRepresentable` wrapping a
-  PTY-backed terminal emulator).
-- **Multiple agents**: the reviewer can launch several agents with different
-  focus prompts simultaneously. Each operates independently on the same
-  session.
+- macOS native notifications when a worktree reaches
+  `awaiting_review` or when an agent replies to review feedback.
 
-### 10.4 Live Updates
+## 11. UX Principles
 
-- File watcher on the working tree; refresh diff without losing scroll or
-  comment context.
-- Mark threads as potentially stale when target lines move.
+- **Fast open**: project view within 1 second of launch.
+- **Clear status**: always show what each worktree/agent is doing.
+- **Minimal friction**: keyboard-first, single-action approve/launch.
+- **Traceability**: every thread shows author, timestamps, state.
+- **Native feel**: standard macOS chrome, libghostty terminals.
+- **Agent-agnostic**: works with any CLI agent, no lock-in.
 
-### 10.5 Notifications
+## 12. Milestones
 
-- macOS native notifications (via `UNUserNotificationCenter`) when a session
-  transitions to `awaiting_reviewer`.
-- Notification includes session summary and a deep-link action to open the
-  session directly.
-- Future: push notifications to phone in remote/SaaS mode.
+### M1 — Rust Core + CLI + Skill Install ✅
 
-### 10.6 Platform Integration
+- argon-core with domain types, storage, diff, git integration.
+- Full CLI with agent/reviewer/draft/diff commands.
+- Skill auto-install.
 
-- `argon` CLI registered via shell PATH (symlink or `argon shell-integration`).
-- Supports `open argon://session/<id>` URL scheme for deep links.
-- Respects system appearance (light/dark).
-- Native keyboard shortcuts (⌘-Enter to submit comment, etc.).
+### M2 — macOS Diff Viewer ✅
 
-## 11. IPC Protocol
+- SwiftUI app with file tree, diff rendering, session loading.
+- CLI-driven launch (`argon .` opens app).
 
-- Transport: Unix domain socket at a well-known path
-  (`$TMPDIR/argon-<uid>/ipc.sock`).
-- Framing: length-prefixed JSON messages (4-byte big-endian length + UTF-8
-  JSON payload).
-- Patterns:
-  - **Request/response** — CLI or app sends a request, core replies.
-  - **Server-push** — core pushes file-watcher diffs and session state changes.
-- The IPC server is embedded in the CLI process (when launched via `argon .`)
-  or in the app process (when launched standalone).
+### M3 — Review Loop ✅
 
-## 12. UX Principles
+- Inline comments, draft review batching, decisions.
+- Thread replies and resolve.
+- Session polling, close-on-exit, agent handoff.
+- Mode selector (branch/commit/uncommitted).
 
-- **Fast open**: diff visible within 1 second of launch.
-- **Clear status**: always show who the session is waiting on.
-- **Minimal friction**: keyboard-first review, single-action approve/request.
-- **Traceability**: every thread shows author, timestamps, and state.
-- **Native feel**: standard macOS chrome, no web-view seams.
+### M4 — Live Updates + Polish ✅
 
-## 13. Milestones
+- FSEvents file watcher, live diff refresh.
+- Syntax highlighting (syntect + two-face).
+- Word-level diff highlighting.
+- Unified/side-by-side toggle.
+- File tree with fuzzy/glob/regex filter.
+- Search across diff content.
+- Keyboard shortcuts and menu items.
+- Rolling number animations.
 
-### M1 — Rust Core + CLI + Skill Install
+### M5 — Bundled App
 
-- Port `argon-core` and `argon` CLI from the Tauri workspace.
-- Add `argon-ipc` crate with socket server and JSON protocol.
-- All existing CLI commands work identically.
-- Storage is compatible with the Tauri prototype.
-- `argon skill install` works for headless environments.
-- Bundled skill auto-installs into detected agent skill homes.
+- Embed `argon` CLI in `Argon.app/Contents/Resources/bin/argon`.
+- `make package` target for distributable `.app`.
+- Skill auto-install on first launch.
+- URL scheme: `argon://session/<id>`.
 
-### M2 — macOS Diff Viewer (read-only)
+### M6 — Project Window
 
-- Swift app connects to IPC, renders file tree and diff.
-- `argon .` launches the app and loads the session.
-- Skill auto-install on first app launch.
-- No commenting yet — read-only diff inspection.
+- Window-per-directory project view.
+- Worktree sidebar with status tracking.
+- Project config (`.argon/config.toml`).
+- "New Task" flow: pick agent, write prompt, create worktree.
+- Review summary inspector.
 
-### M3 — Review Loop
+### M7 — Terminal Embedding
 
-- Line and global comments in the native UI.
-- Review decision controls (approve / request changes / comment).
-- Agent handoff command display.
-- Full round-trip: agent starts → reviewer comments → agent replies → approval.
-- OS notifications when session reaches `awaiting_reviewer`.
+- libghostty integration for terminal rendering.
+- Terminal panel in project window per worktree.
+- Agent launch into terminal with prompt.
+- Interactive terminal support (human can type).
 
-### M4 — Live Updates + Polish
+### M8 — Agent Orchestration
 
-- File watcher integration; diff refreshes without losing context.
-- Stale-thread detection after line shifts.
-- System appearance support, keyboard shortcuts, URL scheme.
-- Bundled `.app` with embedded CLI.
+- Agent picker with detected profiles (Claude Code, Codex, Gemini).
+- Sandbox/YOLO mode toggle per agent launch.
+- Worktree lifecycle: create → agent runs → review → approve → merge.
+- Reviewer agent launch from review window.
+- Multiple concurrent agents per project.
 
-### M5 — Reviewer Agent Launch
-
-- Reviewer agent launch menu with detected agent profiles.
-- Focus prompt input before launch.
-- Embedded terminal tabs for running reviewer agents (AppKit PTY wrapper).
-- Multiple concurrent reviewer agents with nicknames and independent tabs.
-
-### M6 — Remote / SaaS Mode
-
-- `RemoteBackend` implementation (HTTPS/WSS to coordinator).
-- Coordinator service with project configs, sandbox provisioning, session
-  relay, and push notifications.
-- Desktop app seamlessly switches between local and remote sessions.
-- Mobile access (form factor TBD).
-
-## 14. Risks and Mitigations
+## 13. Risks and Mitigations
 
 | Risk | Mitigation |
 |---|---|
-| IPC complexity vs Tauri's built-in bridge | Keep protocol minimal (JSON over Unix socket); add integration tests early. |
-| Swift ↔ Rust FFI surface | Use IPC (not direct FFI) for v1 to keep the boundary simple and debuggable. Evaluate `swift-bridge` or C FFI later if latency matters. |
-| Diff rendering performance for large repos | Stream hunks lazily; render visible viewport first. |
-| Line mapping drift after edits | Same mitigation as Tauri: store old/new anchors, best-effort remap. |
-| Remote/SaaS complexity (future) | Deferred — the `ReviewBackend` trait is the insurance policy. Build local-first, validate the trait surface, then add `RemoteBackend`. |
+| libghostty integration complexity | Start with a simple PTY wrapper; upgrade to libghostty incrementally. |
+| Worktree management edge cases | Git worktrees are well-tested; add cleanup on close and conflict detection. |
+| Terminal performance in SwiftUI | Use NSViewRepresentable for the terminal; SwiftUI for chrome. |
+| Agent diversity (different CLIs) | Abstract via command template + env vars; test with Claude Code, Codex, and a shell script. |
+| Diff rendering for large repos | Stream hunks lazily; fingerprint-based refresh avoids unnecessary re-parses. |
 
-## 15. Open Questions
+## 14. Open Questions
 
-- Should the IPC server be a long-running daemon, or spawn-per-session?
-- Evaluate `swift-bridge` vs pure IPC for the Swift ↔ Rust boundary.
-- Is SQLite WAL sufficient for concurrent CLI + app access, or do we need the
-  IPC server to serialize all writes?
-- Terminal emulator strategy for reviewer-agent tabs: bundle a Swift terminal
-  library (e.g. SwiftTerm) or shell out to an external terminal?
-- Remote/SaaS details (coordinator hosting, sandbox runtime, mobile form
-  factor, secrets management) are deferred to M6 planning.
+- libghostty licensing and embedding story — is it available as a library?
+- Should worktree branches auto-name (e.g. `argon/task-<id>`) or let
+  the user choose?
+- Merge strategy on approval: squash merge, regular merge, or just
+  leave the branch for the user to merge?
+- Should the project window show a combined diff across all worktrees,
+  or only per-worktree?
+- Agent sandboxing: Docker, macOS sandbox, or just file system
+  permissions?
