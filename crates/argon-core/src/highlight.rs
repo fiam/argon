@@ -58,14 +58,14 @@ pub struct HighlightedDiff {
 
 /// Available theme names.
 pub fn available_themes() -> Vec<String> {
-    let ts = ThemeSet::load_defaults();
+    let ts: ThemeSet = two_face::theme::extra().into();
     ts.themes.keys().cloned().collect()
 }
 
 /// Highlight a parsed diff with syntax coloring.
 pub fn highlight_diff(diff: &ReviewDiff, theme_name: &str) -> HighlightedDiff {
-    let ss = SyntaxSet::load_defaults_newlines();
-    let ts = ThemeSet::load_defaults();
+    let ss = two_face::syntax::extra_newlines();
+    let ts: ThemeSet = two_face::theme::extra().into();
     let theme = ts.themes.get(theme_name).unwrap_or_else(|| {
         ts.themes
             .get("base16-ocean.dark")
