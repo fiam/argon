@@ -512,13 +512,7 @@ struct ThreadsSidebar: View {
   }
 
   private func scrollToThread(_ thread: ReviewThread) {
-    // Scroll to the thread's anchor line in the diff
-    if let anchor = thread.comments.first?.anchor,
-      let filePath = anchor.filePath
-    {
-      // First scroll to the file
-      appState.scrollToFile = filePath
-    }
+    appState.scrollToThread = thread.id.uuidString
   }
 
   private struct AgentDecisionInfo {

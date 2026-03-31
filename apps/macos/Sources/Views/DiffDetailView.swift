@@ -60,6 +60,12 @@ struct DiffDetailView: View {
               appState.scrollToFile = nil
             }
           }
+          .onChange(of: appState.scrollToThread) { _, threadId in
+            if let threadId {
+              proxy.scrollTo("thread-\(threadId)", anchor: .center)
+              appState.scrollToThread = nil
+            }
+          }
           .onChange(of: appState.scrollToSearchMatch) { _, lineId in
             if let lineId {
               withAnimation(.easeInOut(duration: 0.2)) {
@@ -131,13 +137,23 @@ struct DiffDetailView: View {
 
   private func outdatedThreads(for file: FileDiff) -> [ReviewThread] {
     guard let session = appState.session else { return [] }
+    // Collect all new-side line numbers visible in the diff
     let linesInDiff = Set(file.hunks.flatMap(\.lines).compactMap(\.newLine))
+    // Collect the ranges covered by hunks (lines that are "in scope")
+    let hunkRanges: [ClosedRange<UInt32>] = file.hunks.compactMap { hunk in
+      let hunkLines = hunk.lines.compactMap(\.newLine)
+      guard let lo = hunkLines.min(), let hi = hunkLines.max() else { return nil }
+      return lo...hi
+    }
 
     return session.threads.filter { thread in
       guard let anchor = thread.comments.first?.anchor,
         anchor.filePath == file.newPath
       else { return false }
       guard let line = anchor.lineNew else { return true }
+      // Only outdated if the line falls within a hunk range but isn't in the diff
+      let inHunkScope = hunkRanges.contains { $0.contains(line) }
+      if !inHunkScope { return false }  // line is outside all hunks — not outdated
       return !linesInDiff.contains(line)
     }
   }
@@ -406,6 +422,7 @@ struct DiffHunkView: View {
             switch item {
             case .thread(let thread):
               InlineThreadView(thread: thread, isOutdated: false)
+                .id("thread-\(thread.id)")
             case .draft(let draft):
               InlineDraftView(draft: draft)
             }
@@ -444,6 +461,7 @@ struct SideBySideDiffView: View {
                 switch item {
                 case .thread(let thread):
                   InlineThreadView(thread: thread, isOutdated: false)
+                    .id("thread-\(thread.id)")
                 case .draft(let draft):
                   InlineDraftView(draft: draft)
                 }

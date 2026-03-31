@@ -1225,7 +1225,7 @@ fn build_reviewer_prompt(
     );
     lines.push(format!("Decision template: {decision_command_template}"));
     lines.push(
-        "Use `changes-requested` when the agent must make changes. Use `commented` when the pass is clean or when feedback is non-blocking."
+        "Use `changes-requested` when the agent must make changes. Use `commented` when the pass is clean or when feedback is non-blocking. You MUST always submit a decision — never end your review without one. The human sees your verdict to inform their final decision."
             .to_string(),
     );
     lines.push(
@@ -1248,7 +1248,7 @@ fn build_reviewer_prompt(
             .to_string(),
     );
     lines.push(
-        "Use conventional comment prefixes: 'nit:' for minor style issues, 'suggestion:' for optional improvements, 'issue:' for things that must change, 'question:' for things you want clarified, 'praise:' for good patterns worth calling out."
+        "Use conventional comment prefixes: 'nit:' for minor style issues, 'suggestion:' for optional improvements, 'issue:' for things that must change, 'question:' for things you want clarified, 'praise:' for good patterns worth calling out. When working through a complex review, leave progress comments so the human knows what you're thinking (e.g. 'Reviewing error handling in auth module...')."
             .to_string(),
     );
     lines.push(

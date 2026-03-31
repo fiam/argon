@@ -25,6 +25,7 @@ final class AppState {
   var searchMatches: [SearchMatch] = []
   var currentSearchMatchIndex = 0
   var scrollToSearchMatch: UUID?
+  var scrollToThread: String?
 
   // Focus triggers
   var focusFileFilter = false
