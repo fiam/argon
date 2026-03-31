@@ -1243,6 +1243,10 @@ fn build_reviewer_prompt(
         "Answer on the same thread with `--thread <thread-id>` whenever you are replying to an existing discussion."
             .to_string(),
     );
+    lines.push(
+        "IMPORTANT: After submitting your decision and comments, run the wait command to keep monitoring. The coding agent may reply to your feedback and you should respond. Keep looping: review → comment → decide → wait → respond to replies → wait again. Only stop when the session becomes `approved` or `closed`."
+            .to_string(),
+    );
 
     if pending_feedback.is_empty() {
         lines.push(
