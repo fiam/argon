@@ -16,14 +16,13 @@ struct AgentTerminalView: NSViewRepresentable {
     termView.processDelegate = context.coordinator
 
     let shell = "/bin/zsh"
-    // cd to repo root before running the agent command
-    let cdAndRun = "cd \(shellQuote(agent.repoRoot)) && \(agent.fullCommand)"
-    let args = ["-l", "-c", cdAndRun]
+    let args = ["-l", "-c", agent.fullCommand]
     termView.startProcess(
       executable: shell,
       args: args,
       environment: buildEnvironment(),
-      execName: nil
+      execName: nil,
+      currentDirectory: agent.repoRoot
     )
 
     return termView
@@ -33,10 +32,6 @@ struct AgentTerminalView: NSViewRepresentable {
 
   func makeCoordinator() -> Coordinator {
     Coordinator(agent: agent)
-  }
-
-  private func shellQuote(_ s: String) -> String {
-    "'\(s.replacingOccurrences(of: "'", with: "'\\''"))'"
   }
 
   private func buildEnvironment() -> [String] {
