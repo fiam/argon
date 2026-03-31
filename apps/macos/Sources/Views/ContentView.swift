@@ -69,7 +69,17 @@ struct ReviewLayout: View {
           }
         }
         Divider()
-        DiffDetailView()
+
+        if appState.showAgentTerminals && !appState.reviewerAgents.isEmpty {
+          VSplitView {
+            DiffDetailView()
+              .frame(minHeight: 200)
+            ReviewerAgentTabsView()
+              .frame(minHeight: 150, idealHeight: 250)
+          }
+        } else {
+          DiffDetailView()
+        }
       }
       .inspector(isPresented: $showInspector) {
         ThreadsSidebar(session: session)
@@ -77,7 +87,18 @@ struct ReviewLayout: View {
       }
     }
     .toolbar {
-      ToolbarItem(placement: .automatic) {
+      ToolbarItemGroup(placement: .automatic) {
+        if !appState.reviewerAgents.isEmpty {
+          Button {
+            appState.showAgentTerminals.toggle()
+          } label: {
+            Image(systemName: "terminal")
+          }
+          .help(
+            appState.showAgentTerminals ? "Hide agent terminals" : "Show agent terminals"
+          )
+        }
+
         Button {
           showInspector.toggle()
         } label: {

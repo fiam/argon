@@ -155,6 +155,32 @@ enum ArgonCLI {
       ])
   }
 
+  static func buildReviewerPrompt(
+    sessionId: String, repoRoot: String, nickname: String,
+    focusPrompt: String?, cli: String
+  ) -> String {
+    var lines: [String] = []
+    lines.append(
+      "You are reviewer \(nickname) for Argon session \(sessionId) in \(repoRoot)."
+    )
+    if let focus = focusPrompt, !focus.isEmpty {
+      lines.append("Focus your review on: \(focus)")
+    }
+    lines.append("Review the current changes and leave feedback using these commands:")
+    lines.append(
+      "Comment: \(cli) --repo \(repoRoot) reviewer comment --session \(sessionId) --reviewer \(nickname) --message \"<comment>\" [--file <path> --line-new <n>]"
+    )
+    lines.append(
+      "Decision: \(cli) --repo \(repoRoot) reviewer decide --session \(sessionId) --reviewer \(nickname) --outcome <changes-requested|commented>"
+    )
+    lines.append(
+      "Wait for replies: \(cli) --repo \(repoRoot) reviewer wait --session \(sessionId) --reviewer \(nickname) --json"
+    )
+    lines.append("Do NOT approve — only the human reviewer can approve.")
+    lines.append("Do NOT edit files. You may inspect the repo and run tests.")
+    return lines.joined(separator: "\n")
+  }
+
   @discardableResult
   private static func run(repoRoot: String, args: [String]) throws -> String {
     let cli = findCLI()

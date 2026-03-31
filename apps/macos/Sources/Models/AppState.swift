@@ -12,6 +12,10 @@ final class AppState {
   var pendingDrafts: [DraftComment] = []
   var scrollToFile: String?
 
+  // Reviewer agents
+  var reviewerAgents: [ReviewerAgentInstance] = []
+  var showAgentTerminals = false
+
   // Diff view mode toggle
   var diffMode: DiffViewMode = .unified
 
@@ -578,6 +582,40 @@ final class AppState {
     } else if activeCommentLineId != nil {
       closeCommentEditor()
     }
+  }
+
+  // MARK: - Reviewer Agents
+
+  func launchReviewerAgent(profile: AgentProfile, focusPrompt: String?) {
+    guard let sessionId, let repoRoot else { return }
+    let nickname = DetectiveNames.next()
+    let agent = ReviewerAgentInstance(
+      nickname: nickname,
+      profile: profile,
+      focusPrompt: focusPrompt,
+      sessionId: sessionId,
+      repoRoot: repoRoot
+    )
+    reviewerAgents.append(agent)
+    showAgentTerminals = true
+  }
+
+  func stopReviewerAgent(_ id: UUID) {
+    if let idx = reviewerAgents.firstIndex(where: { $0.id == id }) {
+      reviewerAgents[idx].stop()
+      reviewerAgents.remove(at: idx)
+    }
+    if reviewerAgents.isEmpty {
+      showAgentTerminals = false
+    }
+  }
+
+  func stopAllReviewerAgents() {
+    for agent in reviewerAgents {
+      agent.stop()
+    }
+    reviewerAgents.removeAll()
+    showAgentTerminals = false
   }
 }
 

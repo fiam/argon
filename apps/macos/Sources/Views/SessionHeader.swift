@@ -31,6 +31,7 @@ struct SessionHeader: View {
       DiffModeToggle()
 
       if session.status != .approved && session.status != .closed {
+        AgentLaunchButton()
         HandoffButton()
         Divider().frame(height: 16)
         reviewActions

@@ -1,0 +1,209 @@
+import SwiftUI
+
+struct AgentLaunchButton: View {
+  @Environment(AppState.self) private var appState
+  @State private var showLaunchSheet = false
+
+  var body: some View {
+    Button {
+      showLaunchSheet = true
+    } label: {
+      Label("Launch Reviewer", systemImage: "person.badge.plus")
+    }
+    .controlSize(.small)
+    .disabled(appState.session?.status == .approved || appState.session?.status == .closed)
+    .sheet(isPresented: $showLaunchSheet) {
+      AgentLaunchSheet(isPresented: $showLaunchSheet)
+    }
+  }
+}
+
+struct AgentLaunchSheet: View {
+  @Environment(AppState.self) private var appState
+  @Binding var isPresented: Bool
+  @State private var detectedAgents: [AgentProfile] = []
+  @State private var selectedAgent: AgentProfile?
+  @State private var focusPrompt = ""
+  @State private var customCommand = ""
+  @State private var useCustom = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 20) {
+      // Header
+      HStack(spacing: 10) {
+        Image(systemName: "person.badge.plus")
+          .font(.title)
+          .foregroundStyle(.blue)
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Launch Reviewer Agent")
+            .font(.title2)
+            .fontWeight(.semibold)
+          Text("The agent will review the current diff and post comments.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      // Agent picker
+      VStack(alignment: .leading, spacing: 8) {
+        Text("Agent")
+          .font(.callout)
+          .fontWeight(.medium)
+          .foregroundStyle(.secondary)
+
+        if detectedAgents.isEmpty && !useCustom {
+          HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+              .foregroundStyle(.orange)
+            Text("No agents detected. Use a custom command.")
+              .font(.callout)
+              .foregroundStyle(.secondary)
+          }
+        }
+
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140))], spacing: 6) {
+          ForEach(detectedAgents) { agent in
+            AgentPickerCard(
+              agent: agent,
+              isSelected: !useCustom && selectedAgent?.id == agent.id
+            ) {
+              selectedAgent = agent
+              useCustom = false
+            }
+          }
+
+          // Custom command card
+          Button {
+            useCustom = true
+            selectedAgent = nil
+          } label: {
+            HStack(spacing: 6) {
+              Image(systemName: "terminal")
+                .foregroundStyle(useCustom ? .purple : .secondary)
+              Text("Custom")
+                .fontWeight(useCustom ? .medium : .regular)
+            }
+            .font(.callout)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .background(
+              useCustom ? Color.purple.opacity(0.12) : Color(nsColor: .controlBackgroundColor)
+            )
+            .foregroundStyle(useCustom ? .purple : .primary)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+              RoundedRectangle(cornerRadius: 8)
+                .stroke(
+                  useCustom ? Color.purple.opacity(0.4) : Color(nsColor: .separatorColor),
+                  lineWidth: 1)
+            )
+          }
+          .buttonStyle(.plain)
+        }
+
+        if useCustom {
+          TextField("Command (e.g. claude --dangerously-skip-permissions)", text: $customCommand)
+            .textFieldStyle(.roundedBorder)
+            .font(.system(.body, design: .monospaced))
+        }
+      }
+
+      // Focus prompt
+      VStack(alignment: .leading, spacing: 6) {
+        Text("Focus (optional)")
+          .font(.callout)
+          .fontWeight(.medium)
+          .foregroundStyle(.secondary)
+        TextField(
+          "e.g. check error handling, verify test coverage...",
+          text: $focusPrompt
+        )
+        .textFieldStyle(.roundedBorder)
+      }
+
+      // Actions
+      HStack {
+        Spacer()
+        Button("Cancel") {
+          isPresented = false
+        }
+        .keyboardShortcut(.cancelAction)
+
+        Button("Launch") {
+          launch()
+        }
+        .keyboardShortcut(.defaultAction)
+        .disabled(!canLaunch)
+      }
+    }
+    .padding(24)
+    .frame(width: 500)
+    .onAppear {
+      detectedAgents = AgentDetector.detectAgents()
+      selectedAgent = detectedAgents.first
+    }
+  }
+
+  private var canLaunch: Bool {
+    if useCustom {
+      return !customCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    return selectedAgent != nil
+  }
+
+  private func launch() {
+    let profile: AgentProfile
+    if useCustom {
+      let cmd = customCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+      profile = AgentProfile(
+        id: "custom-\(UUID().uuidString.prefix(8))",
+        name: "Custom",
+        command: cmd,
+        icon: "terminal",
+        isDetected: false
+      )
+    } else {
+      guard let selected = selectedAgent else { return }
+      profile = selected
+    }
+
+    let focus = focusPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    appState.launchReviewerAgent(
+      profile: profile,
+      focusPrompt: focus.isEmpty ? nil : focus
+    )
+    isPresented = false
+  }
+}
+
+struct AgentPickerCard: View {
+  let agent: AgentProfile
+  let isSelected: Bool
+  let onSelect: () -> Void
+
+  var body: some View {
+    Button(action: onSelect) {
+      HStack(spacing: 6) {
+        Image(systemName: agent.icon)
+          .foregroundStyle(isSelected ? .blue : .secondary)
+        Text(agent.name)
+          .fontWeight(isSelected ? .medium : .regular)
+          .lineLimit(1)
+      }
+      .font(.callout)
+      .padding(.horizontal, 12)
+      .padding(.vertical, 8)
+      .frame(maxWidth: .infinity)
+      .background(isSelected ? Color.blue.opacity(0.12) : Color(nsColor: .controlBackgroundColor))
+      .foregroundStyle(isSelected ? .blue : .primary)
+      .clipShape(RoundedRectangle(cornerRadius: 8))
+      .overlay(
+        RoundedRectangle(cornerRadius: 8)
+          .stroke(
+            isSelected ? Color.blue.opacity(0.4) : Color(nsColor: .separatorColor), lineWidth: 1)
+      )
+    }
+    .buttonStyle(.plain)
+  }
+}
