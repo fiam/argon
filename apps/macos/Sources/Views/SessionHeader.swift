@@ -52,8 +52,8 @@ struct SessionHeader: View {
           .foregroundStyle(.secondary)
       }
     }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 8)
+    .padding(.horizontal, 12)
+    .padding(.vertical, 5)
     .background(Color(nsColor: .controlBackgroundColor))
     .sheet(isPresented: $showSubmitSheet) {
       SubmitReviewSheet(
@@ -502,8 +502,8 @@ struct DiffStatView: View {
           .font(.caption)
           .foregroundStyle(.secondary)
 
-        RollingNumber(added, prefix: "+", color: .green)
-        RollingNumber(removed, prefix: "-", color: .red)
+        RollingNumber(added, prefix: "+", color: Color(nsColor: .systemGreen))
+        RollingNumber(removed, prefix: "-", color: Color(nsColor: .systemRed))
 
         DiffStatBar(added: added, removed: removed)
       }

@@ -258,8 +258,8 @@ struct DiffFileHeader: View {
         .fontWeight(.medium)
       Spacer()
       HStack(spacing: 4) {
-        RollingNumber(file.addedCount, prefix: "+", color: .green)
-        RollingNumber(file.removedCount, prefix: "-", color: .red)
+        RollingNumber(file.addedCount, prefix: "+", color: Color(nsColor: .systemGreen))
+        RollingNumber(file.removedCount, prefix: "-", color: Color(nsColor: .systemRed))
       }
     }
     .padding(.horizontal, 16)

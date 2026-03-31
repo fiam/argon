@@ -313,10 +313,12 @@ struct FileTreeFileRow: View {
         Spacer()
         HStack(spacing: 2) {
           if file.addedCount > 0 {
-            RollingNumber(file.addedCount, prefix: "+", color: .green, font: .caption2)
+            RollingNumber(
+              file.addedCount, prefix: "+", color: Color(nsColor: .systemGreen), font: .caption2)
           }
           if file.removedCount > 0 {
-            RollingNumber(file.removedCount, prefix: "-", color: .red, font: .caption2)
+            RollingNumber(
+              file.removedCount, prefix: "-", color: Color(nsColor: .systemRed), font: .caption2)
           }
         }
       }
