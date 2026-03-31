@@ -1813,19 +1813,45 @@ fn wait_for_reviewer_feedback(
     timeout_secs: Option<u64>,
 ) -> Result<WaitResult> {
     let started = Instant::now();
+    let initial_session = store.load(session_id)?;
+    let initial_status = initial_session.status;
+    let initial_decision = initial_session.decision.is_some();
+    let initial_thread_count = initial_session.threads.len();
+    let initial_comment_count: usize = initial_session
+        .threads
+        .iter()
+        .map(|t| t.comments.len())
+        .sum();
+
     loop {
         let session = store.load(session_id)?;
+
+        // Terminal states
         if matches!(
             session.status,
             SessionStatus::Approved | SessionStatus::Closed
         ) {
             return Ok(WaitResult::Ready(session));
         }
+
+        // Check for pending feedback on subscribed threads
         let last_seen_at = store.load_reviewer_last_seen(session_id, reviewer_name)?;
         let pending_feedback =
             collect_pending_reviewer_feedback(&session, reviewer_name, last_seen_at);
         if !pending_feedback.is_empty() {
             mark_reviewer_feedback_seen(store, session_id, reviewer_name, &pending_feedback)?;
+            return Ok(WaitResult::Ready(session));
+        }
+
+        // Also wake when session state changes materially (new threads,
+        // new comments on any thread, status change, new decision)
+        let current_thread_count = session.threads.len();
+        let current_comment_count: usize = session.threads.iter().map(|t| t.comments.len()).sum();
+        if session.status != initial_status
+            || session.decision.is_some() != initial_decision
+            || current_thread_count != initial_thread_count
+            || current_comment_count != initial_comment_count
+        {
             return Ok(WaitResult::Ready(session));
         }
 
