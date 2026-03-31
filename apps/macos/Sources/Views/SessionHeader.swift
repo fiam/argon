@@ -496,17 +496,21 @@ struct DiffStatView: View {
 
   var body: some View {
     if !files.isEmpty {
-      HStack(spacing: 6) {
-        RollingNumber(files.count, color: .secondary)
-        Text("files")
-          .font(.caption)
+      HStack(spacing: 4) {
+        Text("\(files.count) files")
+          .font(.caption2)
           .foregroundStyle(.secondary)
-
-        RollingNumber(added, prefix: "+", color: Color(nsColor: .systemGreen))
-        RollingNumber(removed, prefix: "-", color: Color(nsColor: .systemRed))
-
+        Text("+\(added)")
+          .font(.caption2)
+          .fontWeight(.medium)
+          .foregroundColor(Color(nsColor: .systemGreen))
+        Text("-\(removed)")
+          .font(.caption2)
+          .fontWeight(.medium)
+          .foregroundColor(Color(nsColor: .systemRed))
         DiffStatBar(added: added, removed: removed)
       }
+      .fixedSize()
     }
   }
 }
