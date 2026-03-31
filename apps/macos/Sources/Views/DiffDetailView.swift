@@ -995,7 +995,7 @@ struct InlineCommentEditor: View {
       FocusedTextEditor(
         text: $state.activeCommentText,
         onCommandReturn: {
-          submitIfNotEmpty()
+          submitImmediate()
         }
       )
       .frame(height: 70)
@@ -1013,7 +1013,7 @@ struct InlineCommentEditor: View {
           .padding(.vertical, 1)
           .background(Color(nsColor: .separatorColor).opacity(0.3))
           .clipShape(RoundedRectangle(cornerRadius: 3))
-        Text("to submit")
+        Text("comment")
           .font(.caption2)
           .foregroundStyle(.tertiary)
         Spacer()
@@ -1021,10 +1021,16 @@ struct InlineCommentEditor: View {
           appState.closeCommentEditor()
         }
         .controlSize(.small)
-        Button("Add Comment") {
-          submitIfNotEmpty()
+        Button("Add to Review") {
+          addToDraft()
         }
         .controlSize(.small)
+        .disabled(isEmpty)
+        Button("Comment") {
+          submitImmediate()
+        }
+        .controlSize(.small)
+        .buttonStyle(.borderedProminent)
         .disabled(isEmpty)
       }
     }
@@ -1032,7 +1038,25 @@ struct InlineCommentEditor: View {
     .background(Color.blue.opacity(0.03))
   }
 
-  private func submitIfNotEmpty() {
+  private func submitImmediate() {
+    guard !isEmpty else { return }
+    guard let sessionId = appState.sessionId, let repoRoot = appState.repoRoot else { return }
+    do {
+      try ArgonCLI.addComment(
+        sessionId: sessionId, repoRoot: repoRoot,
+        message: appState.activeCommentText,
+        filePath: filePath,
+        lineNew: line.newLine,
+        lineOld: line.oldLine
+      )
+      appState.refreshSession()
+    } catch {
+      appState.errorMessage = error.localizedDescription
+    }
+    appState.closeCommentEditor()
+  }
+
+  private func addToDraft() {
     guard !isEmpty else { return }
     appState.addDraft(
       message: appState.activeCommentText,
