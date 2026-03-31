@@ -1244,7 +1244,7 @@ fn build_reviewer_prompt(
             .to_string(),
     );
     lines.push(
-        "IMPORTANT: After submitting your decision and comments, run the wait command to keep monitoring. The coding agent may reply to your feedback and you should respond. Keep looping: review → comment → decide → wait → respond to replies → wait again. Only stop when the session becomes `approved` or `closed`."
+        "IMPORTANT: After submitting your decision and comments, run the wait command to keep monitoring. You may receive replies from the coding agent addressing your feedback, from the human reviewer adding their own comments, or from other reviewer agents. Respond to all of them on the relevant threads. Keep looping: review → comment → decide → wait → respond to replies → wait again. Only stop when the session becomes `approved` or `closed`."
             .to_string(),
     );
 
