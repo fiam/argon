@@ -155,10 +155,36 @@ enum ArgonCLI {
       ])
   }
 
+  /// Get the reviewer prompt from the CLI (includes full context: mode, refs, commands).
+  static func reviewerPrompt(
+    sessionId: String, repoRoot: String, nickname: String
+  ) -> String? {
+    let result = try? run(
+      repoRoot: repoRoot,
+      args: [
+        "reviewer", "prompt",
+        "--session", sessionId,
+        "--reviewer", nickname,
+      ])
+    return result?.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  /// Build a reviewer prompt with optional focus instructions prepended.
   static func buildReviewerPrompt(
     sessionId: String, repoRoot: String, nickname: String,
     focusPrompt: String?, cli: String
   ) -> String {
+    // Try to get the full prompt from the CLI (includes mode, refs, commands)
+    if let cliPrompt = reviewerPrompt(
+      sessionId: sessionId, repoRoot: repoRoot, nickname: nickname)
+    {
+      if let focus = focusPrompt, !focus.isEmpty {
+        return "FOCUS: \(focus)\n\n\(cliPrompt)"
+      }
+      return cliPrompt
+    }
+
+    // Fallback if CLI unavailable
     var lines: [String] = []
     lines.append(
       "You are reviewer \(nickname) for Argon session \(sessionId) in \(repoRoot)."
@@ -168,13 +194,13 @@ enum ArgonCLI {
     }
     lines.append("Review the current changes and leave feedback using these commands:")
     lines.append(
-      "Comment: \(cli) --repo \(repoRoot) reviewer comment --session \(sessionId) --reviewer \(nickname) --message \"<comment>\" [--file <path> --line-new <n>]"
+      "Comment: \(cli) --repo \(repoRoot) reviewer comment --session \(sessionId) --reviewer \"\(nickname)\" --message \"<comment>\" [--file <path> --line-new <n>]"
     )
     lines.append(
-      "Decision: \(cli) --repo \(repoRoot) reviewer decide --session \(sessionId) --reviewer \(nickname) --outcome <changes-requested|commented>"
+      "Decision: \(cli) --repo \(repoRoot) reviewer decide --session \(sessionId) --reviewer \"\(nickname)\" --outcome <changes-requested|commented>"
     )
     lines.append(
-      "Wait for replies: \(cli) --repo \(repoRoot) reviewer wait --session \(sessionId) --reviewer \(nickname) --json"
+      "Wait for replies: \(cli) --repo \(repoRoot) reviewer wait --session \(sessionId) --reviewer \"\(nickname)\" --json"
     )
     lines.append("Do NOT approve — only the human reviewer can approve.")
     lines.append("Do NOT edit files. You may inspect the repo and run tests.")
