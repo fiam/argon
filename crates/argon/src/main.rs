@@ -1220,6 +1220,10 @@ fn build_reviewer_prompt(
             .to_string(),
     );
     lines.push(
+        "When you start reviewing a thread or a specific area, acknowledge it first by posting a brief comment on the thread: e.g. 'Reviewing this change...' or 'Looking into the error handling here...'. This shows the human in real time which parts you're actively thinking about."
+            .to_string(),
+    );
+    lines.push(
         "When you finish a review round, either leave more comments or submit one decision."
             .to_string(),
     );

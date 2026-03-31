@@ -745,6 +745,19 @@ struct InlineThreadView: View {
           Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
             .font(.caption2)
           threadBadge
+          if thread.agentAcknowledgedAt != nil && thread.state == .open {
+            HStack(spacing: 3) {
+              ProgressView()
+                .controlSize(.mini)
+              Text("thinking")
+                .font(.system(size: 9, weight: .medium))
+            }
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Color.purple.opacity(0.15))
+            .foregroundStyle(.purple)
+            .clipShape(Capsule())
+          }
           if isOutdated {
             Text("outdated")
               .font(.system(size: 9, weight: .medium))
