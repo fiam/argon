@@ -455,6 +455,8 @@ struct StatusBadge: View {
     Text(label)
       .font(.caption)
       .fontWeight(.medium)
+      .lineLimit(1)
+      .fixedSize()
       .padding(.horizontal, 8)
       .padding(.vertical, 3)
       .background(color.opacity(0.15))
