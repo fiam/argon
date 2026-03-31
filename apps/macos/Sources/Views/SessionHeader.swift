@@ -9,8 +9,8 @@ struct SessionHeader: View {
   @State private var submitOutcome: String = "commented"
 
   var body: some View {
-    HStack(spacing: 16) {
-      HStack(spacing: 12) {
+    HStack(spacing: 10) {
+      HStack(spacing: 8) {
         StatusBadge(status: session.status)
 
         ModePicker()
@@ -52,8 +52,8 @@ struct SessionHeader: View {
           .foregroundStyle(.secondary)
       }
     }
-    .padding(.horizontal, 12)
-    .padding(.vertical, 5)
+    .padding(.horizontal, 10)
+    .padding(.vertical, 3)
     .background(Color(nsColor: .controlBackgroundColor))
     .sheet(isPresented: $showSubmitSheet) {
       SubmitReviewSheet(
@@ -453,12 +453,12 @@ struct StatusBadge: View {
 
   var body: some View {
     Text(label)
-      .font(.caption)
+      .font(.caption2)
       .fontWeight(.medium)
       .lineLimit(1)
       .fixedSize()
-      .padding(.horizontal, 8)
-      .padding(.vertical, 3)
+      .padding(.horizontal, 6)
+      .padding(.vertical, 2)
       .background(color.opacity(0.15))
       .foregroundStyle(color)
       .clipShape(Capsule())
