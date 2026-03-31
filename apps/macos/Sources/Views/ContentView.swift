@@ -363,24 +363,69 @@ struct FileTreeFileRow: View {
 
 // MARK: - Threads Sidebar
 
+enum ThreadFilter: String, CaseIterable {
+  case all = "All"
+  case open = "Open"
+  case resolved = "Resolved"
+}
+
 struct ThreadsSidebar: View {
   @Environment(AppState.self) private var appState
   let session: ReviewSession
   @State private var showCommentPopover = false
   @State private var commentText = ""
+  @State private var threadFilter: ThreadFilter = .all
+
+  private var filteredThreads: [ReviewThread] {
+    switch threadFilter {
+    case .all: session.threads
+    case .open: session.threads.filter { $0.state == .open || $0.state == .addressed }
+    case .resolved: session.threads.filter { $0.state == .resolved }
+    }
+  }
+
+  private var openCount: Int {
+    session.threads.filter { $0.state == .open || $0.state == .addressed }.count
+  }
 
   var body: some View {
     VStack(spacing: 0) {
+      // Summary bar
+      if !session.threads.isEmpty {
+        HStack(spacing: 6) {
+          ForEach(ThreadFilter.allCases, id: \.self) { filter in
+            Button {
+              threadFilter = filter
+            } label: {
+              Text(filterLabel(filter))
+                .font(.caption2)
+                .fontWeight(threadFilter == filter ? .medium : .regular)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(threadFilter == filter ? Color.accentColor.opacity(0.12) : .clear)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(threadFilter == filter ? .primary : .secondary)
+          }
+          Spacer()
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        Divider()
+      }
+
+      // Add comment
       if session.status != .approved && session.status != .closed {
         Button {
           showCommentPopover = true
         } label: {
           Label("Add Comment", systemImage: "plus.bubble")
-            .font(.callout)
+            .font(.caption)
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
-        .padding(10)
+        .padding(.vertical, 6)
         .popover(isPresented: $showCommentPopover, arrowEdge: .trailing) {
           CommentEditorPopover(
             title: "Comment",
@@ -400,42 +445,105 @@ struct ThreadsSidebar: View {
       }
 
       ScrollView {
-        LazyVStack(alignment: .leading, spacing: 8) {
+        LazyVStack(alignment: .leading, spacing: 6) {
+          // Pending drafts
           if !appState.pendingDrafts.isEmpty {
             Text("Pending Review")
-              .font(.caption)
+              .font(.caption2)
               .fontWeight(.medium)
               .foregroundStyle(.purple)
             ForEach(appState.pendingDrafts) { draft in
               DraftRow(draft: draft)
             }
-            if !session.threads.isEmpty {
-              Divider()
-            }
+            if !filteredThreads.isEmpty { Divider() }
           }
 
-          if !session.threads.isEmpty {
-            Text("Threads")
-              .font(.caption)
-              .fontWeight(.medium)
-              .foregroundStyle(.secondary)
-            ForEach(session.threads) { thread in
+          // Agent decisions summary
+          let agentDecisions = reviewerAgentDecisions
+          if !agentDecisions.isEmpty {
+            ForEach(agentDecisions, id: \.name) { decision in
+              HStack(spacing: 4) {
+                Image(systemName: decision.icon)
+                  .font(.caption2)
+                  .foregroundStyle(decision.color)
+                Text(decision.name)
+                  .font(.caption2)
+                  .fontWeight(.medium)
+                  .foregroundStyle(colorFromName(decision.name))
+                Text(decision.outcome)
+                  .font(.caption2)
+                  .foregroundStyle(.secondary)
+              }
+              .padding(.vertical, 2)
+            }
+            if !filteredThreads.isEmpty { Divider() }
+          }
+
+          // Threads
+          ForEach(filteredThreads) { thread in
+            Button {
+              scrollToThread(thread)
+            } label: {
               SidebarThreadRow(thread: thread)
             }
+            .buttonStyle(.plain)
           }
 
           if appState.pendingDrafts.isEmpty && session.threads.isEmpty {
             Text("No comments yet")
-              .font(.caption)
+              .font(.caption2)
               .foregroundStyle(.tertiary)
               .frame(maxWidth: .infinity)
               .padding(.top, 20)
           }
         }
-        .padding(10)
+        .padding(8)
       }
     }
     .background(Color(nsColor: .controlBackgroundColor).opacity(0.3))
+  }
+
+  private func filterLabel(_ filter: ThreadFilter) -> String {
+    switch filter {
+    case .all: "All (\(session.threads.count))"
+    case .open: "Open (\(openCount))"
+    case .resolved: "Resolved (\(session.threads.count - openCount))"
+    }
+  }
+
+  private func scrollToThread(_ thread: ReviewThread) {
+    // Scroll to the thread's anchor line in the diff
+    if let anchor = thread.comments.first?.anchor,
+      let filePath = anchor.filePath
+    {
+      // First scroll to the file
+      appState.scrollToFile = filePath
+    }
+  }
+
+  private struct AgentDecisionInfo {
+    let name: String
+    let outcome: String
+    let icon: String
+    let color: Color
+  }
+
+  /// Collect decisions from named reviewer agents.
+  private var reviewerAgentDecisions: [AgentDecisionInfo] {
+    guard let decision = session.decision else { return [] }
+    // Check if any running agents match
+    var results: [AgentDecisionInfo] = []
+    for agent in appState.reviewerAgents {
+      let (icon, color, label): (String, Color, String) =
+        switch decision.outcome {
+        case .changesRequested: ("arrow.uturn.backward.circle.fill", .orange, "changes requested")
+        case .commented: ("text.bubble.fill", .blue, "commented")
+        case .approved: ("checkmark.circle.fill", .green, "approved")
+        }
+      results.append(
+        AgentDecisionInfo(name: agent.nickname, outcome: label, icon: icon, color: color))
+    }
+    return results
   }
 }
 
@@ -484,34 +592,62 @@ struct SidebarThreadRow: View {
   let thread: ReviewThread
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      HStack {
+    VStack(alignment: .leading, spacing: 3) {
+      HStack(spacing: 4) {
         threadStateBadge
         if let anchor = thread.comments.first?.anchor,
           let file = anchor.filePath
         {
-          Text(file)
+          Text(URL(fileURLWithPath: file).lastPathComponent)
             .font(.caption2)
             .foregroundStyle(.secondary)
             .lineLimit(1)
+          if let line = anchor.lineNew {
+            Text(":\(line)")
+              .font(.caption2)
+              .foregroundStyle(.tertiary)
+          }
         }
         Spacer()
+        Text("\(thread.comments.count)")
+          .font(.caption2)
+          .foregroundStyle(.quaternary)
       }
-      ForEach(thread.comments) { comment in
-        HStack(alignment: .top, spacing: 4) {
-          Text(commentAuthorLabel(comment))
-            .font(.caption2)
-            .fontWeight(.medium)
-            .foregroundStyle(comment.author == .reviewer ? .orange : .blue)
-          Text(comment.body)
-            .font(.caption2)
-            .lineLimit(2)
-        }
+      // Show only first and last comment for brevity
+      if let first = thread.comments.first {
+        sidebarCommentRow(first)
+      }
+      if thread.comments.count > 2 {
+        Text("···  \(thread.comments.count - 2) more")
+          .font(.caption2)
+          .foregroundStyle(.quaternary)
+      }
+      if thread.comments.count > 1, let last = thread.comments.last {
+        sidebarCommentRow(last)
       }
     }
     .padding(6)
     .background(Color(nsColor: .controlBackgroundColor))
     .clipShape(RoundedRectangle(cornerRadius: 4))
+  }
+
+  private func sidebarCommentRow(_ comment: ReviewComment) -> some View {
+    HStack(alignment: .top, spacing: 4) {
+      Text(commentAuthorLabel(comment))
+        .font(.caption2)
+        .fontWeight(.medium)
+        .foregroundStyle(authorColor(comment))
+      Text(comment.body)
+        .font(.caption2)
+        .lineLimit(1)
+        .foregroundStyle(.secondary)
+    }
+  }
+
+  private func authorColor(_ comment: ReviewComment) -> Color {
+    if comment.author == .agent { return .cyan }
+    if let name = comment.authorName { return colorFromName(name) }
+    return .blue  // human
   }
 
   @ViewBuilder

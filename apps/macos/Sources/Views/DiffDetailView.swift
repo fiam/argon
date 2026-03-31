@@ -878,12 +878,13 @@ struct InlineThreadView: View {
 }
 
 struct InlineCommentBubble: View {
+  @Environment(AppState.self) private var appState
   let comment: ReviewComment
 
   var body: some View {
     HStack(alignment: .top, spacing: 8) {
-      Image(systemName: comment.author == .reviewer ? "person.circle.fill" : "cpu")
-        .foregroundStyle(comment.author == .reviewer ? .orange : .blue)
+      Image(systemName: authorIcon)
+        .foregroundStyle(authorColor)
         .font(.callout)
 
       VStack(alignment: .leading, spacing: 2) {
@@ -891,7 +892,16 @@ struct InlineCommentBubble: View {
           Text(authorLabel)
             .font(.caption)
             .fontWeight(.semibold)
-            .foregroundStyle(comment.author == .reviewer ? .orange : .blue)
+            .foregroundStyle(authorColor)
+          if let focus = agentFocus {
+            Text(focus)
+              .font(.caption2)
+              .padding(.horizontal, 4)
+              .padding(.vertical, 1)
+              .background(authorColor.opacity(0.1))
+              .foregroundStyle(authorColor.opacity(0.8))
+              .clipShape(RoundedRectangle(cornerRadius: 3))
+          }
           Text(timeAgo(comment.createdAt))
             .font(.caption2)
             .foregroundStyle(.tertiary)
@@ -903,13 +913,48 @@ struct InlineCommentBubble: View {
     }
     .padding(8)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+    .background(authorColor.opacity(0.04))
     .clipShape(RoundedRectangle(cornerRadius: 6))
+    .overlay(
+      RoundedRectangle(cornerRadius: 6)
+        .stroke(authorColor.opacity(0.1), lineWidth: 0.5)
+    )
+  }
+
+  private var isHuman: Bool {
+    comment.author == .reviewer && comment.authorName == nil
+  }
+
+  private var isNamedReviewer: Bool {
+    comment.author == .reviewer && comment.authorName != nil
+  }
+
+  private var authorIcon: String {
+    if isHuman { return "person.fill" }
+    if isNamedReviewer { return "magnifyingglass.circle.fill" }
+    return "cpu"
+  }
+
+  private var authorColor: Color {
+    if isHuman { return .blue }
+    if comment.author == .agent { return .cyan }
+    // Named reviewer agent — derive color from name
+    if let name = comment.authorName {
+      return colorFromName(name)
+    }
+    return .orange
   }
 
   private var authorLabel: String {
+    if isHuman { return "You" }
     if let name = comment.authorName { return name }
-    return comment.author == .reviewer ? "Reviewer" : "Agent"
+    return comment.author == .agent ? "Agent" : "Reviewer"
+  }
+
+  /// Look up the focus prompt for this agent from the running reviewer agents.
+  private var agentFocus: String? {
+    guard let name = comment.authorName else { return nil }
+    return appState.reviewerAgents.first(where: { $0.nickname == name })?.focusPrompt
   }
 
   private func timeAgo(_ date: Date) -> String {
@@ -919,6 +964,16 @@ struct InlineCommentBubble: View {
     if interval < 86400 { return "\(Int(interval / 3600))h ago" }
     return "\(Int(interval / 86400))d ago"
   }
+}
+
+/// Derive a stable hue from a string name for consistent agent coloring.
+func colorFromName(_ name: String) -> Color {
+  var hash: UInt64 = 5381
+  for byte in name.utf8 {
+    hash = ((hash << 5) &+ hash) &+ UInt64(byte)
+  }
+  let hue = Double(hash % 360) / 360.0
+  return Color(hue: hue, saturation: 0.6, brightness: 0.85)
 }
 
 // MARK: - Inline Draft

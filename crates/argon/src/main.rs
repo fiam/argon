@@ -1244,6 +1244,14 @@ fn build_reviewer_prompt(
             .to_string(),
     );
     lines.push(
+        "When a concern is addressed or no longer relevant, resolve the thread. The human can see which threads are still open."
+            .to_string(),
+    );
+    lines.push(
+        "Use conventional comment prefixes: 'nit:' for minor style issues, 'suggestion:' for optional improvements, 'issue:' for things that must change, 'question:' for things you want clarified, 'praise:' for good patterns worth calling out."
+            .to_string(),
+    );
+    lines.push(
         "IMPORTANT: After submitting your decision and comments, run the wait command to keep monitoring. You may receive replies from the coding agent addressing your feedback, from the human reviewer adding their own comments, or from other reviewer agents. Respond to all of them on the relevant threads. Keep looping: review → comment → decide → wait → respond to replies → wait again. Only stop when the session becomes `approved` or `closed`."
             .to_string(),
     );
