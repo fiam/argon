@@ -974,6 +974,10 @@ struct InlineCommentEditor: View {
     appState.activeCommentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
+  private var hasActiveReview: Bool {
+    !appState.pendingDrafts.isEmpty
+  }
+
   private var title: String {
     var parts = [filePath]
     if let n = line.newLine { parts.append("L\(n)") }
@@ -1013,7 +1017,7 @@ struct InlineCommentEditor: View {
           .padding(.vertical, 1)
           .background(Color(nsColor: .separatorColor).opacity(0.3))
           .clipShape(RoundedRectangle(cornerRadius: 3))
-        Text("comment")
+        Text(hasActiveReview ? "add to review" : "comment")
           .font(.caption2)
           .foregroundStyle(.tertiary)
         Spacer()
@@ -1021,17 +1025,40 @@ struct InlineCommentEditor: View {
           appState.closeCommentEditor()
         }
         .controlSize(.small)
-        Button("Add to Review") {
-          addToDraft()
+
+        if hasActiveReview {
+          // Review in progress: "Add to Review" is primary
+          Button("Comment") {
+            submitImmediate()
+          }
+          .controlSize(.small)
+          .disabled(isEmpty)
+
+          Button {
+            addToDraft()
+          } label: {
+            Label("Add to Review", systemImage: "text.badge.plus")
+          }
+          .controlSize(.small)
+          .buttonStyle(.borderedProminent)
+          .disabled(isEmpty)
+        } else {
+          // No review yet: "Comment" is primary, offer to start a review
+          Button {
+            addToDraft()
+          } label: {
+            Label("Start a Review", systemImage: "text.badge.plus")
+          }
+          .controlSize(.small)
+          .disabled(isEmpty)
+
+          Button("Comment") {
+            submitImmediate()
+          }
+          .controlSize(.small)
+          .buttonStyle(.borderedProminent)
+          .disabled(isEmpty)
         }
-        .controlSize(.small)
-        .disabled(isEmpty)
-        Button("Comment") {
-          submitImmediate()
-        }
-        .controlSize(.small)
-        .buttonStyle(.borderedProminent)
-        .disabled(isEmpty)
       }
     }
     .padding(12)
