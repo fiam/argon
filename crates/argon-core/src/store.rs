@@ -157,10 +157,19 @@ impl SessionStore {
         fs::create_dir_all(&self.sessions_dir)?;
 
         let session_path = self.session_path(session.id);
-        let temp_path = session_path.with_extension("json.tmp");
+        // Use PID + random suffix to avoid temp file collisions between processes
+        let temp_name = format!(
+            "{}.{}-{}.tmp",
+            session.id,
+            std::process::id(),
+            uuid::Uuid::new_v4().as_fields().0
+        );
+        let temp_path = self.sessions_dir.join(temp_name);
         let payload = serde_json::to_vec_pretty(session)?;
-        fs::write(&temp_path, payload)?;
-        fs::rename(temp_path, session_path)?;
+        fs::write(&temp_path, &payload)?;
+        fs::rename(&temp_path, &session_path)?;
+        // Clean up temp file if rename failed (shouldn't happen on POSIX)
+        let _ = fs::remove_file(&temp_path);
         Ok(())
     }
 
@@ -581,10 +590,16 @@ impl SessionStore {
             .parent()
             .ok_or_else(|| io::Error::other("draft review path did not have a parent"))?;
         fs::create_dir_all(parent)?;
-        let temp_path = path.with_extension("json.tmp");
+        let temp_name = format!(
+            "draft-{}-{}.tmp",
+            std::process::id(),
+            uuid::Uuid::new_v4().as_fields().0
+        );
+        let temp_path = parent.join(temp_name);
         let payload = serde_json::to_vec_pretty(&draft_review)?;
-        fs::write(&temp_path, payload)?;
-        fs::rename(temp_path, path)?;
+        fs::write(&temp_path, &payload)?;
+        fs::rename(&temp_path, &path)?;
+        let _ = fs::remove_file(&temp_path);
         Ok(draft_review)
     }
 
