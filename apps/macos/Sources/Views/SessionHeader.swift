@@ -26,6 +26,12 @@ struct SessionHeader: View {
           .lineLimit(1)
       }
 
+      // Reviewer agent decision banner
+      if let decision = session.decision {
+        Divider().frame(height: 16)
+        DecisionBanner(decision: decision)
+      }
+
       Spacer()
 
       DiffModeToggle()
@@ -369,6 +375,55 @@ struct DecisionOption: View {
       )
     }
     .buttonStyle(.plain)
+  }
+}
+
+struct DecisionBanner: View {
+  let decision: ReviewDecision
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Image(systemName: icon)
+        .font(.caption)
+      Text(label)
+        .font(.caption)
+        .fontWeight(.medium)
+      if let summary = decision.summary, !summary.isEmpty {
+        Text("— \(summary)")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 4)
+    .background(color.opacity(0.12))
+    .foregroundStyle(color)
+    .clipShape(Capsule())
+  }
+
+  private var label: String {
+    switch decision.outcome {
+    case .approved: "Approved"
+    case .changesRequested: "Changes Requested"
+    case .commented: "Commented"
+    }
+  }
+
+  private var icon: String {
+    switch decision.outcome {
+    case .approved: "checkmark.circle.fill"
+    case .changesRequested: "arrow.uturn.backward.circle.fill"
+    case .commented: "text.bubble.fill"
+    }
+  }
+
+  private var color: Color {
+    switch decision.outcome {
+    case .approved: .green
+    case .changesRequested: .orange
+    case .commented: .blue
+    }
   }
 }
 
