@@ -35,4 +35,4 @@ pkill -x Argon 2>/dev/null && sleep 0.5 || true
 echo "==> Launching review session for $TARGET_REPO"
 ARGON_APP="$APP_PATH" "$REPO_ROOT/target/release/argon" \
     --repo "$TARGET_REPO" \
-    review --mode uncommitted
+    review
