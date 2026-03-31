@@ -1,4 +1,4 @@
-use std::fs;
+use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -151,6 +151,31 @@ impl SessionStore {
             }
             Err(error) => Err(StoreError::Io(error)),
         }
+    }
+
+    /// Acquire an exclusive lock on the session, load it, apply the closure,
+    /// and save it back. The lock is held for the entire read-modify-write cycle.
+    fn with_session_locked<F>(&self, session_id: Uuid, f: F) -> Result<ReviewSession, StoreError>
+    where
+        F: FnOnce(&mut ReviewSession) -> Result<(), StoreError>,
+    {
+        let lock_path = self.session_lock_path(session_id);
+        fs::create_dir_all(&self.sessions_dir)?;
+        let lock_file = File::create(&lock_path).map_err(StoreError::Io)?;
+        flock_exclusive(&lock_file)?;
+
+        let mut session = self.load(session_id)?;
+        f(&mut session)?;
+        self.save(&session)?;
+
+        // Lock released when lock_file is dropped
+        drop(lock_file);
+        let _ = fs::remove_file(&lock_path);
+        Ok(session)
+    }
+
+    fn session_lock_path(&self, session_id: Uuid) -> PathBuf {
+        self.sessions_dir.join(format!("{session_id}.lock"))
     }
 
     pub fn save(&self, session: &ReviewSession) -> Result<(), StoreError> {
@@ -390,32 +415,32 @@ impl SessionStore {
         session_id: Uuid,
         thread_id: Uuid,
     ) -> Result<ReviewSession, StoreError> {
-        let mut session = self.load(session_id)?;
-        let thread = session
-            .threads
-            .iter_mut()
-            .find(|thread| thread.id == thread_id)
-            .ok_or(StoreError::ThreadNotFound {
-                session_id,
-                thread_id,
-            })?;
-        thread.state = ThreadState::Resolved;
-        thread.agent_acknowledged_at = None;
+        self.with_session_locked(session_id, |session| {
+            let thread = session
+                .threads
+                .iter_mut()
+                .find(|thread| thread.id == thread_id)
+                .ok_or(StoreError::ThreadNotFound {
+                    session_id,
+                    thread_id,
+                })?;
+            thread.state = ThreadState::Resolved;
+            thread.agent_acknowledged_at = None;
 
-        if !matches!(
-            session.status,
-            SessionStatus::Approved | SessionStatus::Closed
-        ) {
-            session.status = if has_pending_reviewer_feedback(&session) {
-                SessionStatus::AwaitingAgent
-            } else {
-                SessionStatus::AwaitingReviewer
-            };
-        }
+            if !matches!(
+                session.status,
+                SessionStatus::Approved | SessionStatus::Closed
+            ) {
+                session.status = if has_pending_reviewer_feedback(session) {
+                    SessionStatus::AwaitingAgent
+                } else {
+                    SessionStatus::AwaitingReviewer
+                };
+            }
 
-        session.touch();
-        self.save(&session)?;
-        Ok(session)
+            session.touch();
+            Ok(())
+        })
     }
 
     pub fn acknowledge_thread(
@@ -423,21 +448,21 @@ impl SessionStore {
         session_id: Uuid,
         thread_id: Uuid,
     ) -> Result<ReviewSession, StoreError> {
-        let mut session = self.load(session_id)?;
-        let now = Utc::now();
-        let thread = session
-            .threads
-            .iter_mut()
-            .find(|thread| thread.id == thread_id)
-            .ok_or(StoreError::ThreadNotFound {
-                session_id,
-                thread_id,
-            })?;
-        thread.agent_acknowledged_at = Some(now);
-        session.agent_last_seen_at = Some(now);
-        session.touch();
-        self.save(&session)?;
-        Ok(session)
+        self.with_session_locked(session_id, |session| {
+            let now = Utc::now();
+            let thread = session
+                .threads
+                .iter_mut()
+                .find(|thread| thread.id == thread_id)
+                .ok_or(StoreError::ThreadNotFound {
+                    session_id,
+                    thread_id,
+                })?;
+            thread.agent_acknowledged_at = Some(now);
+            session.agent_last_seen_at = Some(now);
+            session.touch();
+            Ok(())
+        })
     }
 
     pub fn set_decision(
@@ -446,25 +471,26 @@ impl SessionStore {
         outcome: ReviewOutcome,
         summary: Option<String>,
     ) -> Result<ReviewSession, StoreError> {
-        let mut session = self.load(session_id)?;
-        session.decision = Some(ReviewDecision {
-            outcome,
-            summary,
-            created_at: Utc::now(),
-        });
-        session.status = match outcome {
-            ReviewOutcome::Approved => SessionStatus::Approved,
-            ReviewOutcome::ChangesRequested | ReviewOutcome::Commented => {
-                SessionStatus::AwaitingAgent
-            }
-        };
-        session.touch();
-        self.save(&session)?;
-        Ok(session)
+        self.with_session_locked(session_id, |session| {
+            session.decision = Some(ReviewDecision {
+                outcome,
+                summary,
+                created_at: Utc::now(),
+            });
+            session.status = match outcome {
+                ReviewOutcome::Approved => SessionStatus::Approved,
+                ReviewOutcome::ChangesRequested | ReviewOutcome::Commented => {
+                    SessionStatus::AwaitingAgent
+                }
+            };
+            session.touch();
+            Ok(())
+        })
     }
 
     pub fn close_session(&self, session_id: Uuid) -> Result<ReviewSession, StoreError> {
-        let mut session = self.load(session_id)?;
+        // Check without lock first to avoid unnecessary locking
+        let session = self.load(session_id)?;
         if matches!(
             session.status,
             SessionStatus::Approved | SessionStatus::Closed
@@ -472,93 +498,102 @@ impl SessionStore {
             return Ok(session);
         }
 
-        session.status = SessionStatus::Closed;
-        session.touch();
-        self.save(&session)?;
-        Ok(session)
+        self.with_session_locked(session_id, |session| {
+            if !matches!(
+                session.status,
+                SessionStatus::Approved | SessionStatus::Closed
+            ) {
+                session.status = SessionStatus::Closed;
+                session.touch();
+            }
+            Ok(())
+        })
     }
 
     pub fn mark_agent_seen(&self, session_id: Uuid) -> Result<ReviewSession, StoreError> {
-        let mut session = self.load(session_id)?;
-        session.agent_last_seen_at = Some(Utc::now());
-        session.touch();
-        self.save(&session)?;
-        Ok(session)
+        self.with_session_locked(session_id, |session| {
+            session.agent_last_seen_at = Some(Utc::now());
+            session.touch();
+            Ok(())
+        })
     }
 
     fn add_comment(&self, input: AddComment) -> Result<(ReviewSession, Uuid), StoreError> {
-        let mut session = self.load(input.session_id)?;
-        let created_at = Utc::now();
+        let mut resolved_thread_id = Uuid::nil();
+        let session = self.with_session_locked(input.session_id, |session| {
+            let created_at = Utc::now();
 
-        let resolved_thread_id = match input.thread_id {
-            Some(thread_id) => {
-                let thread = session
-                    .threads
-                    .iter_mut()
-                    .find(|thread| thread.id == thread_id)
-                    .ok_or(StoreError::ThreadNotFound {
-                        session_id: input.session_id,
+            let tid = match input.thread_id {
+                Some(thread_id) => {
+                    let thread = session
+                        .threads
+                        .iter_mut()
+                        .find(|thread| thread.id == thread_id)
+                        .ok_or(StoreError::ThreadNotFound {
+                            session_id: input.session_id,
+                            thread_id,
+                        })?;
+
+                    let comment = ReviewComment {
+                        id: Uuid::new_v4(),
                         thread_id,
-                    })?;
-
-                let comment = ReviewComment {
-                    id: Uuid::new_v4(),
-                    thread_id,
-                    author: input.author,
-                    author_name: input.author_name.clone(),
-                    kind: input.kind,
-                    anchor: input.anchor,
-                    body: input.body,
-                    created_at,
-                };
-                thread.comments.push(comment);
-                thread.agent_acknowledged_at = None;
-                match input.author {
-                    CommentAuthor::Reviewer => {
-                        thread.state = ThreadState::Open;
+                        author: input.author,
+                        author_name: input.author_name.clone(),
+                        kind: input.kind,
+                        anchor: input.anchor,
+                        body: input.body,
+                        created_at,
+                    };
+                    thread.comments.push(comment);
+                    thread.agent_acknowledged_at = None;
+                    match input.author {
+                        CommentAuthor::Reviewer => {
+                            thread.state = ThreadState::Open;
+                        }
+                        CommentAuthor::Agent => {
+                            thread.state = if input.addressed {
+                                ThreadState::Addressed
+                            } else {
+                                ThreadState::Open
+                            };
+                        }
                     }
-                    CommentAuthor::Agent => {
-                        thread.state = if input.addressed {
-                            ThreadState::Addressed
-                        } else {
-                            ThreadState::Open
-                        };
-                    }
+                    thread_id
                 }
-                thread_id
-            }
-            None => {
-                let new_thread_id = Uuid::new_v4();
-                let comment = ReviewComment {
-                    id: Uuid::new_v4(),
-                    thread_id: new_thread_id,
-                    author: input.author,
-                    author_name: input.author_name,
-                    kind: input.kind,
-                    anchor: input.anchor,
-                    body: input.body,
-                    created_at,
-                };
-                let thread = ReviewThread {
-                    id: new_thread_id,
-                    state: ThreadState::Open,
-                    agent_acknowledged_at: None,
-                    comments: vec![comment],
-                };
-                session.threads.push(thread);
-                new_thread_id
-            }
-        };
+                None => {
+                    let new_thread_id = Uuid::new_v4();
+                    let comment = ReviewComment {
+                        id: Uuid::new_v4(),
+                        thread_id: new_thread_id,
+                        author: input.author,
+                        author_name: input.author_name,
+                        kind: input.kind,
+                        anchor: input.anchor,
+                        body: input.body,
+                        created_at,
+                    };
+                    let thread = ReviewThread {
+                        id: new_thread_id,
+                        state: ThreadState::Open,
+                        agent_acknowledged_at: None,
+                        comments: vec![comment],
+                    };
+                    session.threads.push(thread);
+                    new_thread_id
+                }
+            };
 
-        session.status = match input.author {
-            CommentAuthor::Reviewer => SessionStatus::AwaitingAgent,
-            CommentAuthor::Agent => {
-                session.agent_last_seen_at = Some(Utc::now());
-                SessionStatus::AwaitingReviewer
-            }
-        };
-        session.touch();
-        self.save(&session)?;
+            session.status = match input.author {
+                CommentAuthor::Reviewer => SessionStatus::AwaitingAgent,
+                CommentAuthor::Agent => {
+                    session.agent_last_seen_at = Some(Utc::now());
+                    SessionStatus::AwaitingReviewer
+                }
+            };
+            session.touch();
+            resolved_thread_id = tid;
+            Ok(())
+        })?;
         Ok((session, resolved_thread_id))
     }
 
@@ -702,6 +737,22 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     hash
+}
+
+#[cfg(unix)]
+fn flock_exclusive(file: &File) -> Result<(), StoreError> {
+    use std::os::unix::io::AsRawFd;
+    let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+    if ret != 0 {
+        return Err(StoreError::Io(io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn flock_exclusive(_file: &File) -> Result<(), StoreError> {
+    // No-op on non-Unix platforms
+    Ok(())
 }
 
 fn has_pending_reviewer_feedback(session: &ReviewSession) -> bool {
