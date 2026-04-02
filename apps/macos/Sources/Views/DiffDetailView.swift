@@ -31,11 +31,6 @@ struct DiffDetailView: View {
                 Section {
                   let anchored = anchoredItems(for: file)
 
-                  let outdated = outdatedThreads(for: file)
-                  if !outdated.isEmpty {
-                    OutdatedThreadsSection(threads: outdated)
-                  }
-
                   if appState.diffMode == .unified {
                     ForEach(file.hunks) { hunk in
                       DiffHunkView(hunk: hunk, filePath: file.newPath, anchored: anchored)
@@ -99,14 +94,29 @@ struct DiffDetailView: View {
 
   private func anchoredItems(for file: FileDiff) -> [UInt32: [InlineItem]] {
     var result: [UInt32: [InlineItem]] = [:]
+    let allNewLines = file.hunks.flatMap(\.lines).compactMap(\.newLine).sorted()
+    let firstLine = allNewLines.first ?? 1
+
+    let outdatedSet = Set(outdatedThreads(for: file).map(\.id))
 
     if let session = appState.session {
       for thread in session.threads {
         guard let anchor = thread.comments.first?.anchor,
-          anchor.filePath == file.newPath,
-          let line = anchor.lineNew
+          anchor.filePath == file.newPath
         else { continue }
-        result[line, default: []].append(.thread(thread))
+
+        let isOutdated = outdatedSet.contains(thread.id)
+
+        if let line = anchor.lineNew, allNewLines.contains(line) {
+          result[line, default: []].append(.thread(thread, isOutdated: isOutdated))
+        } else {
+          let target = anchor.lineNew ?? anchor.lineOld ?? 0
+          let nearest =
+            allNewLines.min(by: {
+              abs(Int($0) - Int(target)) < abs(Int($1) - Int(target))
+            }) ?? firstLine
+          result[nearest, default: []].append(.thread(thread, isOutdated: isOutdated))
+        }
       }
     }
 
@@ -137,24 +147,23 @@ struct DiffDetailView: View {
 
   private func outdatedThreads(for file: FileDiff) -> [ReviewThread] {
     guard let session = appState.session else { return [] }
-    // Collect all new-side line numbers visible in the diff
-    let linesInDiff = Set(file.hunks.flatMap(\.lines).compactMap(\.newLine))
-    // Collect the ranges covered by hunks (lines that are "in scope")
-    let hunkRanges: [ClosedRange<UInt32>] = file.hunks.compactMap { hunk in
-      let hunkLines = hunk.lines.compactMap(\.newLine)
-      guard let lo = hunkLines.min(), let hi = hunkLines.max() else { return nil }
-      return lo...hi
-    }
+    // A thread is outdated only if its anchor line was explicitly removed
+    // (appears as a removed line in the diff with no corresponding new line)
+    let removedLines = Set(
+      file.hunks.flatMap(\.lines)
+        .filter { $0.kind == .removed }
+        .compactMap(\.oldLine)
+    )
 
     return session.threads.filter { thread in
       guard let anchor = thread.comments.first?.anchor,
         anchor.filePath == file.newPath
       else { return false }
-      guard let line = anchor.lineNew else { return true }
-      // Only outdated if the line falls within a hunk range but isn't in the diff
-      let inHunkScope = hunkRanges.contains { $0.contains(line) }
-      if !inHunkScope { return false }  // line is outside all hunks — not outdated
-      return !linesInDiff.contains(line)
+      // If anchored to an old line that was removed, it's outdated
+      if let oldLine = anchor.lineOld, removedLines.contains(oldLine) {
+        return true
+      }
+      return false
     }
   }
 }
@@ -249,12 +258,12 @@ struct DiffSearchBar: View {
 }
 
 enum InlineItem: Identifiable {
-  case thread(ReviewThread)
+  case thread(ReviewThread, isOutdated: Bool)
   case draft(DraftComment)
 
   var id: String {
     switch self {
-    case .thread(let t): "t-\(t.id)"
+    case .thread(let t, _): "t-\(t.id)"
     case .draft(let d): "d-\(d.id)"
     }
   }
@@ -420,8 +429,8 @@ struct DiffHunkView: View {
         if let lineNum = line.newLine, let items = anchored[lineNum] {
           ForEach(items) { item in
             switch item {
-            case .thread(let thread):
-              InlineThreadView(thread: thread, isOutdated: false)
+            case .thread(let thread, let isOutdated):
+              InlineThreadView(thread: thread, isOutdated: isOutdated)
                 .id("thread-\(thread.id)")
             case .draft(let draft):
               InlineDraftView(draft: draft)
@@ -459,8 +468,8 @@ struct SideBySideDiffView: View {
             if let items = anchored[lineNum] {
               ForEach(items) { item in
                 switch item {
-                case .thread(let thread):
-                  InlineThreadView(thread: thread, isOutdated: false)
+                case .thread(let thread, let isOutdated):
+                  InlineThreadView(thread: thread, isOutdated: isOutdated)
                     .id("thread-\(thread.id)")
                 case .draft(let draft):
                   InlineDraftView(draft: draft)
