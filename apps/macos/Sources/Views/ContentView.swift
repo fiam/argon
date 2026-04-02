@@ -512,15 +512,18 @@ struct ThreadsSidebar: View {
   }
 
   private func scrollToThread(_ thread: ReviewThread) {
-    // First scroll to the file so the LazyVStack renders the thread area
+    // First scroll to the file so the LazyVStack renders the thread area,
+    // then scroll to the specific thread after rendering settles.
     if let anchor = thread.comments.first?.anchor,
       let filePath = anchor.filePath
     {
       appState.scrollToFile = filePath
-    }
-    // Then scroll to the specific thread after a brief delay
-    // (LazyVStack needs time to render the target)
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+      // Stagger: 100ms for file scroll, then 300ms for thread
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+        appState.scrollToThread = thread.id.uuidString
+      }
+    } else {
+      // Global thread — just try scrolling directly
       appState.scrollToThread = thread.id.uuidString
     }
   }

@@ -349,6 +349,7 @@ struct OrphanedThreadsSection: View {
                 .padding(.top, 4)
               }
               InlineThreadView(thread: thread, isOutdated: true)
+                .id("thread-\(thread.id)")
             }
           }
         }
@@ -391,6 +392,7 @@ struct OutdatedThreadsSection: View {
       if isExpanded {
         ForEach(threads) { thread in
           InlineThreadView(thread: thread, isOutdated: true)
+            .id("thread-\(thread.id)")
         }
       }
     }
