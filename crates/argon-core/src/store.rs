@@ -522,6 +522,8 @@ impl SessionStore {
         let mut resolved_thread_id = Uuid::nil();
         let session = self.with_session_locked(input.session_id, |session| {
             let created_at = Utc::now();
+            let is_named_reviewer =
+                input.author == CommentAuthor::Reviewer && input.author_name.is_some();
 
             let tid = match input.thread_id {
                 Some(thread_id) => {
@@ -584,7 +586,14 @@ impl SessionStore {
             };
 
             session.status = match input.author {
-                CommentAuthor::Reviewer => SessionStatus::AwaitingAgent,
+                CommentAuthor::Reviewer if is_named_reviewer => {
+                    // Named reviewer agent — don't change status, let decide batch it
+                    session.status
+                }
+                CommentAuthor::Reviewer => {
+                    // Human reviewer (no name) — wake the agent immediately
+                    SessionStatus::AwaitingAgent
+                }
                 CommentAuthor::Agent => {
                     session.agent_last_seen_at = Some(Utc::now());
                     SessionStatus::AwaitingReviewer

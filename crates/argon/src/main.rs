@@ -1223,12 +1223,18 @@ fn build_reviewer_prompt(
         "Add --file <path> and optionally --line-old/--line-new when you can anchor the comment to a changed line."
             .to_string(),
     );
+    lines.push(format!(
+        "Resolve a thread when addressed: {} --repo {} agent dev resolve-thread --session {} --thread <thread-id>",
+        argon_cli_command(),
+        shell_quote(&session.repo_root),
+        session.id
+    ));
     lines.push(
         "When you start reviewing a thread or a specific area, acknowledge it first by posting a brief comment on the thread: e.g. 'Reviewing this change...' or 'Looking into the error handling here...'. This shows the human in real time which parts you're actively thinking about."
             .to_string(),
     );
     lines.push(
-        "When you finish a review round, either leave more comments or submit one decision."
+        "When you finish a review round, submit a decision. Your comments are only batched and delivered to the coding agent when you submit a decision — so always submit one. Leave all your comments first, then submit the decision."
             .to_string(),
     );
     lines.push(format!("Decision template: {decision_command_template}"));
