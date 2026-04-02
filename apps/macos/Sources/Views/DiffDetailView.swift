@@ -19,7 +19,7 @@ struct DiffDetailView: View {
         }
         ScrollViewReader { proxy in
           ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+            VStack(alignment: .leading, spacing: 0) {
               // Orphaned threads (file no longer in diff)
               let orphaned = orphanedThreads
               if !orphaned.isEmpty {

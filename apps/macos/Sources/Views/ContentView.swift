@@ -519,7 +519,7 @@ struct ThreadsSidebar: View {
     {
       appState.scrollToFile = filePath
       // Stagger: 100ms for file scroll, then 300ms for thread
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
         appState.scrollToThread = thread.id.uuidString
       }
     } else {
