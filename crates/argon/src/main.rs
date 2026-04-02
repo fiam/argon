@@ -1208,6 +1208,10 @@ fn build_reviewer_prompt(
     lines.push("Review the current local changes and leave feedback in Argon.".to_string());
     lines.push("Do not edit files or apply code changes yourself.".to_string());
     lines.push(
+        "Do NOT use the argon-app-review or argon-dev-review skills. You are already inside an Argon review session. Use only the reviewer comment, decide, and wait commands listed in this prompt."
+            .to_string(),
+    );
+    lines.push(
         "You may inspect the repo and run tests or other read-only commands to validate the work."
             .to_string(),
     );
