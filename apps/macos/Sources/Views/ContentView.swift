@@ -512,7 +512,17 @@ struct ThreadsSidebar: View {
   }
 
   private func scrollToThread(_ thread: ReviewThread) {
-    appState.scrollToThread = thread.id.uuidString
+    // First scroll to the file so the LazyVStack renders the thread area
+    if let anchor = thread.comments.first?.anchor,
+      let filePath = anchor.filePath
+    {
+      appState.scrollToFile = filePath
+    }
+    // Then scroll to the specific thread after a brief delay
+    // (LazyVStack needs time to render the target)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+      appState.scrollToThread = thread.id.uuidString
+    }
   }
 
   private struct AgentDecisionInfo {
