@@ -3,6 +3,34 @@ import SwiftTerm
 import SwiftUI
 import UserNotifications
 
+enum AgentReviewState {
+  case running
+  case reviewing
+  case commented
+  case changesRequested
+  case stopped
+
+  var color: SwiftUI.Color {
+    switch self {
+    case .running: .green
+    case .reviewing: .blue
+    case .commented: .blue
+    case .changesRequested: .orange
+    case .stopped: .secondary
+    }
+  }
+
+  var label: String {
+    switch self {
+    case .running: "reviewing"
+    case .reviewing: "reviewing"
+    case .commented: "commented"
+    case .changesRequested: "changes"
+    case .stopped: "done"
+    }
+  }
+}
+
 // MARK: - Terminal View (NSViewRepresentable wrapping SwiftTerm)
 
 struct AgentTerminalView: NSViewRepresentable {
@@ -121,15 +149,45 @@ struct AgentTab: View {
   let isSelected: Bool
   let onSelect: () -> Void
 
+  private var agentState: AgentReviewState {
+    guard let session = appState.session else { return .running }
+    if !agent.isRunning { return .stopped }
+
+    let hasComments = session.threads.contains { thread in
+      thread.comments.contains { $0.authorName == agent.nickname }
+    }
+
+    if let decision = session.decision {
+      // Check if this agent likely submitted the decision
+      // (we can't tell for sure since decisions aren't per-agent,
+      // but if the agent has comments, it's a good signal)
+      if hasComments {
+        switch decision.outcome {
+        case .changesRequested: return .changesRequested
+        case .commented: return .commented
+        case .approved: return .commented  // agents can't approve
+        }
+      }
+    }
+
+    if hasComments { return .reviewing }
+    return .running
+  }
+
   var body: some View {
     Button(action: onSelect) {
       HStack(spacing: 5) {
         Circle()
-          .fill(agent.isRunning ? .green : .secondary)
+          .fill(agentState.color)
           .frame(width: 6, height: 6)
         Text(agent.nickname)
           .font(.caption)
           .fontWeight(isSelected ? .medium : .regular)
+        if agentState != .running && agentState != .stopped {
+          Text(agentState.label)
+            .font(.system(size: 8))
+            .foregroundStyle(agentState.color)
+        }
         Text("(\(agent.profile.name))")
           .font(.caption2)
           .foregroundStyle(.tertiary)
