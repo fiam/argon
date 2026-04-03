@@ -150,27 +150,15 @@ struct AgentTab: View {
   let onSelect: () -> Void
 
   private var agentState: AgentReviewState {
-    guard let session = appState.session else { return .running }
     if !agent.isRunning { return .stopped }
-
-    let hasComments = session.threads.contains { thread in
-      thread.comments.contains { $0.authorName == agent.nickname }
-    }
-
-    if let decision = session.decision {
-      // Check if this agent likely submitted the decision
-      // (we can't tell for sure since decisions aren't per-agent,
-      // but if the agent has comments, it's a good signal)
-      if hasComments {
-        switch decision.outcome {
-        case .changesRequested: return .changesRequested
-        case .commented: return .commented
-        case .approved: return .commented  // agents can't approve
-        }
+    if let decision = agent.lastDecision {
+      switch decision {
+      case "changes_requested": return .changesRequested
+      case "commented": return .commented
+      default: return .commented
       }
     }
-
-    if hasComments { return .reviewing }
+    if agent.hasComments { return .reviewing }
     return .running
   }
 

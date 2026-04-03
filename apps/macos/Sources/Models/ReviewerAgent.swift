@@ -131,6 +131,8 @@ final class ReviewerAgentInstance: Identifiable {
   let sessionId: String
   let repoRoot: String
   var isRunning = true
+  var hasComments = false
+  var lastDecision: String?  // "commented", "changes_requested", nil
   var process: Process?
 
   init(

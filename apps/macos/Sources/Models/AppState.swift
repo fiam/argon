@@ -291,8 +291,34 @@ final class AppState {
   func refreshSession() {
     guard let sessionId, let repoRoot else { return }
     do {
-      session = try SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
+      let s = try SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
+      session = s
+      updateAgentStates(from: s)
     } catch {}
+  }
+
+  private func updateAgentStates(from session: ReviewSession) {
+    for agent in reviewerAgents {
+      let agentComments = session.threads.flatMap(\.comments).filter {
+        $0.authorName == agent.nickname
+      }
+      agent.hasComments = !agentComments.isEmpty
+
+      // Check if the session decision was likely from this agent
+      // (last comment before decision was from this agent)
+      if let decision = session.decision {
+        let allComments = session.threads.flatMap(\.comments).sorted { $0.createdAt < $1.createdAt }
+        if let lastBeforeDecision = allComments.last(where: {
+          $0.createdAt <= decision.createdAt && $0.authorName == agent.nickname
+        }) {
+          // If this agent's last comment was close to the decision time, attribute it
+          let gap = decision.createdAt.timeIntervalSince(lastBeforeDecision.createdAt)
+          if gap < 30 {  // within 30 seconds
+            agent.lastDecision = decision.outcome.rawValue
+          }
+        }
+      }
+    }
   }
 
   func reload() {
