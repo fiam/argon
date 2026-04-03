@@ -1230,7 +1230,7 @@ fn build_reviewer_prompt(
         session.id
     ));
     lines.push(
-        "When you start reviewing a thread or a specific area, acknowledge it first by posting a brief comment on the thread: e.g. 'Reviewing this change...' or 'Looking into the error handling here...'. This shows the human in real time which parts you're actively thinking about."
+        "Do NOT post 'Reviewing...' or progress-update comments as thread comments — they create noisy open threads. Only post substantive findings as comments."
             .to_string(),
     );
     lines.push(
@@ -1262,7 +1262,7 @@ fn build_reviewer_prompt(
             .to_string(),
     );
     lines.push(
-        "Use conventional comment prefixes: 'nit:' for minor style issues, 'suggestion:' for optional improvements, 'issue:' for things that must change, 'question:' for things you want clarified, 'praise:' for good patterns worth calling out. When working through a complex review, leave progress comments so the human knows what you're thinking (e.g. 'Reviewing error handling in auth module...')."
+        "Use conventional comment prefixes: 'nit:' for minor style issues, 'suggestion:' for optional improvements, 'issue:' for things that must change, 'question:' for things you want clarified. Do NOT post praise comments as thread comments — include positive observations in your decision summary instead. Only post comments that require attention or action."
             .to_string(),
     );
     lines.push(
