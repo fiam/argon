@@ -124,10 +124,18 @@ struct ReviewerAgentTabsView: View {
 
         Divider()
 
-        // Terminal content
-        if let agent = appState.reviewerAgents.first(where: { $0.id == effectiveSelectedId }) {
-          AgentTerminalView(agent: agent)
-            .id(agent.id)
+        // Terminal content – keep all terminals alive in a ZStack so
+        // switching tabs doesn't destroy the NSView (and kill the process).
+        // Use zIndex to bring the selected terminal to front; all views stay
+        // fully opaque so SwiftUI eagerly creates every NSView.
+        ZStack {
+          ForEach(appState.reviewerAgents) { agent in
+            let isSelected = effectiveSelectedId == agent.id
+            AgentTerminalView(agent: agent)
+              .id(agent.id)
+              .zIndex(isSelected ? 1 : 0)
+              .allowsHitTesting(isSelected)
+          }
         }
       }
     }
