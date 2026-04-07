@@ -2,31 +2,44 @@ import SwiftUI
 
 @main
 struct ArgonApp: App {
-  @State private var appState = AppState()
+  @FocusedValue(\.appState) private var focusedAppState
+  @State private var recentProjects = RecentProjects()
 
   var body: some Scene {
-    WindowGroup {
-      ContentView()
-        .environment(appState)
+    // Welcome window (shown when app launches without CLI args)
+    Window("Welcome to Argon", id: "welcome") {
+      WelcomeView()
+        .environment(recentProjects)
+    }
+    .defaultSize(width: 500, height: 450)
+
+    // Review windows (one per session)
+    WindowGroup(for: ReviewTarget.self) { $target in
+      if let target {
+        ReviewWindowView(target: target)
+          .environment(recentProjects)
+      }
     }
     .defaultSize(width: 1100, height: 700)
     .commands {
       // Find menu
       CommandGroup(replacing: .textEditing) {
         Button("Find in Diff") {
-          appState.toggleSearch()
+          focusedAppState?.toggleSearch()
         }
         .keyboardShortcut("f", modifiers: .command)
+        .disabled(focusedAppState == nil)
 
         Button("Filter Files") {
-          appState.focusFileFilter = true
+          focusedAppState?.focusFileFilter = true
         }
         .keyboardShortcut("f", modifiers: [.command, .shift])
+        .disabled(focusedAppState == nil)
 
         Divider()
 
         Button("Dismiss") {
-          appState.dismissAll()
+          focusedAppState?.dismissAll()
         }
         .keyboardShortcut(.escape, modifiers: [])
       }
@@ -34,27 +47,35 @@ struct ArgonApp: App {
       // Navigate menu
       CommandGroup(after: .toolbar) {
         Button("Next File") {
-          appState.navigateToNextFile()
+          focusedAppState?.navigateToNextFile()
         }
         .keyboardShortcut(.downArrow, modifiers: .command)
+        .disabled(focusedAppState == nil)
 
         Button("Previous File") {
-          appState.navigateToPreviousFile()
+          focusedAppState?.navigateToPreviousFile()
         }
         .keyboardShortcut(.upArrow, modifiers: .command)
+        .disabled(focusedAppState == nil)
 
         Divider()
 
         Button("Unified View") {
-          appState.diffMode = .unified
+          focusedAppState?.diffMode = .unified
         }
         .keyboardShortcut("1", modifiers: .command)
+        .disabled(focusedAppState == nil)
 
         Button("Side by Side View") {
-          appState.diffMode = .sideBySide
+          focusedAppState?.diffMode = .sideBySide
         }
         .keyboardShortcut("2", modifiers: .command)
+        .disabled(focusedAppState == nil)
       }
+    }
+
+    Settings {
+      SettingsView()
     }
   }
 }

@@ -2,6 +2,53 @@ import Foundation
 
 enum ArgonCLI {
 
+  // MARK: - Session Creation
+
+  /// Creates a new review session for the given repo path.
+  /// Returns the session ID and repo root from the CLI output.
+  static func createSession(repoRoot: String) throws -> ReviewTarget {
+    let cli = findCLI()
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: cli)
+    process.arguments = [repoRoot, "--json"]
+    process.currentDirectoryURL = URL(fileURLWithPath: repoRoot)
+
+    // Prevent the CLI from trying to launch the desktop app (we are it).
+    var env = ProcessInfo.processInfo.environment
+    env["ARGON_DESKTOP_LAUNCH"] = "/usr/bin/true"
+    process.environment = env
+
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardOutput = stdout
+    process.standardError = stderr
+
+    try process.run()
+
+    let outputData = stdout.fileHandleForReading.readDataToEndOfFile()
+    let errorData = stderr.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+
+    let output = String(data: outputData, encoding: .utf8) ?? ""
+
+    if process.terminationStatus != 0 {
+      let err = String(data: errorData, encoding: .utf8) ?? "unknown error"
+      throw CLIError.commandFailed(err.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    // Parse the CliResponse JSON to extract session.id and session.repo_root.
+    guard let data = output.data(using: .utf8),
+      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      let session = json["session"] as? [String: Any],
+      let sessionId = session["id"] as? String,
+      let repoRoot = session["repo_root"] as? String
+    else {
+      throw CLIError.commandFailed("Failed to parse session creation output")
+    }
+
+    return ReviewTarget(sessionId: sessionId, repoRoot: repoRoot)
+  }
+
   // MARK: - Highlighted Diff
 
   /// Runs `argon diff --session <id> --theme <theme> --json` and returns the raw JSON string.

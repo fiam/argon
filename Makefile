@@ -1,4 +1,4 @@
-.PHONY: check fmt lint test test-rust test-swift build-swift deny
+.PHONY: check fmt lint test test-rust test-swift build-swift build-release build-dmg deny
 
 # Run all checks (formatting, linting, tests, license audit)
 check: fmt lint deny test
@@ -42,6 +42,14 @@ build-swift:
 # License audit
 deny:
 	cargo deny check
+
+# Build release app bundle with bundled CLI
+build-release:
+	bash scripts/build-release.sh
+
+# Build release app bundle + DMG
+build-dmg:
+	bash scripts/build-release.sh --dmg
 
 # Install dev skill into Claude Code and Codex
 install-dev-skill:

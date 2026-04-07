@@ -53,23 +53,20 @@ final class AppState {
   private var lastDiffFingerprint: String = ""
 
   init() {
-    parseArguments()
+    applyDefaultDiffMode()
   }
 
-  private func parseArguments() {
-    let args = ProcessInfo.processInfo.arguments
-    var i = 1
-    while i < args.count {
-      switch args[i] {
-      case "--session-id" where i + 1 < args.count:
-        sessionId = args[i + 1]
-        i += 2
-      case "--repo-root" where i + 1 < args.count:
-        repoRoot = args[i + 1]
-        i += 2
-      default:
-        i += 1
-      }
+  init(sessionId: String, repoRoot: String) {
+    applyDefaultDiffMode()
+    self.sessionId = sessionId
+    self.repoRoot = repoRoot
+  }
+
+  private func applyDefaultDiffMode() {
+    if let saved = UserDefaults.standard.string(forKey: "defaultDiffViewMode"),
+      saved == "sideBySide"
+    {
+      diffMode = .sideBySide
     }
   }
 

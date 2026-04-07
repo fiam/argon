@@ -487,6 +487,7 @@ struct SideBySideDiffView: View {
 
 struct SideBySideRowView: View {
   @Environment(AppState.self) private var appState
+  @AppStorage("diffFontSize") private var diffFontSize = 13.0
   let pair: SideBySidePair
   let filePath: String
   @State private var isHovering = false
@@ -499,7 +500,7 @@ struct SideBySideRowView: View {
       // Right side (new)
       sideView(line: pair.right, isLeft: false)
     }
-    .font(.system(.body, design: .monospaced))
+    .font(.system(size: diffFontSize, design: .monospaced))
     .onHover { hovering in
       isHovering = hovering
     }
@@ -1196,6 +1197,7 @@ struct InlineCommentEditor: View {
 
 struct DiffLineView: View {
   @Environment(AppState.self) private var appState
+  @AppStorage("diffFontSize") private var diffFontSize = 13.0
   let line: DiffLine
   let filePath: String
   @State private var isHovering = false
@@ -1234,7 +1236,7 @@ struct DiffLineView: View {
           .frame(maxWidth: .infinity, alignment: .leading)
       }
     }
-    .font(.system(.body, design: .monospaced))
+    .font(.system(size: diffFontSize, design: .monospaced))
     .padding(.trailing, 8)
     .padding(.vertical, 0.5)
     .background(backgroundColor)

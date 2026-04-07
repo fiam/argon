@@ -76,7 +76,7 @@ enum AgentDetector {
     return agents
   }
 
-  private static func commandExists(_ command: String) -> Bool {
+  static func commandExists(_ command: String) -> Bool {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
     process.arguments = [command]

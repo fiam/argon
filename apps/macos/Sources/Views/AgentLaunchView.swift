@@ -21,11 +21,18 @@ struct AgentLaunchButton: View {
 struct AgentLaunchSheet: View {
   @Environment(AppState.self) private var appState
   @Binding var isPresented: Bool
-  @State private var detectedAgents: [AgentProfile] = []
-  @State private var selectedAgent: AgentProfile?
+  @State private var savedAgents = SavedAgentProfiles()
+  @State private var detectedStatus: [String: Bool] = [:]
+  @State private var selectedAgentId: String?
+  @State private var yoloMode = false
   @State private var focusPrompt = ""
   @State private var customCommand = ""
   @State private var useCustom = false
+
+  private var selectedSavedAgent: SavedAgentProfile? {
+    guard let id = selectedAgentId else { return nil }
+    return savedAgents.profiles.first { $0.id == id }
+  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 20) {
@@ -51,31 +58,28 @@ struct AgentLaunchSheet: View {
           .fontWeight(.medium)
           .foregroundStyle(.secondary)
 
-        if detectedAgents.isEmpty && !useCustom {
-          HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle")
-              .foregroundStyle(.orange)
-            Text("No agents detected. Use a custom command.")
-              .font(.callout)
-              .foregroundStyle(.secondary)
-          }
-        }
-
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 140))], spacing: 6) {
-          ForEach(detectedAgents) { agent in
+          ForEach(savedAgents.profiles) { profile in
+            let detected = detectedStatus[profile.id] ?? false
             AgentPickerCard(
-              agent: agent,
-              isSelected: !useCustom && selectedAgent?.id == agent.id
+              profile: profile,
+              isDetected: detected,
+              isSelected: !useCustom && selectedAgentId == profile.id
             ) {
-              selectedAgent = agent
+              selectedAgentId = profile.id
               useCustom = false
+              // Reset yolo if this agent doesn't support it
+              if profile.yoloFlag.isEmpty {
+                yoloMode = false
+              }
             }
           }
 
           // Custom command card
           Button {
             useCustom = true
-            selectedAgent = nil
+            selectedAgentId = nil
+            yoloMode = false
           } label: {
             HStack(spacing: 6) {
               Image(systemName: "terminal")
@@ -106,6 +110,20 @@ struct AgentLaunchSheet: View {
           TextField("Command (e.g. claude --dangerously-skip-permissions)", text: $customCommand)
             .textFieldStyle(.roundedBorder)
             .font(.system(.body, design: .monospaced))
+        }
+
+        // YOLO toggle (only for agents that support it)
+        if let agent = selectedSavedAgent, !agent.yoloFlag.isEmpty {
+          Toggle(isOn: $yoloMode) {
+            VStack(alignment: .leading, spacing: 1) {
+              Text("Auto-approve mode")
+                .font(.callout)
+              Text("Appends \(agent.yoloFlag) to the command")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+          }
+          .toggleStyle(.checkbox)
         }
       }
 
@@ -140,8 +158,19 @@ struct AgentLaunchSheet: View {
     .padding(24)
     .frame(width: 500)
     .onAppear {
-      detectedAgents = AgentDetector.detectAgents()
-      selectedAgent = detectedAgents.first
+      // Pre-compute detection status
+      for profile in savedAgents.profiles {
+        let baseCmd = profile.command.components(separatedBy: " ").first ?? profile.command
+        detectedStatus[profile.id] = AgentDetector.commandExists(baseCmd)
+      }
+      // Select first detected agent
+      for profile in savedAgents.profiles {
+        if detectedStatus[profile.id] == true {
+          selectedAgentId = profile.id
+          return
+        }
+      }
+      selectedAgentId = savedAgents.profiles.first?.id
     }
   }
 
@@ -149,7 +178,7 @@ struct AgentLaunchSheet: View {
     if useCustom {
       return !customCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
-    return selectedAgent != nil
+    return selectedAgentId != nil
   }
 
   private func launch() {
@@ -163,9 +192,17 @@ struct AgentLaunchSheet: View {
         icon: "terminal",
         isDetected: false
       )
+    } else if let saved = selectedSavedAgent {
+      let cmd = saved.fullCommand(yolo: yoloMode)
+      profile = AgentProfile(
+        id: saved.id,
+        name: yoloMode ? "\(saved.name) (YOLO)" : saved.name,
+        command: cmd,
+        icon: saved.icon,
+        isDetected: true
+      )
     } else {
-      guard let selected = selectedAgent else { return }
-      profile = selected
+      return
     }
 
     let focus = focusPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -178,25 +215,33 @@ struct AgentLaunchSheet: View {
 }
 
 struct AgentPickerCard: View {
-  let agent: AgentProfile
+  let profile: SavedAgentProfile
+  let isDetected: Bool
   let isSelected: Bool
   let onSelect: () -> Void
 
   var body: some View {
     Button(action: onSelect) {
       HStack(spacing: 6) {
-        Image(systemName: agent.icon)
+        AgentIconView(icon: profile.icon)
           .foregroundStyle(isSelected ? .blue : .secondary)
-        Text(agent.name)
-          .fontWeight(isSelected ? .medium : .regular)
-          .lineLimit(1)
+        VStack(alignment: .leading, spacing: 1) {
+          Text(profile.name)
+            .fontWeight(isSelected ? .medium : .regular)
+            .lineLimit(1)
+          if !isDetected {
+            Text("not installed")
+              .font(.system(size: 9))
+              .foregroundStyle(.orange)
+          }
+        }
       }
       .font(.callout)
       .padding(.horizontal, 12)
       .padding(.vertical, 8)
       .frame(maxWidth: .infinity)
       .background(isSelected ? Color.blue.opacity(0.12) : Color(nsColor: .controlBackgroundColor))
-      .foregroundStyle(isSelected ? .blue : .primary)
+      .foregroundStyle(isSelected ? .blue : isDetected ? .primary : .secondary)
       .clipShape(RoundedRectangle(cornerRadius: 8))
       .overlay(
         RoundedRectangle(cornerRadius: 8)

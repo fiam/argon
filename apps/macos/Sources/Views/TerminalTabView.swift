@@ -35,10 +35,11 @@ enum AgentReviewState {
 
 struct AgentTerminalView: NSViewRepresentable {
   let agent: ReviewerAgentInstance
+  var terminalFontSize: CGFloat = 12
 
   func makeNSView(context: Context) -> LocalProcessTerminalView {
     let termView = LocalProcessTerminalView(frame: .zero)
-    termView.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+    termView.font = NSFont.monospacedSystemFont(ofSize: terminalFontSize, weight: .regular)
     termView.nativeForegroundColor = .textColor
     termView.nativeBackgroundColor = .textBackgroundColor
     termView.processDelegate = context.coordinator
@@ -56,7 +57,9 @@ struct AgentTerminalView: NSViewRepresentable {
     return termView
   }
 
-  func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {}
+  func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {
+    nsView.font = NSFont.monospacedSystemFont(ofSize: terminalFontSize, weight: .regular)
+  }
 
   func makeCoordinator() -> Coordinator {
     Coordinator(agent: agent)
@@ -97,6 +100,7 @@ struct AgentTerminalView: NSViewRepresentable {
 
 struct ReviewerAgentTabsView: View {
   @Environment(AppState.self) private var appState
+  @AppStorage("terminalFontSize") private var terminalFontSize = 12.0
   @State private var selectedAgentId: UUID?
 
   var body: some View {
@@ -131,7 +135,7 @@ struct ReviewerAgentTabsView: View {
         ZStack {
           ForEach(appState.reviewerAgents) { agent in
             let isSelected = effectiveSelectedId == agent.id
-            AgentTerminalView(agent: agent)
+            AgentTerminalView(agent: agent, terminalFontSize: terminalFontSize)
               .id(agent.id)
               .zIndex(isSelected ? 1 : 0)
               .allowsHitTesting(isSelected)
