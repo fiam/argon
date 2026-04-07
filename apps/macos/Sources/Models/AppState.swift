@@ -47,8 +47,8 @@ final class AppState {
   var sessionId: String?
   var repoRoot: String?
 
-  private var pollTask: Task<Void, Never>?
   private var fileWatcher: FileWatcher?
+  private var sessionWatcher: FileWatcher?
   private var diffRefreshTask: Task<Void, Never>?
   private var lastDiffFingerprint: String = ""
 
@@ -324,20 +324,22 @@ final class AppState {
   }
 
   func startPolling() {
-    guard pollTask == nil else { return }
+    guard !isPolling else { return }
     isPolling = true
 
-    // Session poll (threads, status, decision)
-    pollTask = Task { [weak self] in
-      while !Task.isCancelled {
-        try? await Task.sleep(for: .seconds(1.5))
-        guard !Task.isCancelled else { break }
-        self?.refreshSession()
-        self?.reloadDrafts()
+    // Watch session store for comment/decision changes
+    if let repoRoot, sessionWatcher == nil {
+      let sessionsDir = SessionLoader.sessionsDirectory(repoRoot: repoRoot)
+      sessionWatcher = FileWatcher(path: sessionsDir) { [weak self] in
+        Task { @MainActor [weak self] in
+          self?.refreshSession()
+          self?.reloadDrafts()
+        }
       }
+      sessionWatcher?.start()
     }
 
-    // File watcher for working tree changes
+    // Watch working tree for diff changes
     if let repoRoot, fileWatcher == nil {
       fileWatcher = FileWatcher(path: repoRoot) { [weak self] in
         Task { @MainActor [weak self] in
@@ -398,8 +400,8 @@ final class AppState {
   }
 
   func stopPolling() {
-    pollTask?.cancel()
-    pollTask = nil
+    sessionWatcher?.stop()
+    sessionWatcher = nil
     diffRefreshTask?.cancel()
     diffRefreshTask = nil
     fileWatcher?.stop()

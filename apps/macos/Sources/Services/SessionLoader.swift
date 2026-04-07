@@ -1,14 +1,14 @@
 import Foundation
 
 enum SessionLoader {
+  /// Returns the sessions directory path for the given repo, for use with FileWatcher.
+  static func sessionsDirectory(repoRoot: String) -> String {
+    sessionsDirectoryURL(repoRoot: repoRoot).path
+  }
+
   static func loadSession(sessionId: String, repoRoot: String) throws -> ReviewSession {
-    let storageRoot = argonStorageRoot()
-    let repoKey = Self.repoStorageKey(repoRoot: repoRoot)
-    let sessionsDir =
-      storageRoot
-      .appendingPathComponent("sessions")
-      .appendingPathComponent(repoKey)
-    let sessionFile = sessionsDir.appendingPathComponent("\(sessionId).json")
+    let sessionFile = sessionsDirectoryURL(repoRoot: repoRoot)
+      .appendingPathComponent("\(sessionId).json")
 
     let data = try Data(contentsOf: sessionFile)
     let decoder = JSONDecoder()
@@ -32,12 +32,7 @@ enum SessionLoader {
   }
 
   static func loadDraftReview(sessionId: String, repoRoot: String) throws -> [DraftComment] {
-    let storageRoot = argonStorageRoot()
-    let repoKey = Self.repoStorageKey(repoRoot: repoRoot)
-    let draftFile =
-      storageRoot
-      .appendingPathComponent("sessions")
-      .appendingPathComponent(repoKey)
+    let draftFile = sessionsDirectoryURL(repoRoot: repoRoot)
       .appendingPathComponent("drafts")
       .appendingPathComponent("\(sessionId).json")
 
@@ -64,6 +59,14 @@ enum SessionLoader {
     }
     let draft = try decoder.decode(DraftReviewData.self, from: data)
     return draft.comments
+  }
+
+  private static func sessionsDirectoryURL(repoRoot: String) -> URL {
+    let storageRoot = argonStorageRoot()
+    let repoKey = repoStorageKey(repoRoot: repoRoot)
+    return storageRoot
+      .appendingPathComponent("sessions")
+      .appendingPathComponent(repoKey)
   }
 
   private static func argonStorageRoot() -> URL {
