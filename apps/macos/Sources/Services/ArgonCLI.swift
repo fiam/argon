@@ -1,8 +1,23 @@
 import Foundation
 
 enum ArgonCLI {
+  struct SandboxDefaults: Decodable, Sendable {
+    let writablePaths: [String]
+    let writableRoots: [String]
+  }
+
+  struct SandboxConfigPaths: Decodable, Sendable {
+    let repoDefaultPath: String?
+    let repoExistingPath: String?
+    let userDefaultPath: String
+    let userExistingPath: String?
+  }
 
   // MARK: - Session Creation
+
+  static func cliPath() -> String {
+    findCLI()
+  }
 
   /// Creates a new review session for the given repo path.
   /// Returns the session ID and repo root from the CLI output.
@@ -216,6 +231,16 @@ enum ArgonCLI {
     return result?.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
+  static func sandboxDefaults(repoRoot: String?) throws -> SandboxDefaults {
+    let output = try run(repoRoot: repoRoot, args: ["sandbox", "defaults", "--json"])
+    return try decode(SandboxDefaults.self, from: output)
+  }
+
+  static func sandboxConfigPaths(repoRoot: String?) throws -> SandboxConfigPaths {
+    let output = try run(repoRoot: repoRoot, args: ["sandbox", "config", "paths", "--json"])
+    return try decode(SandboxConfigPaths.self, from: output)
+  }
+
   /// Build a reviewer prompt with optional focus instructions prepended.
   static func buildReviewerPrompt(
     sessionId: String, repoRoot: String, nickname: String,
@@ -255,12 +280,14 @@ enum ArgonCLI {
   }
 
   @discardableResult
-  private static func run(repoRoot: String, args: [String]) throws -> String {
+  private static func run(repoRoot: String?, args: [String]) throws -> String {
     let cli = findCLI()
     let process = Process()
     process.executableURL = URL(fileURLWithPath: cli)
-    process.arguments = ["--repo", repoRoot] + args
-    process.currentDirectoryURL = URL(fileURLWithPath: repoRoot)
+    process.arguments = (repoRoot.map { ["--repo", $0] } ?? []) + args
+    if let repoRoot {
+      process.currentDirectoryURL = URL(fileURLWithPath: repoRoot)
+    }
 
     let stdout = Pipe()
     let stderr = Pipe()
@@ -283,6 +310,15 @@ enum ArgonCLI {
     }
 
     return output
+  }
+
+  private static func decode<T: Decodable>(_ type: T.Type, from output: String) throws -> T {
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    guard let data = output.data(using: .utf8) else {
+      throw CLIError.commandFailed("Failed to decode CLI output")
+    }
+    return try decoder.decode(type, from: data)
   }
 
   private static func findCLI() -> String {

@@ -10,16 +10,31 @@ struct SavedAgentProfile: Codable, Identifiable, Hashable {
   var yoloFlag: String
 
   /// Build the full command, optionally with yolo flags.
-  func fullCommand(yolo: Bool) -> String {
+  func fullCommand(yolo: Bool, sandboxed: Bool = false) -> String {
+    var components = [command]
     if yolo && !yoloFlag.isEmpty {
-      return "\(command) \(yoloFlag)"
+      components.append(yoloFlag)
     }
-    return command
+    if sandboxed && shouldUseBareClaudeMode {
+      components.append("--bare")
+    }
+    return components.joined(separator: " ")
   }
 
   /// Convert to the AgentProfile used by the launch sheet.
   func toAgentProfile(isDetected: Bool) -> AgentProfile {
     AgentProfile(id: id, name: name, command: command, icon: icon, isDetected: isDetected)
+  }
+
+  var baseCommand: String {
+    command.split(separator: " ").first.map(String.init) ?? command
+  }
+
+  private var shouldUseBareClaudeMode: Bool {
+    let baseCommand = command.split(separator: " ").first.map(String.init) ?? command
+    return icon == "claude"
+      && (baseCommand == "claude" || baseCommand.hasSuffix("/claude"))
+      && !command.contains("--bare")
   }
 }
 
@@ -85,16 +100,6 @@ final class SavedAgentProfiles {
     profiles = Self.builtinDefaults
     save()
   }
-
-  /// Returns AgentProfiles for the launch sheet, checking which commands exist.
-  func agentProfiles() -> [AgentProfile] {
-    profiles.map { saved in
-      let baseCommand = saved.command.components(separatedBy: " ").first ?? saved.command
-      let detected = AgentDetector.commandExists(baseCommand)
-      return saved.toAgentProfile(isDetected: detected)
-    }
-  }
-
   private func load() {
     guard let data = UserDefaults.standard.data(forKey: Self.key),
       let decoded = try? JSONDecoder().decode([SavedAgentProfile].self, from: data)

@@ -77,18 +77,7 @@ enum AgentDetector {
   }
 
   static func commandExists(_ command: String) -> Bool {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-    process.arguments = [command]
-    process.standardOutput = Pipe()
-    process.standardError = Pipe()
-    do {
-      try process.run()
-      process.waitUntilExit()
-      return process.terminationStatus == 0
-    } catch {
-      return false
-    }
+    UserShell.commandExists(command)
   }
 }
 
@@ -127,6 +116,7 @@ final class ReviewerAgentInstance: Identifiable {
   let id = UUID()
   let nickname: String
   let profile: AgentProfile
+  let sandboxEnabled: Bool
   let focusPrompt: String?
   let sessionId: String
   let repoRoot: String
@@ -136,11 +126,12 @@ final class ReviewerAgentInstance: Identifiable {
   var process: Process?
 
   init(
-    nickname: String, profile: AgentProfile, focusPrompt: String?,
+    nickname: String, profile: AgentProfile, sandboxEnabled: Bool, focusPrompt: String?,
     sessionId: String, repoRoot: String
   ) {
     self.nickname = nickname
     self.profile = profile
+    self.sandboxEnabled = sandboxEnabled
     self.focusPrompt = focusPrompt
     self.sessionId = sessionId
     self.repoRoot = repoRoot
@@ -148,7 +139,7 @@ final class ReviewerAgentInstance: Identifiable {
 
   /// The full command with the reviewer prompt appended.
   var fullCommand: String {
-    let cli = ProcessInfo.processInfo.environment["ARGON_CLI_CMD"] ?? "argon"
+    let cli = ArgonCLI.cliPath()
     let prompt = ArgonCLI.buildReviewerPrompt(
       sessionId: sessionId, repoRoot: repoRoot,
       nickname: nickname, focusPrompt: focusPrompt, cli: cli

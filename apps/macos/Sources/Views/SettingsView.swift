@@ -33,10 +33,11 @@ struct AgentIconView: View {
 }
 
 struct SettingsView: View {
+  @Environment(SavedAgentProfiles.self) private var savedAgents
+  @Environment(AgentAvailability.self) private var agentAvailability
   @AppStorage("defaultDiffViewMode") private var defaultDiffViewMode = "unified"
   @AppStorage("diffFontSize") private var diffFontSize = 13.0
   @AppStorage("terminalFontSize") private var terminalFontSize = 12.0
-  @State private var savedAgents = SavedAgentProfiles()
   @State private var selectedAgentId: String?
   @State private var editingNewAgent = false
 
@@ -72,7 +73,8 @@ struct SettingsView: View {
     VStack(spacing: 0) {
       List(selection: $selectedAgentId) {
         ForEach(savedAgents.profiles) { profile in
-          AgentProfileRow(profile: profile) { updated in
+          AgentProfileRow(profile: profile, status: agentAvailability.status(for: profile)) {
+            updated in
             savedAgents.update(updated)
           }
         }
@@ -178,6 +180,7 @@ struct SettingsView: View {
 
 private struct AgentProfileRow: View {
   let profile: SavedAgentProfile
+  let status: AgentAvailability.Status
   let onUpdate: (SavedAgentProfile) -> Void
   @State private var showEditor = false
 
@@ -201,6 +204,9 @@ private struct AgentProfileRow: View {
         .lineLimit(1)
       }
       Spacer()
+      Text(statusLabel)
+        .font(.caption2)
+        .foregroundStyle(statusColor)
       Button {
         showEditor = true
       } label: {
@@ -214,6 +220,28 @@ private struct AgentProfileRow: View {
       AgentEditorSheet(profile: profile) { updated in
         onUpdate(updated)
       }
+    }
+  }
+
+  private var statusLabel: String {
+    switch status {
+    case .checking:
+      "checking"
+    case .available:
+      "available"
+    case .unavailable:
+      "missing"
+    }
+  }
+
+  private var statusColor: Color {
+    switch status {
+    case .checking:
+      .secondary
+    case .available:
+      .green
+    case .unavailable:
+      .orange
     }
   }
 }

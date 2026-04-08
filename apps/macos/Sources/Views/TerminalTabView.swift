@@ -44,11 +44,15 @@ struct AgentTerminalView: NSViewRepresentable {
     termView.nativeBackgroundColor = .textBackgroundColor
     termView.processDelegate = context.coordinator
 
-    let shell = "/bin/zsh"
-    let args = ["-l", "-c", agent.fullCommand]
+    let processSpec: SandboxedProcessSpec
+    if agent.sandboxEnabled {
+      processSpec = ArgonSandbox.reviewerLaunchSpec(agent: agent)
+    } else {
+      processSpec = UserShell.launchSpec(command: agent.fullCommand)
+    }
     termView.startProcess(
-      executable: shell,
-      args: args,
+      executable: processSpec.executable,
+      args: processSpec.args,
       environment: buildEnvironment(),
       execName: nil,
       currentDirectory: agent.repoRoot

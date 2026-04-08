@@ -16,6 +16,7 @@ use argon_core::{
 };
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand, ValueEnum};
+use sandbox::{ConfigFormat, ConfigScope, ConfigTarget, SandboxConfig, SandboxPolicy};
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]
@@ -28,6 +29,8 @@ struct Cli {
     #[arg(long, global = true)]
     agent: Option<String>,
     #[arg(long, global = true)]
+    sandbox: bool,
+    #[arg(long, global = true)]
     description: Option<String>,
     #[command(subcommand)]
     command: Commands,
@@ -37,6 +40,7 @@ struct Cli {
 struct LaunchOptions {
     desktop_launch: Option<PathBuf>,
     agent_command: Option<String>,
+    sandbox_agent: bool,
     change_summary: Option<String>,
 }
 
@@ -51,6 +55,8 @@ enum Commands {
     Review(ReviewArgs),
     #[command(subcommand)]
     Agent(AgentCommands),
+    #[command(subcommand)]
+    Sandbox(SandboxCommands),
     #[command(subcommand)]
     Reviewer(ReviewerCommands),
     Diff(DiffArgs),
@@ -82,6 +88,33 @@ enum AgentCommands {
     Prompt(PromptArgs),
     #[command(subcommand)]
     Dev(DevCommands),
+}
+
+#[derive(Subcommand, Debug)]
+enum SandboxCommands {
+    /// Print the built-in writable paths and roots Argon adds by default.
+    Defaults(SandboxDefaultsArgs),
+    /// Inspect and edit sandbox configuration files.
+    #[command(subcommand)]
+    Config(SandboxConfigCommands),
+    /// Run a command inside Argon's filesystem sandbox.
+    Exec(SandboxExecArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum SandboxConfigCommands {
+    /// Print the resolved repo and user sandbox config paths.
+    Paths(SandboxConfigPathsArgs),
+    /// Enable or disable built-in default writable locations for a config section.
+    SetDefaults(SandboxConfigSetDefaultsArgs),
+    /// Add a writable subtree to a sandbox config section.
+    AddWriteRoot(SandboxConfigPathArgs),
+    /// Remove a writable subtree from a sandbox config section.
+    RemoveWriteRoot(SandboxConfigPathArgs),
+    /// Add a single writable path to a sandbox config section.
+    AddWritePath(SandboxConfigPathArgs),
+    /// Remove a single writable path from a sandbox config section.
+    RemoveWritePath(SandboxConfigPathArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -211,7 +244,95 @@ struct PromptArgs {
     #[arg(long)]
     launch: Option<String>,
     #[arg(long)]
+    sandbox: bool,
+    #[arg(long)]
     json: bool,
+}
+
+#[derive(clap::Args, Debug)]
+struct SandboxExecArgs {
+    /// Repository root used to resolve repo-local sandbox config and relative paths.
+    #[arg(long)]
+    repo_root: Option<PathBuf>,
+    /// Writable directory roots whose descendants remain writable.
+    #[arg(long = "write-root", required = true)]
+    write_roots: Vec<PathBuf>,
+    /// Command to run after `--`.
+    #[arg(trailing_var_arg = true, required = true, allow_hyphen_values = true)]
+    command: Vec<String>,
+}
+
+#[derive(clap::Args, Debug)]
+struct SandboxDefaultsArgs {
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args, Debug)]
+struct SandboxConfigPathsArgs {
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args, Debug)]
+struct SandboxConfigSetDefaultsArgs {
+    /// Which config file to edit.
+    #[arg(long, value_enum)]
+    scope: SandboxConfigScopeArg,
+    /// Which config section to edit.
+    #[arg(long, value_enum, default_value = "base")]
+    target: SandboxConfigTargetArg,
+    /// Set `include_defaults = true` for the target section.
+    #[arg(long)]
+    enabled: bool,
+    /// Format to use when creating a new config file.
+    #[arg(long, value_enum)]
+    format: Option<SandboxConfigFormatArg>,
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args, Debug)]
+struct SandboxConfigPathArgs {
+    /// Which config file to edit.
+    #[arg(long, value_enum)]
+    scope: SandboxConfigScopeArg,
+    /// Which config section to edit.
+    #[arg(long, value_enum, default_value = "base")]
+    target: SandboxConfigTargetArg,
+    /// Path to add or remove. User-scope paths must be absolute.
+    path: PathBuf,
+    /// Format to use when creating a new config file.
+    #[arg(long, value_enum)]
+    format: Option<SandboxConfigFormatArg>,
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum SandboxConfigScopeArg {
+    User,
+    Repo,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum SandboxConfigFormatArg {
+    Yaml,
+    Yml,
+    Toml,
+    Json,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum SandboxConfigTargetArg {
+    Base,
+    Macos,
+    Linux,
+    Windows,
 }
 
 #[derive(clap::Args, Debug)]
@@ -424,6 +545,37 @@ impl From<ReviewModeArg> for ReviewMode {
     }
 }
 
+impl From<SandboxConfigScopeArg> for ConfigScope {
+    fn from(value: SandboxConfigScopeArg) -> Self {
+        match value {
+            SandboxConfigScopeArg::User => ConfigScope::User,
+            SandboxConfigScopeArg::Repo => ConfigScope::Repo,
+        }
+    }
+}
+
+impl From<SandboxConfigFormatArg> for ConfigFormat {
+    fn from(value: SandboxConfigFormatArg) -> Self {
+        match value {
+            SandboxConfigFormatArg::Yaml => ConfigFormat::Yaml,
+            SandboxConfigFormatArg::Yml => ConfigFormat::Yml,
+            SandboxConfigFormatArg::Toml => ConfigFormat::Toml,
+            SandboxConfigFormatArg::Json => ConfigFormat::Json,
+        }
+    }
+}
+
+impl From<SandboxConfigTargetArg> for ConfigTarget {
+    fn from(value: SandboxConfigTargetArg) -> Self {
+        match value {
+            SandboxConfigTargetArg::Base => ConfigTarget::Base,
+            SandboxConfigTargetArg::Macos => ConfigTarget::Macos,
+            SandboxConfigTargetArg::Linux => ConfigTarget::Linux,
+            SandboxConfigTargetArg::Windows => ConfigTarget::Windows,
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 struct AgentPromptResponse {
     schema_version: String,
@@ -486,6 +638,7 @@ fn run() -> Result<()> {
         launch: LaunchOptions {
             desktop_launch: normalize_override_path(cli.desktop_launch.clone()),
             agent_command: cli.agent.clone(),
+            sandbox_agent: cli.sandbox,
             change_summary: cli.description.clone(),
         },
         repo_root_override: normalize_override_path(cli.repo.clone()),
@@ -500,6 +653,14 @@ fn run() -> Result<()> {
             "--agent is only supported with session-starting commands (`argon <path>`, `argon review`, `argon agent start`)"
         );
     }
+    if runtime.launch.sandbox_agent && runtime.launch.agent_command.is_none() {
+        bail!("--sandbox requires --agent");
+    }
+    if runtime.launch.sandbox_agent && !supports_agent_launch {
+        bail!(
+            "--sandbox is only supported with session-starting commands (`argon <path>`, `argon review`, `argon agent start`)"
+        );
+    }
     if runtime.launch.change_summary.is_some() && !supports_agent_launch {
         bail!(
             "--description is only supported with session-starting commands (`argon <path>`, `argon review`, `argon agent start`)"
@@ -509,6 +670,7 @@ fn run() -> Result<()> {
     match cli.command {
         Commands::Review(args) => run_review(args, &runtime),
         Commands::Agent(command) => run_agent(command, &runtime),
+        Commands::Sandbox(command) => run_sandbox(command, &runtime),
         Commands::Reviewer(command) => run_reviewer(command, &runtime),
         Commands::Diff(args) => run_diff(args, &runtime),
         Commands::Draft(command) => run_draft(command, &runtime),
@@ -524,6 +686,7 @@ fn maybe_direct_path_invocation(raw_args: &[String]) -> Option<(PathBuf, LaunchO
     let mut positional = Vec::<String>::new();
     let mut desktop_launch = None;
     let mut agent_command = None;
+    let mut sandbox_agent = false;
     let mut change_summary = None;
     let mut repo_flag = None;
     let mut index = 1;
@@ -545,6 +708,11 @@ fn maybe_direct_path_invocation(raw_args: &[String]) -> Option<(PathBuf, LaunchO
             let value = raw_args.get(index + 1)?;
             agent_command = Some(value.clone());
             index += 2;
+            continue;
+        }
+        if token == "--sandbox" {
+            sandbox_agent = true;
+            index += 1;
             continue;
         }
         if token == "--description" {
@@ -579,6 +747,7 @@ fn maybe_direct_path_invocation(raw_args: &[String]) -> Option<(PathBuf, LaunchO
         LaunchOptions {
             desktop_launch: normalize_override_path(desktop_launch),
             agent_command,
+            sandbox_agent,
             change_summary,
         },
     ))
@@ -587,11 +756,15 @@ fn maybe_direct_path_invocation(raw_args: &[String]) -> Option<(PathBuf, LaunchO
 fn is_command_token(token: &str) -> bool {
     matches!(
         token,
-        "review" | "agent" | "reviewer" | "diff" | "draft" | "skill" | "help"
+        "review" | "agent" | "sandbox" | "reviewer" | "diff" | "draft" | "skill" | "help"
     )
 }
 
 fn run_path_review(path: PathBuf, launch: &LaunchOptions) -> Result<()> {
+    if launch.sandbox_agent && launch.agent_command.is_none() {
+        bail!("--sandbox requires --agent");
+    }
+
     let repo_root = git_repo_root_from(&path)?;
     let target = auto_detect_review_target(&repo_root)?;
     let store = SessionStore::for_repo_root(repo_root);
@@ -603,7 +776,11 @@ fn run_path_review(path: PathBuf, launch: &LaunchOptions) -> Result<()> {
         launch.change_summary.clone(),
     )?;
     launch_desktop_app_for_session(store.repo_root(), session.id, launch);
-    maybe_launch_agent_for_session(&session, launch.agent_command.as_deref())?;
+    maybe_launch_agent_for_session(
+        &session,
+        launch.agent_command.as_deref(),
+        launch.sandbox_agent,
+    )?;
 
     print_session(CliCommand::Review, &session, false)
 }
@@ -619,6 +796,14 @@ fn run_agent(command: AgentCommands, runtime: &RuntimeOptions) -> Result<()> {
         AgentCommands::Ack(args) => run_ack(args, runtime),
         AgentCommands::Prompt(args) => run_prompt(args, runtime),
         AgentCommands::Dev(command) => run_dev(command, runtime),
+    }
+}
+
+fn run_sandbox(command: SandboxCommands, runtime: &RuntimeOptions) -> Result<()> {
+    match command {
+        SandboxCommands::Defaults(args) => run_sandbox_defaults(args),
+        SandboxCommands::Config(command) => run_sandbox_config(command, runtime),
+        SandboxCommands::Exec(args) => run_sandbox_exec(args),
     }
 }
 
@@ -897,7 +1082,11 @@ fn run_start(args: StartArgs, runtime: &RuntimeOptions) -> Result<()> {
     )?;
     let session = store.mark_agent_seen(created.id)?;
     launch_desktop_app_for_session(&repo_root, session.id, &runtime.launch);
-    maybe_launch_agent_for_session(&session, runtime.launch.agent_command.as_deref())?;
+    maybe_launch_agent_for_session(
+        &session,
+        runtime.launch.agent_command.as_deref(),
+        runtime.launch.sandbox_agent,
+    )?;
 
     if args.wait {
         let wait_result = wait_for_decision(&store, session.id, args.timeout_secs)?;
@@ -924,7 +1113,11 @@ fn run_review(args: ReviewArgs, runtime: &RuntimeOptions) -> Result<()> {
         runtime.launch.change_summary.clone(),
     )?;
     launch_desktop_app_for_session(&repo_root, session.id, &runtime.launch);
-    maybe_launch_agent_for_session(&session, runtime.launch.agent_command.as_deref())?;
+    maybe_launch_agent_for_session(
+        &session,
+        runtime.launch.agent_command.as_deref(),
+        runtime.launch.sandbox_agent,
+    )?;
 
     if args.wait {
         let wait_result = wait_for_decision(&store, session.id, args.timeout_secs)?;
@@ -1044,6 +1237,9 @@ fn run_prompt(args: PromptArgs, runtime: &RuntimeOptions) -> Result<()> {
     if args.json && args.launch.is_some() {
         bail!("--json cannot be combined with --launch");
     }
+    if args.sandbox && args.launch.is_none() {
+        bail!("--sandbox requires --launch");
+    }
 
     let store = open_store_for_current_repo(runtime)?;
     let session = store.load(args.session)?;
@@ -1073,7 +1269,7 @@ fn run_prompt(args: PromptArgs, runtime: &RuntimeOptions) -> Result<()> {
     println!("{prompt}");
 
     if let Some(template) = args.launch.as_deref() {
-        launch_agent_command(&session, &prompt, &continue_command, template)?;
+        launch_agent_command(&session, &prompt, &continue_command, template, args.sandbox)?;
     }
     Ok(())
 }
@@ -1463,7 +1659,11 @@ fn follow_event_kind(
     AgentEventKind::Snapshot
 }
 
-fn maybe_launch_agent_for_session(session: &ReviewSession, template: Option<&str>) -> Result<()> {
+fn maybe_launch_agent_for_session(
+    session: &ReviewSession,
+    template: Option<&str>,
+    sandbox_agent: bool,
+) -> Result<()> {
     let Some(template) = template else {
         return Ok(());
     };
@@ -1471,7 +1671,7 @@ fn maybe_launch_agent_for_session(session: &ReviewSession, template: Option<&str
     let pending_feedback = collect_pending_feedback(session);
     let continue_command = agent_wait_command(session);
     let prompt = build_agent_prompt(session, &pending_feedback, &continue_command);
-    launch_agent_command(session, &prompt, &continue_command, template)
+    launch_agent_command(session, &prompt, &continue_command, template, sandbox_agent)
 }
 
 fn build_agent_prompt(
@@ -1582,9 +1782,15 @@ fn launch_agent_command(
     prompt: &str,
     continue_command: &str,
     template: &str,
+    sandbox_agent: bool,
 ) -> Result<()> {
     let command = render_agent_launch_command(template, session, prompt, continue_command);
-    let status = shell_command(&command)
+    let mut process = if sandbox_agent {
+        sandbox_exec_shell_command(session, &command)?
+    } else {
+        shell_command(&command)
+    };
+    let status = process
         .current_dir(&session.repo_root)
         .env("ARGON_SESSION_ID", session.id.to_string())
         .env("ARGON_REPO_ROOT", &session.repo_root)
@@ -1626,6 +1832,229 @@ fn render_agent_launch_command(
     } else {
         format!("{rendered} {prompt_quoted}")
     }
+}
+
+fn run_sandbox_defaults(args: SandboxDefaultsArgs) -> Result<()> {
+    let defaults = SandboxPolicy::built_in_defaults();
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&defaults)?);
+    } else {
+        println!("Built-in writable paths:");
+        for path in defaults.writable_paths() {
+            println!("- {}", path.display());
+        }
+        println!("Built-in writable roots:");
+        for root in defaults.writable_roots() {
+            println!("- {}", root.display());
+        }
+    }
+    Ok(())
+}
+
+fn run_sandbox_config(command: SandboxConfigCommands, runtime: &RuntimeOptions) -> Result<()> {
+    match command {
+        SandboxConfigCommands::Paths(args) => run_sandbox_config_paths(args, runtime),
+        SandboxConfigCommands::SetDefaults(args) => run_sandbox_config_set_defaults(args, runtime),
+        SandboxConfigCommands::AddWriteRoot(args) => {
+            run_sandbox_config_path_update(args, runtime, ConfigPathOperation::AddRoot)
+        }
+        SandboxConfigCommands::RemoveWriteRoot(args) => {
+            run_sandbox_config_path_update(args, runtime, ConfigPathOperation::RemoveRoot)
+        }
+        SandboxConfigCommands::AddWritePath(args) => {
+            run_sandbox_config_path_update(args, runtime, ConfigPathOperation::AddPath)
+        }
+        SandboxConfigCommands::RemoveWritePath(args) => {
+            run_sandbox_config_path_update(args, runtime, ConfigPathOperation::RemovePath)
+        }
+    }
+}
+
+fn run_sandbox_config_paths(args: SandboxConfigPathsArgs, runtime: &RuntimeOptions) -> Result<()> {
+    let repo_root = resolved_sandbox_repo_root(runtime)?;
+    let paths = sandbox::resolved_config_paths(repo_root.as_deref())?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&paths)?);
+    } else {
+        if let Some(path) = paths.repo_default_path.as_ref() {
+            println!("repo-default: {}", path.display());
+        }
+        if let Some(path) = paths.repo_existing_path.as_ref() {
+            println!("repo-existing: {}", path.display());
+        }
+        println!("user-default: {}", paths.user_default_path.display());
+        if let Some(path) = paths.user_existing_path.as_ref() {
+            println!("user-existing: {}", path.display());
+        }
+    }
+    Ok(())
+}
+
+fn run_sandbox_config_set_defaults(
+    args: SandboxConfigSetDefaultsArgs,
+    runtime: &RuntimeOptions,
+) -> Result<()> {
+    let scope: ConfigScope = args.scope.into();
+    let target: ConfigTarget = args.target.into();
+    let repo_root = resolved_sandbox_repo_root(runtime)?;
+    let mut config = sandbox::load_scope_config(scope, repo_root.as_deref())?.unwrap_or_default();
+    config.section_mut(target).include_defaults = Some(args.enabled);
+    let path = sandbox::save_scope_config(
+        scope,
+        repo_root.as_deref(),
+        &config,
+        args.format.map(Into::into),
+    )?;
+    print_saved_sandbox_config(path, &config, args.json)
+}
+
+fn run_sandbox_config_path_update(
+    args: SandboxConfigPathArgs,
+    runtime: &RuntimeOptions,
+    operation: ConfigPathOperation,
+) -> Result<()> {
+    let scope: ConfigScope = args.scope.into();
+    let target: ConfigTarget = args.target.into();
+    validate_sandbox_config_input_path(scope, &args.path)?;
+    let repo_root = resolved_sandbox_repo_root(runtime)?;
+    let mut config = sandbox::load_scope_config(scope, repo_root.as_deref())?.unwrap_or_default();
+    let section = config.section_mut(target);
+
+    match operation {
+        ConfigPathOperation::AddRoot => upsert_path(&mut section.write_roots, args.path),
+        ConfigPathOperation::RemoveRoot => remove_path(&mut section.write_roots, &args.path),
+        ConfigPathOperation::AddPath => upsert_path(&mut section.write_paths, args.path),
+        ConfigPathOperation::RemovePath => remove_path(&mut section.write_paths, &args.path),
+    }
+
+    let path = sandbox::save_scope_config(
+        scope,
+        repo_root.as_deref(),
+        &config,
+        args.format.map(Into::into),
+    )?;
+    print_saved_sandbox_config(path, &config, args.json)
+}
+
+fn run_sandbox_exec(args: SandboxExecArgs) -> Result<()> {
+    let (program, command_args) = args
+        .command
+        .split_first()
+        .context("sandbox exec requires a command after `--`")?;
+    let current_dir = if args.repo_root.is_none() {
+        std::env::current_dir().ok()
+    } else {
+        None
+    };
+    let repo_root = args.repo_root.as_deref().or(current_dir.as_deref());
+    let policy =
+        SandboxPolicy::read_only_with_writable_roots_for_repo(args.write_roots, repo_root)?;
+    sandbox::apply_current_process(&policy)?;
+    exec_command(program, command_args)
+}
+
+fn exec_command(program: &str, args: &[String]) -> Result<()> {
+    let mut command = Command::new(program);
+    command.args(args);
+
+    #[cfg(unix)]
+    {
+        let error = command.exec();
+        Err(anyhow::Error::new(error).context(format!("failed to exec {}", shell_quote(program))))
+    }
+
+    #[cfg(not(unix))]
+    {
+        let status = command
+            .status()
+            .with_context(|| format!("failed to launch {}", shell_quote(program)))?;
+        if !status.success() {
+            bail!("sandboxed command exited with status: {status}");
+        }
+        Ok(())
+    }
+}
+
+fn sandbox_exec_shell_command(session: &ReviewSession, command: &str) -> Result<Command> {
+    let current_exe =
+        std::env::current_exe().context("failed to resolve the current argon executable")?;
+    let store = SessionStore::for_repo_root(&session.repo_root);
+    let mut child = Command::new(current_exe);
+    child
+        .arg("sandbox")
+        .arg("exec")
+        .arg("--repo-root")
+        .arg(&session.repo_root)
+        .arg("--write-root")
+        .arg(&session.repo_root)
+        .arg("--write-root")
+        .arg(store.sessions_dir())
+        .arg("--");
+
+    #[cfg(target_os = "windows")]
+    {
+        child.arg("cmd").arg("/C").arg(command);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        child.arg("sh").arg("-lc").arg(command);
+    }
+
+    Ok(child)
+}
+
+fn resolved_sandbox_repo_root(runtime: &RuntimeOptions) -> Result<Option<PathBuf>> {
+    if let Some(path) = &runtime.repo_root_override {
+        return Ok(Some(path.clone()));
+    }
+    let current_dir = std::env::current_dir().context("failed to read current directory")?;
+    Ok(Some(current_dir))
+}
+
+fn print_saved_sandbox_config(path: PathBuf, config: &SandboxConfig, json: bool) -> Result<()> {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "path": path,
+                "config": config,
+            }))?
+        );
+    } else {
+        println!("path: {}", path.display());
+        println!("base-write-paths: {}", config.base.write_paths.len());
+        println!("base-write-roots: {}", config.base.write_roots.len());
+    }
+    Ok(())
+}
+
+fn upsert_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.contains(&path) {
+        paths.push(path);
+    }
+}
+
+fn remove_path(paths: &mut Vec<PathBuf>, path: &Path) {
+    paths.retain(|candidate| candidate != path);
+}
+
+fn validate_sandbox_config_input_path(scope: ConfigScope, path: &Path) -> Result<()> {
+    if matches!(scope, ConfigScope::User) && !path.is_absolute() {
+        bail!(
+            "user sandbox config paths must be absolute: {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum ConfigPathOperation {
+    AddRoot,
+    RemoveRoot,
+    AddPath,
+    RemovePath,
 }
 
 fn shell_command(command: &str) -> Command {
@@ -1702,6 +2131,22 @@ mod tests {
         assert_eq!(path, PathBuf::from("."));
         assert_eq!(launch.desktop_launch, Some(PathBuf::from("/tmp/launcher")));
         assert_eq!(launch.agent_command.as_deref(), Some("codex --yolo"));
+    }
+
+    #[test]
+    fn direct_path_invocation_accepts_sandbox_flag() {
+        let raw_args = vec![
+            "argon".to_string(),
+            "--agent".to_string(),
+            "codex".to_string(),
+            "--sandbox".to_string(),
+            ".".to_string(),
+        ];
+        let (path, launch) =
+            maybe_direct_path_invocation(&raw_args).expect("expected direct path invocation");
+        assert_eq!(path, PathBuf::from("."));
+        assert_eq!(launch.agent_command.as_deref(), Some("codex"));
+        assert!(launch.sandbox_agent);
     }
 
     #[cfg(unix)]

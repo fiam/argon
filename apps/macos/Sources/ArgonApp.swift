@@ -4,12 +4,19 @@ import SwiftUI
 struct ArgonApp: App {
   @FocusedValue(\.appState) private var focusedAppState
   @State private var recentProjects = RecentProjects()
+  @State private var savedAgents = SavedAgentProfiles()
+  @State private var agentAvailability = AgentAvailability()
 
   var body: some Scene {
     // Welcome window (shown when app launches without CLI args)
     Window("Welcome to Argon", id: "welcome") {
       WelcomeView()
         .environment(recentProjects)
+        .environment(savedAgents)
+        .environment(agentAvailability)
+        .task(id: savedAgents.profiles) {
+          agentAvailability.refresh(for: savedAgents.profiles)
+        }
     }
     .defaultSize(width: 500, height: 450)
 
@@ -18,6 +25,11 @@ struct ArgonApp: App {
       if let target {
         ReviewWindowView(target: target)
           .environment(recentProjects)
+          .environment(savedAgents)
+          .environment(agentAvailability)
+          .task(id: savedAgents.profiles) {
+            agentAvailability.refresh(for: savedAgents.profiles)
+          }
       }
     }
     .defaultSize(width: 1100, height: 700)
@@ -76,6 +88,11 @@ struct ArgonApp: App {
 
     Settings {
       SettingsView()
+        .environment(savedAgents)
+        .environment(agentAvailability)
+        .task(id: savedAgents.profiles) {
+          agentAvailability.refresh(for: savedAgents.profiles)
+        }
     }
   }
 }

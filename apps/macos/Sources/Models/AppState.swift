@@ -621,12 +621,13 @@ final class AppState {
 
   // MARK: - Reviewer Agents
 
-  func launchReviewerAgent(profile: AgentProfile, focusPrompt: String?) {
+  func launchReviewerAgent(profile: AgentProfile, focusPrompt: String?, sandboxEnabled: Bool) {
     guard let sessionId, let repoRoot else { return }
     let nickname = DetectiveNames.next()
     let agent = ReviewerAgentInstance(
       nickname: nickname,
       profile: profile,
+      sandboxEnabled: sandboxEnabled,
       focusPrompt: focusPrompt,
       sessionId: sessionId,
       repoRoot: repoRoot
