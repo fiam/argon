@@ -15,15 +15,54 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
+    DEAD_CODE_STRIPPING: true
 
 targets:
   Argon:
     type: application
     platform: macOS
+    # Keep Xcode user script sandboxing disabled for this target. The app bundles
+    # the Rust CLI via run-script phases, and enabling the sandbox currently
+    # creates a build-graph cycle around the generated CLI artifact.
+    preBuildScripts:
+      - name: Build bundled argon CLI
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          REPO_ROOT="$(cd "$SRCROOT/../.." && pwd)"
+          if [ -n "${CARGO:-}" ] && [ -x "${CARGO}" ]; then
+            CARGO_BIN="${CARGO}"
+          elif [ -x "$HOME/.cargo/bin/cargo" ]; then
+            CARGO_BIN="$HOME/.cargo/bin/cargo"
+          elif [ -x "/opt/homebrew/bin/cargo" ]; then
+            CARGO_BIN="/opt/homebrew/bin/cargo"
+          elif [ -x "/usr/local/bin/cargo" ]; then
+            CARGO_BIN="/usr/local/bin/cargo"
+          elif command -v cargo >/dev/null 2>&1; then
+            CARGO_BIN="$(command -v cargo)"
+          else
+            echo "error: cargo not found. Install Rust or set CARGO to an absolute cargo path." >&2
+            exit 1
+          fi
+          "$CARGO_BIN" build --manifest-path "$REPO_ROOT/Cargo.toml" --bin argon --release
+    postBuildScripts:
+      - name: Bundle argon CLI
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          REPO_ROOT="$(cd "$SRCROOT/../.." && pwd)"
+          CLI_PATH="$REPO_ROOT/target/release/argon"
+          DEST_DIR="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/bin"
+          mkdir -p "$DEST_DIR"
+          cp "$CLI_PATH" "$DEST_DIR/argon"
+          chmod +x "$DEST_DIR/argon"
     sources:
       - Sources
-    resources:
-      - Resources
+      - path: Resources
+        buildPhase: resources
+        excludes:
+          - Info.plist
+          - Argon.entitlements
     dependencies:
       - package: SwiftTerm
         product: SwiftTerm
@@ -39,6 +78,7 @@ targets:
         ENABLE_HARDENED_RUNTIME: true
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: true
 
   ArgonTests:
     type: bundle.unit-test

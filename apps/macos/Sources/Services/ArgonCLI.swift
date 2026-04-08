@@ -10,7 +10,7 @@ enum ArgonCLI {
     let cli = findCLI()
     let process = Process()
     process.executableURL = URL(fileURLWithPath: cli)
-    process.arguments = [repoRoot, "--json"]
+    process.arguments = ["review", "--repo", repoRoot, "--json"]
     process.currentDirectoryURL = URL(fileURLWithPath: repoRoot)
 
     // Prevent the CLI from trying to launch the desktop app (we are it).
