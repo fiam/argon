@@ -64,7 +64,8 @@ enum SessionLoader {
   private static func sessionsDirectoryURL(repoRoot: String) -> URL {
     let storageRoot = argonStorageRoot()
     let repoKey = repoStorageKey(repoRoot: repoRoot)
-    return storageRoot
+    return
+      storageRoot
       .appendingPathComponent("sessions")
       .appendingPathComponent(repoKey)
   }
