@@ -3,6 +3,16 @@ import SwiftUI
 struct DiffDetailView: View {
   @Environment(AppState.self) private var appState
 
+  private var diffDocument: DiffDocument {
+    DiffDocumentBuilder.build(
+      files: appState.files,
+      session: appState.session,
+      pendingDrafts: appState.pendingDrafts,
+      diffMode: appState.diffMode,
+      activeCommentLineID: appState.activeCommentLineId
+    )
+  }
+
   var body: some View {
     if appState.files.isEmpty && !appState.isLoading {
       EmptyStateView(
@@ -17,153 +27,26 @@ struct DiffDetailView: View {
         if appState.showSearch {
           DiffSearchBar()
         }
-        ScrollViewReader { proxy in
-          ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-              // Orphaned threads (file no longer in diff)
-              let orphaned = orphanedThreads
-              if !orphaned.isEmpty {
-                OrphanedThreadsSection(threads: orphaned)
-                  .id("__orphaned__")
-              }
-
-              ForEach(appState.files) { file in
-                Section {
-                  let anchored = anchoredItems(for: file)
-
-                  if appState.diffMode == .unified {
-                    ForEach(file.hunks) { hunk in
-                      DiffHunkView(hunk: hunk, filePath: file.newPath, anchored: anchored)
-                    }
-                  } else {
-                    SideBySideDiffView(file: file, anchored: anchored)
-                  }
-
-                  Color.clear.frame(height: 12)
-                } header: {
-                  DiffFileHeader(file: file)
-                    .id(file.id)
-                }
-              }
+        AppKitDiffViewport(document: diffDocument, appState: appState)
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+          .background(Color(nsColor: .textBackgroundColor))
+          .alert(
+            "Discard comment?",
+            isPresented: Binding(
+              get: { appState.showDiscardAlert },
+              set: { appState.showDiscardAlert = $0 }
+            )
+          ) {
+            Button("Discard", role: .destructive) {
+              appState.confirmDiscard()
             }
-            .padding(.bottom, 20)
-            .id(appState.diffMode)
-          }
-          .onChange(of: appState.scrollToFile) { _, fileId in
-            if let fileId {
-              proxy.scrollTo(fileId, anchor: .top)
-              appState.scrollToFile = nil
+            Button("Keep Editing", role: .cancel) {
+              appState.cancelDiscard()
             }
+          } message: {
+            Text("You have an unsaved comment. Discard it and start a new one?")
           }
-          .onChange(of: appState.scrollToThread) { _, threadId in
-            if let threadId {
-              proxy.scrollTo("thread-\(threadId)", anchor: .center)
-              appState.scrollToThread = nil
-            }
-          }
-          .onChange(of: appState.scrollToSearchMatch) { _, lineId in
-            if let lineId {
-              withAnimation(.easeInOut(duration: 0.2)) {
-                proxy.scrollTo(lineId, anchor: .center)
-              }
-              appState.scrollToSearchMatch = nil
-            }
-          }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color(nsColor: .textBackgroundColor))
-        .alert(
-          "Discard comment?",
-          isPresented: Binding(
-            get: { appState.showDiscardAlert },
-            set: { appState.showDiscardAlert = $0 }
-          )
-        ) {
-          Button("Discard", role: .destructive) {
-            appState.confirmDiscard()
-          }
-          Button("Keep Editing", role: .cancel) {
-            appState.cancelDiscard()
-          }
-        } message: {
-          Text("You have an unsaved comment. Discard it and start a new one?")
-        }
       }  // VStack
-    }
-  }
-
-  private func anchoredItems(for file: FileDiff) -> [UInt32: [InlineItem]] {
-    var result: [UInt32: [InlineItem]] = [:]
-    let allNewLines = file.hunks.flatMap(\.lines).compactMap(\.newLine).sorted()
-    let firstLine = allNewLines.first ?? 1
-
-    let outdatedSet = Set(outdatedThreads(for: file).map(\.id))
-
-    if let session = appState.session {
-      for thread in session.threads {
-        guard let anchor = thread.comments.first?.anchor,
-          anchor.filePath == file.newPath
-        else { continue }
-
-        let isOutdated = outdatedSet.contains(thread.id)
-
-        if let line = anchor.lineNew, allNewLines.contains(line) {
-          result[line, default: []].append(.thread(thread, isOutdated: isOutdated))
-        } else {
-          let target = anchor.lineNew ?? anchor.lineOld ?? 0
-          let nearest =
-            allNewLines.min(by: {
-              abs(Int($0) - Int(target)) < abs(Int($1) - Int(target))
-            }) ?? firstLine
-          result[nearest, default: []].append(.thread(thread, isOutdated: isOutdated))
-        }
-      }
-    }
-
-    for draft in appState.pendingDrafts {
-      guard draft.anchor.filePath == file.newPath,
-        let line = draft.anchor.lineNew
-      else { continue }
-      result[line, default: []].append(.draft(draft))
-    }
-
-    return result
-  }
-
-  /// Threads whose file is not in the current diff at all.
-  private var orphanedThreads: [ReviewThread] {
-    guard let session = appState.session else { return [] }
-    let filesInDiff = Set(appState.files.map(\.newPath))
-    return session.threads.filter { thread in
-      guard let anchor = thread.comments.first?.anchor,
-        let filePath = anchor.filePath
-      else {
-        // Global comments (no file) — not orphaned
-        return false
-      }
-      return !filesInDiff.contains(filePath)
-    }
-  }
-
-  private func outdatedThreads(for file: FileDiff) -> [ReviewThread] {
-    guard let session = appState.session else { return [] }
-    // A thread is outdated only if its anchor line was explicitly removed
-    // (appears as a removed line in the diff with no corresponding new line)
-    let removedLines = Set(
-      file.hunks.flatMap(\.lines)
-        .filter { $0.kind == .removed }
-        .compactMap(\.oldLine)
-    )
-
-    return session.threads.filter { thread in
-      guard let anchor = thread.comments.first?.anchor,
-        anchor.filePath == file.newPath
-      else { return false }
-      // If anchored to an old line that was removed, it's outdated
-      if let oldLine = anchor.lineOld, removedLines.contains(oldLine) {
-        return true
-      }
-      return false
     }
   }
 }
@@ -257,22 +140,13 @@ struct DiffSearchBar: View {
   }
 }
 
-enum InlineItem: Identifiable {
-  case thread(ReviewThread, isOutdated: Bool)
-  case draft(DraftComment)
-
-  var id: String {
-    switch self {
-    case .thread(let t, _): "t-\(t.id)"
-    case .draft(let d): "d-\(d.id)"
-    }
-  }
-}
-
 // MARK: - File Header (sticky)
 
 struct DiffFileHeader: View {
   let file: FileDiff
+  var showSplitGuide = false
+  var isFloating = false
+  var showTopSeparator = false
 
   var body: some View {
     HStack {
@@ -288,8 +162,28 @@ struct DiffFileHeader: View {
       }
     }
     .padding(.horizontal, 16)
-    .padding(.vertical, 8)
-    .background(.bar)
+    .padding(.vertical, isFloating ? 6 : 8)
+    .background(Color(nsColor: .controlBackgroundColor))
+    .overlay(alignment: .top) {
+      if showTopSeparator {
+        Rectangle()
+          .fill(Color(nsColor: .separatorColor))
+          .frame(height: 0.5)
+      }
+    }
+    .overlay(alignment: .bottom) {
+      Rectangle()
+        .fill(Color(nsColor: .separatorColor))
+        .frame(height: 0.5)
+    }
+    .overlay {
+      if showSplitGuide {
+        Rectangle()
+          .fill(Color(nsColor: .separatorColor))
+          .frame(width: 0.5)
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+      }
+    }
   }
 }
 
@@ -339,7 +233,7 @@ struct OrphanedThreadsSection: View {
                   Text(filePath)
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundStyle(.tertiary)
-                  if let line = anchor.lineNew {
+                  if let line = anchor.lineNew ?? anchor.lineOld {
                     Text(":\(line)")
                       .font(.system(.caption2, design: .monospaced))
                       .foregroundStyle(.tertiary)
@@ -349,7 +243,7 @@ struct OrphanedThreadsSection: View {
                 .padding(.top, 4)
               }
               InlineThreadView(thread: thread, isOutdated: true)
-                .id("thread-\(thread.id)")
+                .id(DiffAnchor.thread(thread.id).id)
             }
           }
         }
@@ -392,7 +286,7 @@ struct OutdatedThreadsSection: View {
       if isExpanded {
         ForEach(threads) { thread in
           InlineThreadView(thread: thread, isOutdated: true)
-            .id("thread-\(thread.id)")
+            .id(DiffAnchor.thread(thread.id).id)
         }
       }
     }
@@ -405,10 +299,10 @@ struct DiffHunkView: View {
   @Environment(AppState.self) private var appState
   let hunk: DiffHunk
   let filePath: String
-  let anchored: [UInt32: [InlineItem]]
+  let attachmentsByLineID: [String: [DiffInlineAttachment]]
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
+    LazyVStack(alignment: .leading, spacing: 0) {
       HStack(spacing: 0) {
         Text(hunk.header)
           .font(.system(.caption, design: .monospaced))
@@ -428,12 +322,12 @@ struct DiffHunkView: View {
           InlineCommentEditor(filePath: filePath, line: line)
         }
 
-        if let lineNum = line.newLine, let items = anchored[lineNum] {
+        if let items = attachmentsByLineID[line.id] {
           ForEach(items) { item in
             switch item {
             case .thread(let thread, let isOutdated):
               InlineThreadView(thread: thread, isOutdated: isOutdated)
-                .id("thread-\(thread.id)")
+                .id(DiffAnchor.thread(thread.id).id)
             case .draft(let draft):
               InlineDraftView(draft: draft)
             }
@@ -449,101 +343,118 @@ struct DiffHunkView: View {
 struct SideBySideDiffView: View {
   @Environment(AppState.self) private var appState
   let file: FileDiff
-  let anchored: [UInt32: [InlineItem]]
+  let attachmentsByLineID: [String: [DiffInlineAttachment]]
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
+    LazyVStack(alignment: .leading, spacing: 0) {
       if file.sideBySide.isEmpty {
         // Fallback: render unified hunks when side-by-side data is not available
         ForEach(file.hunks) { hunk in
-          DiffHunkView(hunk: hunk, filePath: file.newPath, anchored: anchored)
+          DiffHunkView(
+            hunk: hunk,
+            filePath: file.newPath,
+            attachmentsByLineID: attachmentsByLineID
+          )
         }
       } else {
         ForEach(file.sideBySide) { pair in
           SideBySideRowView(pair: pair, filePath: file.newPath)
 
-          // Show inline items for the right (new) side line
-          if let right = pair.right, let lineNum = right.newLine {
-            if appState.activeCommentLineId == right.id {
-              InlineCommentEditor(filePath: file.newPath, line: right)
-            }
-            if let items = anchored[lineNum] {
-              ForEach(items) { item in
-                switch item {
-                case .thread(let thread, let isOutdated):
-                  InlineThreadView(thread: thread, isOutdated: isOutdated)
-                    .id("thread-\(thread.id)")
-                case .draft(let draft):
-                  InlineDraftView(draft: draft)
-                }
-              }
+          if let editorLine = activeEditorLine(for: pair) {
+            InlineCommentEditor(filePath: file.newPath, line: editorLine)
+          }
+
+          ForEach(pairAttachments(for: pair)) { item in
+            switch item {
+            case .thread(let thread, let isOutdated):
+              InlineThreadView(thread: thread, isOutdated: isOutdated)
+                .id(DiffAnchor.thread(thread.id).id)
+            case .draft(let draft):
+              InlineDraftView(draft: draft)
             }
           }
         }
       }
     }
   }
+
+  private func activeEditorLine(for pair: SideBySidePair) -> DiffLine? {
+    guard let activeCommentLineId = appState.activeCommentLineId else { return nil }
+    return [pair.right, pair.left].compactMap { $0 }.first(where: { $0.id == activeCommentLineId })
+  }
+
+  private func pairAttachments(for pair: SideBySidePair) -> [DiffInlineAttachment] {
+    DiffInlineResolver.attachments(for: pair, attachmentsByLineID: attachmentsByLineID)
+  }
 }
 
 struct SideBySideRowView: View {
   @Environment(AppState.self) private var appState
+  @Environment(\.colorScheme) private var colorScheme
   @AppStorage("diffFontSize") private var diffFontSize = 13.0
   let pair: SideBySidePair
   let filePath: String
-  @State private var isHovering = false
+  @State private var hoveredSide: DiffSplitSide?
 
   var body: some View {
     HStack(spacing: 0) {
       // Left side (old)
-      sideView(line: pair.left, isLeft: true)
+      sideView(line: pair.left, side: .left)
       Divider()
       // Right side (new)
-      sideView(line: pair.right, isLeft: false)
+      sideView(line: pair.right, side: .right)
     }
     .font(.system(size: diffFontSize, design: .monospaced))
-    .onHover { hovering in
-      isHovering = hovering
-    }
   }
 
   @ViewBuilder
-  private func sideView(line: DiffLine?, isLeft: Bool) -> some View {
+  private func sideView(line: DiffLine?, side: DiffSplitSide) -> some View {
     if let line {
       HStack(alignment: .top, spacing: 0) {
-        if !isLeft {
-          commentButton(for: line)
-        }
+        commentButton(for: line, side: side)
 
-        Text(lineNumber(line, isLeft: isLeft))
+        Text(lineNumber(line, isLeft: side == .left))
           .frame(width: 44, alignment: .trailing)
           .padding(.trailing, 4)
-          .foregroundStyle(.tertiary)
+          .foregroundStyle(lineNumberColor(for: line.kind))
 
         StyledSpansView(spans: line.spans, lineKind: line.kind)
           .frame(maxWidth: .infinity, alignment: .leading)
       }
       .padding(.trailing, 4)
       .padding(.vertical, 0.5)
-      .background(sideBackground(line.kind))
+      .background(sideBackground(line.kind, isPlaceholder: false))
       .contentShape(Rectangle())
-      .onTapGesture {
-        if !isLeft {
-          appState.requestCommentEditor(for: line.id)
+      .onHover { hovering in
+        if hovering {
+          hoveredSide = side
+        } else if hoveredSide == side {
+          hoveredSide = nil
         }
       }
+      .onTapGesture {
+        appState.requestCommentEditor(for: line.id)
+      }
     } else {
-      Color(nsColor: .textBackgroundColor).opacity(0.3)
+      sideBackground(pair.visualKind(for: side), isPlaceholder: true)
         .frame(maxWidth: .infinity)
         .frame(minHeight: 20)
     }
   }
 
-  private func commentButton(for line: DiffLine) -> some View {
+  private func commentButton(for line: DiffLine, side: DiffSplitSide) -> some View {
     let isActive = appState.activeCommentLineId == line.id
+    let isVisible =
+      if pair.isUnchangedPair {
+        hoveredSide != nil && !isActive
+      } else {
+        hoveredSide == side && !isActive
+      }
+
     return Image(systemName: "plus.bubble.fill")
       .font(.system(size: 10))
       .foregroundStyle(.blue)
-      .opacity(isHovering && !isActive ? 1 : 0)
+      .opacity(isVisible ? 1 : 0)
       .frame(width: 24, height: 18)
   }
 
@@ -555,11 +466,55 @@ struct SideBySideRowView: View {
     }
   }
 
-  private func sideBackground(_ kind: DiffLineKind) -> Color {
+  private func lineNumberColor(for kind: DiffLineKind) -> Color {
     switch kind {
-    case .context: .clear
-    case .added: .green.opacity(0.08)
-    case .removed: .red.opacity(0.08)
+    case .context:
+      .secondary
+    case .added:
+      colorScheme == .dark ? .green.opacity(0.9) : .green.opacity(0.75)
+    case .removed:
+      colorScheme == .dark ? .red.opacity(0.9) : .red.opacity(0.75)
+    }
+  }
+
+  private func sideBackground(_ kind: DiffLineKind?, isPlaceholder: Bool) -> Color {
+    guard let kind else {
+      return Color(nsColor: .controlBackgroundColor).opacity(colorScheme == .dark ? 0.18 : 0.55)
+    }
+
+    let opacity: Double =
+      switch (kind, isPlaceholder, colorScheme) {
+      case (.context, _, .dark):
+        0.18
+      case (.context, _, .light):
+        0.6
+      case (.added, false, .dark):
+        0.18
+      case (.added, false, .light):
+        0.12
+      case (.added, true, .dark):
+        0.14
+      case (.added, true, .light):
+        0.11
+      case (.removed, false, .dark):
+        0.18
+      case (.removed, false, .light):
+        0.12
+      case (.removed, true, .dark):
+        0.14
+      case (.removed, true, .light):
+        0.11
+      @unknown default:
+        isPlaceholder ? 0.08 : 0.12
+      }
+
+    switch kind {
+    case .context:
+      return isPlaceholder ? Color(nsColor: .controlBackgroundColor).opacity(opacity) : .clear
+    case .added:
+      return .green.opacity(opacity)
+    case .removed:
+      return .red.opacity(opacity)
     }
   }
 }
@@ -1078,7 +1033,7 @@ struct InlineCommentEditor: View {
 
   private var title: String {
     var parts = [filePath]
-    if let n = line.newLine { parts.append("L\(n)") }
+    if let n = line.newLine ?? line.oldLine { parts.append("L\(n)") }
     return parts.joined(separator: ":")
   }
 
@@ -1197,6 +1152,7 @@ struct InlineCommentEditor: View {
 
 struct DiffLineView: View {
   @Environment(AppState.self) private var appState
+  @Environment(\.colorScheme) private var colorScheme
   @AppStorage("diffFontSize") private var diffFontSize = 13.0
   let line: DiffLine
   let filePath: String
@@ -1217,12 +1173,12 @@ struct DiffLineView: View {
       Text(line.oldLine.map { String($0) } ?? "")
         .frame(width: 44, alignment: .trailing)
         .padding(.trailing, 4)
-        .foregroundStyle(.tertiary)
+        .foregroundStyle(lineNumberColor)
 
       Text(line.newLine.map { String($0) } ?? "")
         .frame(width: 44, alignment: .trailing)
         .padding(.trailing, 8)
-        .foregroundStyle(.tertiary)
+        .foregroundStyle(lineNumberColor)
 
       Text(marker)
         .frame(width: 14)
@@ -1267,9 +1223,23 @@ struct DiffLineView: View {
 
   private var backgroundColor: Color {
     switch line.kind {
-    case .context: .clear
-    case .added: .green.opacity(0.08)
-    case .removed: .red.opacity(0.08)
+    case .context:
+      .clear
+    case .added:
+      .green.opacity(colorScheme == .dark ? 0.18 : 0.12)
+    case .removed:
+      .red.opacity(colorScheme == .dark ? 0.18 : 0.12)
+    }
+  }
+
+  private var lineNumberColor: Color {
+    switch line.kind {
+    case .context:
+      .secondary
+    case .added:
+      colorScheme == .dark ? .green.opacity(0.9) : .green.opacity(0.75)
+    case .removed:
+      colorScheme == .dark ? .red.opacity(0.9) : .red.opacity(0.75)
     }
   }
 

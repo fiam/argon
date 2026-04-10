@@ -6,6 +6,49 @@ enum DiffLineKind: String, Codable {
   case removed
 }
 
+enum DiffSplitSide: String, Equatable {
+  case left
+  case right
+}
+
+struct DiffAnchor: Hashable, Codable, Sendable, Identifiable {
+  let id: String
+
+  static func file(_ fileID: String) -> Self {
+    Self(id: "file:\(fileID)")
+  }
+
+  static func hunk(fileID: String, ordinal: Int, oldStart: UInt32, newStart: UInt32) -> Self {
+    Self(id: "hunk:\(fileID):\(ordinal):\(oldStart):\(newStart)")
+  }
+
+  static func line(
+    fileID: String, kind: DiffLineKind, oldLine: UInt32?, newLine: UInt32?
+  ) -> Self {
+    Self(
+      id: "line:\(fileID):\(kind.rawValue):\(oldLine ?? 0):\(newLine ?? 0)"
+    )
+  }
+
+  static func sideBySidePair(fileID: String, ordinal: Int) -> Self {
+    Self(id: "pair:\(fileID):\(ordinal)")
+  }
+
+  static func thread(_ threadID: UUID) -> Self {
+    Self(id: "thread:\(threadID.uuidString)")
+  }
+
+  static func draft(_ draftID: UUID) -> Self {
+    Self(id: "draft:\(draftID.uuidString)")
+  }
+
+  static func commentEditor(forLineID lineID: String) -> Self {
+    Self(id: "comment-editor:\(lineID)")
+  }
+
+  static let orphanedThreads = Self(id: "orphaned-threads")
+}
+
 enum DiffViewMode: String, CaseIterable {
   case unified
   case sideBySide
@@ -62,11 +105,26 @@ struct StyledSpan: Codable, Sendable {
 // MARK: - Diff Line
 
 struct DiffLine: Identifiable {
-  let id = UUID()
+  let anchor: DiffAnchor
   let kind: DiffLineKind
   let spans: [StyledSpan]
   let oldLine: UInt32?
   let newLine: UInt32?
+
+  var id: String {
+    anchor.id
+  }
+
+  var preferredSplitSide: DiffSplitSide? {
+    switch (oldLine, newLine) {
+    case (.some, nil):
+      .left
+    case (nil, .some):
+      .right
+    default:
+      nil
+    }
+  }
 
   /// Backward-compatible plain-text content derived from spans.
   var content: String {
@@ -74,7 +132,14 @@ struct DiffLine: Identifiable {
   }
 
   /// Legacy initializer for plain-text lines (used by DiffParser.parse fallback).
-  init(kind: DiffLineKind, content: String, oldLine: UInt32?, newLine: UInt32?) {
+  init(
+    anchor: DiffAnchor = DiffAnchor(id: UUID().uuidString),
+    kind: DiffLineKind,
+    content: String,
+    oldLine: UInt32?,
+    newLine: UInt32?
+  ) {
+    self.anchor = anchor
     self.kind = kind
     self.spans = [StyledSpan(text: content)]
     self.oldLine = oldLine
@@ -82,7 +147,14 @@ struct DiffLine: Identifiable {
   }
 
   /// Span-based initializer for syntax-highlighted lines.
-  init(kind: DiffLineKind, spans: [StyledSpan], oldLine: UInt32?, newLine: UInt32?) {
+  init(
+    anchor: DiffAnchor = DiffAnchor(id: UUID().uuidString),
+    kind: DiffLineKind,
+    spans: [StyledSpan],
+    oldLine: UInt32?,
+    newLine: UInt32?
+  ) {
+    self.anchor = anchor
     self.kind = kind
     self.spans = spans
     self.oldLine = oldLine
@@ -90,22 +162,92 @@ struct DiffLine: Identifiable {
   }
 }
 
+extension CommentAnchor {
+  var preferredSplitSide: DiffSplitSide? {
+    switch (lineOld, lineNew) {
+    case (.some, nil):
+      .left
+    case (nil, .some):
+      .right
+    default:
+      nil
+    }
+  }
+}
+
 // MARK: - Side-by-Side Pair
 
 struct SideBySidePair: Identifiable {
-  let id = UUID()
+  let anchor: DiffAnchor
   let left: DiffLine?
   let right: DiffLine?
+
+  var id: String {
+    anchor.id
+  }
+
+  init(
+    anchor: DiffAnchor = DiffAnchor(id: UUID().uuidString), left: DiffLine?, right: DiffLine?
+  ) {
+    self.anchor = anchor
+    self.left = left
+    self.right = right
+  }
+
+  var isUnchangedPair: Bool {
+    guard let left, let right else { return false }
+    return left.anchor == right.anchor
+  }
+
+  func line(for side: DiffSplitSide) -> DiffLine? {
+    switch side {
+    case .left:
+      left
+    case .right:
+      right
+    }
+  }
+
+  func visualKind(for side: DiffSplitSide) -> DiffLineKind? {
+    if let line = line(for: side) {
+      return line.kind
+    }
+
+    switch side {
+    case .left:
+      return right?.kind
+    case .right:
+      return left?.kind
+    }
+  }
 }
 
 // MARK: - Diff Hunk
 
 struct DiffHunk: Identifiable {
-  let id = UUID()
+  let anchor: DiffAnchor
   let header: String
   let oldStart: UInt32
   let newStart: UInt32
   let lines: [DiffLine]
+
+  var id: String {
+    anchor.id
+  }
+
+  init(
+    anchor: DiffAnchor = DiffAnchor(id: UUID().uuidString),
+    header: String,
+    oldStart: UInt32,
+    newStart: UInt32,
+    lines: [DiffLine]
+  ) {
+    self.anchor = anchor
+    self.header = header
+    self.oldStart = oldStart
+    self.newStart = newStart
+    self.lines = lines
+  }
 }
 
 // MARK: - File Diff
@@ -122,6 +264,10 @@ struct FileDiff: Identifiable, Hashable {
   /// Incremented each time the file content changes, so SwiftUI re-renders.
   let lineCount: Int
 
+  var anchor: DiffAnchor {
+    DiffAnchor.file(id)
+  }
+
   init(
     oldPath: String, newPath: String, hunks: [DiffHunk],
     sideBySide: [SideBySidePair] = [],
@@ -130,14 +276,14 @@ struct FileDiff: Identifiable, Hashable {
     self.id = newPath
     self.oldPath = oldPath
     self.newPath = newPath
-    self.hunks = hunks
-    self.sideBySide = sideBySide
-    self.lineCount = hunks.reduce(0) { $0 + $1.lines.count }
+    self.hunks = Self.stabilizeHunks(hunks, fileID: newPath)
+    self.sideBySide = Self.stabilizeSideBySide(sideBySide, fileID: newPath)
+    self.lineCount = self.hunks.reduce(0) { $0 + $1.lines.count }
     // Use explicit counts if provided, otherwise derive from lines.
     self.addedCount =
-      addedCount ?? hunks.flatMap(\.lines).filter { $0.kind == .added }.count
+      addedCount ?? self.hunks.flatMap(\.lines).filter { $0.kind == .added }.count
     self.removedCount =
-      removedCount ?? hunks.flatMap(\.lines).filter { $0.kind == .removed }.count
+      removedCount ?? self.hunks.flatMap(\.lines).filter { $0.kind == .removed }.count
   }
 
   var displayPath: String { newPath }
@@ -149,5 +295,49 @@ struct FileDiff: Identifiable, Hashable {
   func hash(into hasher: inout Hasher) {
     hasher.combine(id)
     hasher.combine(lineCount)
+  }
+
+  private static func stabilizeHunks(_ hunks: [DiffHunk], fileID: String) -> [DiffHunk] {
+    hunks.enumerated().map { index, hunk in
+      DiffHunk(
+        anchor: .hunk(
+          fileID: fileID,
+          ordinal: index,
+          oldStart: hunk.oldStart,
+          newStart: hunk.newStart
+        ),
+        header: hunk.header,
+        oldStart: hunk.oldStart,
+        newStart: hunk.newStart,
+        lines: hunk.lines.map { stabilizeLine($0, fileID: fileID) }
+      )
+    }
+  }
+
+  private static func stabilizeSideBySide(
+    _ sideBySide: [SideBySidePair], fileID: String
+  ) -> [SideBySidePair] {
+    sideBySide.enumerated().map { index, pair in
+      SideBySidePair(
+        anchor: .sideBySidePair(fileID: fileID, ordinal: index),
+        left: pair.left.map { stabilizeLine($0, fileID: fileID) },
+        right: pair.right.map { stabilizeLine($0, fileID: fileID) }
+      )
+    }
+  }
+
+  private static func stabilizeLine(_ line: DiffLine, fileID: String) -> DiffLine {
+    DiffLine(
+      anchor: .line(
+        fileID: fileID,
+        kind: line.kind,
+        oldLine: line.oldLine,
+        newLine: line.newLine
+      ),
+      kind: line.kind,
+      spans: line.spans,
+      oldLine: line.oldLine,
+      newLine: line.newLine
+    )
   }
 }

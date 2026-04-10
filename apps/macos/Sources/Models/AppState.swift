@@ -10,7 +10,7 @@ final class AppState {
   var isLoading = false
   var isPolling = false
   var pendingDrafts: [DraftComment] = []
-  var scrollToFile: String?
+  var diffNavigationRequest: DiffNavigationRequest?
 
   // Reviewer agents
   var reviewerAgents: [ReviewerAgentInstance] = []
@@ -24,17 +24,15 @@ final class AppState {
   var searchQuery = ""
   var searchMatches: [SearchMatch] = []
   var currentSearchMatchIndex = 0
-  var scrollToSearchMatch: UUID?
-  var scrollToThread: String?
 
   // Focus triggers
   var focusFileFilter = false
 
   // Active inline comment editor
-  var activeCommentLineId: UUID?
+  var activeCommentLineId: String?
   var activeCommentText: String = ""
   var showDiscardAlert = false
-  var pendingCommentLineId: UUID?
+  var pendingCommentLineId: String?
 
   var activeMode: ReviewMode = .uncommitted
   var activeBaseRef: String = "HEAD"
@@ -361,7 +359,7 @@ final class AppState {
 
   // MARK: - Inline Comment Editor
 
-  func requestCommentEditor(for lineId: UUID) {
+  func requestCommentEditor(for lineId: String) {
     // Same line -- toggle off
     if activeCommentLineId == lineId {
       return
@@ -394,7 +392,7 @@ final class AppState {
     activeCommentText = ""
   }
 
-  private func openCommentEditor(for lineId: UUID) {
+  private func openCommentEditor(for lineId: String) {
     activeCommentText = ""
     activeCommentLineId = lineId
   }
@@ -538,11 +536,11 @@ final class AppState {
       let idx = files.firstIndex(where: { $0.id == current.id }),
       idx + 1 < files.count
     {
-      selectedFile = files[idx + 1]
-      scrollToFile = files[idx + 1].id
+      navigateToFile(files[idx + 1])
     } else {
-      selectedFile = files.first
-      scrollToFile = files.first?.id
+      if let first = files.first {
+        navigateToFile(first)
+      }
     }
   }
 
@@ -552,11 +550,11 @@ final class AppState {
       let idx = files.firstIndex(where: { $0.id == current.id }),
       idx > 0
     {
-      selectedFile = files[idx - 1]
-      scrollToFile = files[idx - 1].id
+      navigateToFile(files[idx - 1])
     } else {
-      selectedFile = files.last
-      scrollToFile = files.last?.id
+      if let last = files.last {
+        navigateToFile(last)
+      }
     }
   }
 
@@ -582,7 +580,7 @@ final class AppState {
       for hunk in file.hunks {
         for line in hunk.lines {
           if line.content.lowercased().contains(query) {
-            matches.append(SearchMatch(lineId: line.id, filePath: file.newPath))
+            matches.append(SearchMatch(anchor: line.anchor, filePath: file.newPath))
           }
         }
       }
@@ -608,7 +606,55 @@ final class AppState {
 
   private func scrollToCurrentMatch() {
     guard currentSearchMatchIndex < searchMatches.count else { return }
-    scrollToSearchMatch = searchMatches[currentSearchMatchIndex].lineId
+    let match = searchMatches[currentSearchMatchIndex]
+    if let file = selectFile(matching: match.filePath) {
+      requestDiffNavigation(
+        to: match.anchor,
+        fallbackFileID: file.id,
+        alignment: .center,
+        animated: true
+      )
+    }
+  }
+
+  @discardableResult
+  func selectFile(matching identifier: String) -> FileDiff? {
+    guard let file = file(matching: identifier) else { return nil }
+    selectedFile = file
+    return file
+  }
+
+  func file(matching identifier: String) -> FileDiff? {
+    files.first { file in
+      file.id == identifier
+        || file.anchor.id == identifier
+        || file.newPath == identifier
+        || file.displayPath == identifier
+    }
+  }
+
+  func navigateToFile(_ file: FileDiff) {
+    selectedFile = file
+    requestDiffNavigation(to: file.anchor)
+  }
+
+  func requestDiffNavigation(
+    to anchor: DiffAnchor,
+    fallbackFileID: String? = nil,
+    alignment: DiffNavigationAlignment = .top,
+    animated: Bool = false
+  ) {
+    diffNavigationRequest = DiffNavigationRequest(
+      anchor: anchor,
+      fallbackFileID: fallbackFileID,
+      alignment: alignment,
+      animated: animated
+    )
+  }
+
+  func clearDiffNavigationRequest(_ requestID: UUID) {
+    guard diffNavigationRequest?.id == requestID else { return }
+    diffNavigationRequest = nil
   }
 
   func dismissAll() {
@@ -656,7 +702,10 @@ final class AppState {
 }
 
 struct SearchMatch: Identifiable {
-  let id = UUID()
-  let lineId: UUID
+  let anchor: DiffAnchor
   let filePath: String
+
+  var id: String {
+    anchor.id
+  }
 }

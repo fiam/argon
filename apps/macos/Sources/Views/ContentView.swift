@@ -299,8 +299,7 @@ struct FileTreeFileRow: View {
 
   var body: some View {
     Button {
-      appState.selectedFile = file
-      appState.scrollToFile = file.id
+      appState.navigateToFile(file)
     } label: {
       HStack(spacing: 4) {
         Spacer().frame(width: 12)  // align with chevron
@@ -512,19 +511,20 @@ struct ThreadsSidebar: View {
   }
 
   private func scrollToThread(_ thread: ReviewThread) {
-    // First scroll to the file so the LazyVStack renders the thread area,
-    // then scroll to the specific thread after rendering settles.
     if let anchor = thread.comments.first?.anchor,
       let filePath = anchor.filePath
     {
-      appState.scrollToFile = filePath
-      // Stagger: 100ms for file scroll, then 300ms for thread
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-        appState.scrollToThread = thread.id.uuidString
+      if let file = appState.selectFile(matching: filePath) {
+        appState.requestDiffNavigation(
+          to: .thread(thread.id),
+          fallbackFileID: file.id,
+          alignment: .center
+        )
+      } else {
+        appState.requestDiffNavigation(to: .thread(thread.id), alignment: .center)
       }
     } else {
-      // Global thread — just try scrolling directly
-      appState.scrollToThread = thread.id.uuidString
+      appState.requestDiffNavigation(to: .thread(thread.id), alignment: .center)
     }
   }
 
@@ -568,7 +568,7 @@ struct DraftRow: View {
             Text(file)
               .font(.caption2)
               .foregroundStyle(.secondary)
-            if let line = draft.anchor.lineNew {
+            if let line = draft.anchor.lineNew ?? draft.anchor.lineOld {
               Text(":\(line)")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -609,7 +609,7 @@ struct SidebarThreadRow: View {
             .font(.caption2)
             .foregroundStyle(.secondary)
             .lineLimit(1)
-          if let line = anchor.lineNew {
+          if let line = anchor.lineNew ?? anchor.lineOld {
             Text(":\(line)")
               .font(.caption2)
               .foregroundStyle(.tertiary)
