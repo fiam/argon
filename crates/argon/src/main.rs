@@ -255,7 +255,9 @@ struct SandboxExecArgs {
     #[arg(long)]
     repo_root: Option<PathBuf>,
     /// Writable directory roots whose descendants remain writable.
-    #[arg(long = "write-root", required = true)]
+    ///
+    /// When omitted, Argon defaults to the current working directory.
+    #[arg(long = "write-root")]
     write_roots: Vec<PathBuf>,
     /// Command to run after `--`.
     #[arg(trailing_var_arg = true, required = true, allow_hyphen_values = true)]
@@ -1948,16 +1950,17 @@ fn run_sandbox_config_path_update(
 ) -> Result<()> {
     let scope: ConfigScope = args.scope.into();
     let target: ConfigTarget = args.target.into();
-    validate_sandbox_config_input_path(scope, &args.path)?;
+    let path = sandbox::normalize_config_input_path(&args.path)?;
+    validate_sandbox_config_input_path(scope, &path)?;
     let repo_root = resolved_sandbox_repo_root(runtime)?;
     let mut config = sandbox::load_scope_config(scope, repo_root.as_deref())?.unwrap_or_default();
     let section = config.section_mut(target);
 
     match operation {
-        ConfigPathOperation::AddRoot => upsert_path(&mut section.write_roots, args.path),
-        ConfigPathOperation::RemoveRoot => remove_path(&mut section.write_roots, &args.path),
-        ConfigPathOperation::AddPath => upsert_path(&mut section.write_paths, args.path),
-        ConfigPathOperation::RemovePath => remove_path(&mut section.write_paths, &args.path),
+        ConfigPathOperation::AddRoot => upsert_path(&mut section.write_roots, path),
+        ConfigPathOperation::RemoveRoot => remove_path(&mut section.write_roots, &path),
+        ConfigPathOperation::AddPath => upsert_path(&mut section.write_paths, path),
+        ConfigPathOperation::RemovePath => remove_path(&mut section.write_paths, &path),
     }
 
     let path = sandbox::save_scope_config(
@@ -1974,14 +1977,20 @@ fn run_sandbox_exec(args: SandboxExecArgs) -> Result<()> {
         .command
         .split_first()
         .context("sandbox exec requires a command after `--`")?;
-    let current_dir = if args.repo_root.is_none() {
-        std::env::current_dir().ok()
+    let current_dir = std::env::current_dir().context("failed to determine current directory")?;
+    let repo_root = args
+        .repo_root
+        .clone()
+        .unwrap_or_else(|| current_dir.clone());
+    let write_roots = if args.write_roots.is_empty() {
+        vec![current_dir]
     } else {
-        None
+        args.write_roots
     };
-    let repo_root = args.repo_root.as_deref().or(current_dir.as_deref());
-    let policy =
-        SandboxPolicy::read_only_with_writable_roots_for_repo(args.write_roots, repo_root)?;
+    let policy = SandboxPolicy::read_only_with_writable_roots_for_repo(
+        write_roots,
+        Some(repo_root.as_path()),
+    )?;
     sandbox::apply_current_process(&policy)?;
     exec_command(program, command_args)
 }
@@ -2075,7 +2084,7 @@ fn remove_path(paths: &mut Vec<PathBuf>, path: &Path) {
 fn validate_sandbox_config_input_path(scope: ConfigScope, path: &Path) -> Result<()> {
     if matches!(scope, ConfigScope::User) && !path.is_absolute() {
         bail!(
-            "user sandbox config paths must be absolute: {}",
+            "user sandbox config paths must be absolute, use ~ or $HOME if needed: {}",
             path.display()
         );
     }

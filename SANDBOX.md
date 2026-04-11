@@ -47,6 +47,8 @@ The defaults are environment-sensitive. On macOS they currently include:
 - `XDG_STATE_HOME` when set
 - `XDG_CACHE_HOME` when set
 - under `HOME`:
+  - `.claude.json`
+  - `.claude.json.lock`
   - `.local/state`
   - `.cache`
   - `Library/Caches`
@@ -136,10 +138,12 @@ Example repo config:
 ```yaml
 include_defaults: true
 write_roots:
+  - ~/.claude.json.lock
   - .direnv
   - .build
 write_paths:
   - /dev/null
+  - $HOME/.claude.json
 
 macos:
   write_roots:
@@ -160,7 +164,9 @@ write_roots = [".swiftpm"]
 Notes:
 
 - repo config paths may be relative to the repo root
-- user config paths must be absolute
+- user config paths must resolve to absolute paths
+- `~`, `$HOME`, and `${HOME}` are expanded in config paths and in
+  `argon sandbox config add-write-*` commands
 - device nodes are expressed as exact `write_paths`, for example `/dev/null`
 
 ## Programmatic Editing
@@ -177,8 +183,8 @@ argon sandbox config add-write-root --scope repo .direnv --repo <repo>
 argon sandbox config add-write-root --scope repo .swiftpm --target macos --repo <repo>
 argon sandbox config add-write-path --scope repo /dev/null --repo <repo>
 
-argon sandbox config add-write-root --scope user /Users/alberto/.cache
-argon sandbox config remove-write-root --scope user /Users/alberto/.cache
+argon sandbox config add-write-root --scope user ~/.cache
+argon sandbox config remove-write-root --scope user '$HOME/.cache'
 ```
 
 When a config file does not exist yet, Argon creates one. The default creation
@@ -189,6 +195,9 @@ format is YAML, but you can override it with `--format yaml|yml|toml|json`.
 `argon sandbox exec` is the low-level command that applies the sandbox to the
 current process and then `exec`s the requested command.
 
+If you omit `--write-root`, Argon defaults to making the current working
+directory writable.
+
 Example:
 
 ```bash
@@ -197,6 +206,13 @@ argon sandbox exec \
   --write-root /path/to/repo \
   --write-root /path/to/repo/.argon/sessions \
   -- /bin/sh -lc 'touch file-in-repo'
+```
+
+Default-to-current-directory example:
+
+```bash
+cd /path/to/repo
+argon sandbox exec -- claude
 ```
 
 This command is public because it is useful for testing and debugging, but it

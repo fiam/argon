@@ -97,6 +97,8 @@ pub enum SandboxError {
     MissingRepoRoot,
     #[error("could not determine a global config directory from XDG_CONFIG_HOME or HOME")]
     MissingUserConfigHome,
+    #[error("could not expand sandbox path because HOME is not set: {0}")]
+    MissingHomeForExpansion(PathBuf),
     #[error("sandboxing is not supported on this platform")]
     UnsupportedPlatform,
     #[error("failed to apply macOS sandbox: {0}")]
@@ -405,11 +407,13 @@ fn append_built_in_defaults(rules: &mut SandboxRules) {
         rules.push_root(path).ok();
     }
     if let Some(home) = non_empty_env_path("HOME") {
+        rules.push_path(home.join(".claude.json")).ok();
         for root in [
             home.join(".local").join("state"),
             home.join(".cache"),
             home.join("Library").join("Caches"),
             home.join(".claude"),
+            home.join(".claude.json.lock"),
             home.join(".codex"),
             home.join(".gemini"),
         ] {
@@ -441,11 +445,14 @@ fn merge_config(
 }
 
 fn resolve_config_path(path: &Path, repo_root: Option<&Path>) -> Result<PathBuf, SandboxError> {
+    let path = expand_home_shorthand(path)?;
+
     if path.is_absolute() {
-        return Ok(path.to_path_buf());
+        return Ok(path);
     }
 
-    let repo_root = repo_root.ok_or_else(|| SandboxError::RelativeWritableLocation(path.into()))?;
+    let repo_root =
+        repo_root.ok_or_else(|| SandboxError::RelativeWritableLocation(path.clone()))?;
     Ok(repo_root.join(path))
 }
 
@@ -576,6 +583,42 @@ fn normalize_location(path: PathBuf) -> Result<PathBuf, SandboxError> {
     Ok(fs::canonicalize(&path).unwrap_or(path))
 }
 
+pub fn normalize_config_input_path(path: &Path) -> Result<PathBuf, SandboxError> {
+    expand_home_shorthand(path)
+}
+
+fn expand_home_shorthand(path: &Path) -> Result<PathBuf, SandboxError> {
+    let raw = path.to_string_lossy();
+    let (prefix, suffix) = if raw == "~" {
+        ("~", "")
+    } else if let Some(suffix) = raw.strip_prefix("~/") {
+        ("~/", suffix)
+    } else if raw == "$HOME" {
+        ("$HOME", "")
+    } else if let Some(suffix) = raw.strip_prefix("$HOME/") {
+        ("$HOME/", suffix)
+    } else if raw == "${HOME}" {
+        ("${HOME}", "")
+    } else if let Some(suffix) = raw.strip_prefix("${HOME}/") {
+        ("${HOME}/", suffix)
+    } else {
+        return Ok(path.to_path_buf());
+    };
+
+    let home = non_empty_env_path("HOME")
+        .ok_or_else(|| SandboxError::MissingHomeForExpansion(path.to_path_buf()))?;
+    if suffix.is_empty() {
+        return Ok(home);
+    }
+
+    let relative = PathBuf::from(suffix);
+    debug_assert!(
+        !relative.is_absolute(),
+        "expanded suffix from {prefix} should be relative"
+    );
+    Ok(home.join(relative))
+}
+
 #[cfg(target_os = "macos")]
 mod platform {
     use std::ffi::{CStr, CString};
@@ -667,6 +710,20 @@ mod tests {
                 .iter()
                 .any(|path| path == Path::new("/dev/null"))
         );
+        if let Some(home) = non_empty_env_path("HOME") {
+            assert!(
+                policy
+                    .writable_paths()
+                    .iter()
+                    .any(|path| path == &home.join(".claude.json"))
+            );
+            assert!(
+                policy
+                    .writable_roots()
+                    .iter()
+                    .any(|path| path == &home.join(".claude.json.lock"))
+            );
+        }
     }
 
     #[test]
@@ -753,5 +810,78 @@ mod tests {
         .expect_err("multiple configs should fail");
 
         assert!(matches!(error, SandboxError::MultipleConfigFiles { .. }));
+    }
+
+    #[test]
+    fn config_expands_home_shorthand() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        let fake_home = temp.path().join("home");
+        fs::create_dir_all(repo_root.join("repo-root")).expect("create repo root");
+        fs::create_dir_all(fake_home.join(".claude.json.lock")).expect("create home lock dir");
+        fs::create_dir_all(fake_home.join(".gemini")).expect("create home gemini dir");
+        fs::write(
+            repo_root.join(".sandbox.yaml"),
+            "write_roots:\n  - ~/.claude.json.lock\n  - ${HOME}/.gemini\n  - repo-root\nwrite_paths:\n  - $HOME/.claude.json\n",
+        )
+        .expect("write config");
+
+        let previous_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", &fake_home);
+        }
+
+        let policy = SandboxPolicy::read_only_with_writable_roots_for_repo(
+            [repo_root.join("worktree")],
+            Some(&repo_root),
+        )
+        .expect("policy");
+        let claude_lock_root = fake_home
+            .join(".claude.json.lock")
+            .canonicalize()
+            .expect("canonical lock root");
+        let gemini_root = fake_home
+            .join(".gemini")
+            .canonicalize()
+            .expect("canonical gemini root");
+        let repo_config_root = repo_root
+            .join("repo-root")
+            .canonicalize()
+            .expect("canonical repo root");
+
+        if let Some(home) = previous_home {
+            unsafe {
+                std::env::set_var("HOME", home);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+
+        assert!(
+            policy
+                .writable_paths()
+                .iter()
+                .any(|path| path == &fake_home.join(".claude.json"))
+        );
+        assert!(
+            policy
+                .writable_roots()
+                .iter()
+                .any(|path| path == &claude_lock_root)
+        );
+        assert!(
+            policy
+                .writable_roots()
+                .iter()
+                .any(|path| path == &gemini_root)
+        );
+        assert!(
+            policy
+                .writable_roots()
+                .iter()
+                .any(|path| path == &repo_config_root)
+        );
     }
 }

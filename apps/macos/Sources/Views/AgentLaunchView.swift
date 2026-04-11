@@ -346,7 +346,7 @@ private struct SandboxHelpPopover: View {
     argon sandbox defaults
     argon sandbox config paths --repo <repo>
     argon sandbox config add-write-root --scope repo .direnv
-    argon sandbox config add-write-root --scope user /absolute/path
+    argon sandbox config add-write-root --scope user ~/.cache
     """
   }
 
