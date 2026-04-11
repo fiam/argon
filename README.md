@@ -98,3 +98,7 @@ Project rules worth keeping in mind:
 
 The macOS project is generated from `apps/macos/project.yml`. Regenerate it
 with XcodeGen instead of editing `.xcodeproj` by hand.
+
+The planned Ghostty terminal migration is documented in
+[docs/ghostty-integration.md](docs/ghostty-integration.md). Build the
+vendored Ghostty xcframework with `make build-libghostty`.

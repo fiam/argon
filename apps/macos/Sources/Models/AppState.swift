@@ -33,6 +33,8 @@ final class AppState {
   var activeCommentText: String = ""
   var showDiscardAlert = false
   var pendingCommentLineId: String?
+  var showModeSwitchAlert = false
+  var pendingModeSwitch: ReviewMode?
 
   var activeMode: ReviewMode = .uncommitted
   var activeBaseRef: String = "HEAD"
@@ -49,12 +51,16 @@ final class AppState {
   private var sessionWatcher: FileWatcher?
   private var diffRefreshTask: Task<Void, Never>?
   private var lastDiffFingerprint: String = ""
+  private let uiTestAutomationConfig: UITestAutomationConfig
+  private var didRunUITestAutomation = false
 
   init() {
+    uiTestAutomationConfig = .current()
     applyDefaultDiffMode()
   }
 
   init(sessionId: String, repoRoot: String) {
+    uiTestAutomationConfig = .current()
     applyDefaultDiffMode()
     self.sessionId = sessionId
     self.repoRoot = repoRoot
@@ -77,6 +83,7 @@ final class AppState {
   // MARK: - Load
 
   func loadSession() {
+    UITestAutomationSignal.write("load-session-started", to: uiTestAutomationConfig.signalFilePath)
     guard let sessionId, let repoRoot else {
       errorMessage = "No session. Run: argon . from a git repo"
       return
@@ -104,6 +111,8 @@ final class AppState {
         detectedHeadRef = data.detectedHead
         lastDiffFingerprint = data.diffFingerprint
         applyNewFiles(data.files)
+        UITestAutomationSignal.write("session-loaded", to: uiTestAutomationConfig.signalFilePath)
+        runUITestAutomationIfNeeded()
       case .failure(let error):
         errorMessage = error.localizedDescription
       }
@@ -111,6 +120,49 @@ final class AppState {
   }
 
   // MARK: - Switch Mode
+
+  var canSwitchReviewMode: Bool {
+    reviewerAgents.isEmpty
+  }
+
+  var modeSwitchDisabledReason: String? {
+    guard !canSwitchReviewMode else { return nil }
+    return
+      "Review target switching is disabled while reviewer agents are running because it clears review threads, drafts, and the current decision."
+  }
+
+  var modeSwitchRequiresConfirmation: Bool {
+    let hasSessionThreads = !(session?.threads.isEmpty ?? true)
+    let hasDecision = session?.decision != nil
+    let hasUnsavedInlineComment =
+      !activeCommentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    return hasSessionThreads || hasDecision || !pendingDrafts.isEmpty || hasUnsavedInlineComment
+  }
+
+  func requestModeSwitch(_ mode: ReviewMode) {
+    guard canSwitchReviewMode else { return }
+    guard mode != activeMode else { return }
+    if modeSwitchRequiresConfirmation {
+      pendingModeSwitch = mode
+      showModeSwitchAlert = true
+      return
+    }
+    switchMode(mode)
+  }
+
+  func confirmModeSwitch() {
+    guard let mode = pendingModeSwitch else { return }
+    pendingModeSwitch = nil
+    showModeSwitchAlert = false
+    activeCommentLineId = nil
+    activeCommentText = ""
+    switchMode(mode)
+  }
+
+  func cancelModeSwitch() {
+    pendingModeSwitch = nil
+    showModeSwitchAlert = false
+  }
 
   func switchMode(_ mode: ReviewMode) {
     guard let repoRoot else { return }
@@ -138,6 +190,9 @@ final class AppState {
         activeBaseRef = data.target.baseRef
         activeHeadRef = data.target.headRef
         activeMergeBaseSha = data.target.mergeBaseSha
+        pendingDrafts = []
+        activeCommentLineId = nil
+        activeCommentText = ""
         applyNewFiles(data.files)
         if let s = data.updatedSession {
           session = s
@@ -698,6 +753,31 @@ final class AppState {
     }
     reviewerAgents.removeAll()
     showAgentTerminals = false
+  }
+
+  private func runUITestAutomationIfNeeded() {
+    guard !didRunUITestAutomation, let reviewerLaunch = uiTestAutomationConfig.reviewerLaunch else {
+      return
+    }
+    didRunUITestAutomation = true
+
+    let profile = AgentProfile(
+      id: "ui-test-reviewer",
+      name: "UI Test Reviewer",
+      command: reviewerLaunch.command,
+      icon: "terminal",
+      isDetected: false
+    )
+
+    Task { @MainActor in
+      await Task.yield()
+      launchReviewerAgent(
+        profile: profile,
+        focusPrompt: reviewerLaunch.focusPrompt,
+        sandboxEnabled: reviewerLaunch.sandboxEnabled
+      )
+      UITestAutomationSignal.write("reviewer-launched", to: uiTestAutomationConfig.signalFilePath)
+    }
   }
 }
 

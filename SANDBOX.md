@@ -31,11 +31,6 @@ For reviewer agents launched by Argon, the explicit write roots always include:
 
 That keeps agents able to edit the target directory and write session state.
 
-For the built-in Claude reviewer profile, Argon also adds `--bare` when the
-launch is sandboxed. That trims Claude startup behavior such as plugin sync,
-keychain reads, and other extra initialization that is unnecessary for a
-sandboxed reviewer session and can otherwise cause avoidable startup friction.
-
 ## Built-In Defaults
 
 Inspect the current machine's defaults with:

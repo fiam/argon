@@ -8,6 +8,7 @@ struct ResolvedTarget {
 }
 
 enum GitService {
+  private static let emptyTreeSHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
   // MARK: - Diff Fingerprint (lightweight check for changes)
 
@@ -29,13 +30,15 @@ enum GitService {
       }
     case .commit:
       args.append(baseRef)
+      args.append(headRef)
     case .uncommitted:
       args.append("HEAD")
     }
     var result = runGit(args)
 
     // Untracked files with sizes (so content changes are detected)
-    let untrackedList = untrackedFiles(repoRoot: repoRoot)
+    let shouldIncludeUntracked = mode != .commit
+    let untrackedList = shouldIncludeUntracked ? untrackedFiles(repoRoot: repoRoot) : []
     if !untrackedList.isEmpty {
       result += "\n__untracked__"
       let fm = FileManager.default
@@ -67,6 +70,7 @@ enum GitService {
       }
     case .commit:
       args.append(baseRef)
+      args.append(headRef)
     case .uncommitted:
       args.append("HEAD")
     }
@@ -74,7 +78,7 @@ enum GitService {
     var result = runGit(args)
 
     // Append untracked (non-ignored) files as diffs against /dev/null
-    let untrackedFiles = untrackedFiles(repoRoot: repoRoot)
+    let untrackedFiles = mode == .commit ? [] : untrackedFiles(repoRoot: repoRoot)
     for file in untrackedFiles {
       let fileDiff = runGit([
         "-C", repoRoot, "diff", "--no-color", "--unified=3", "--no-ext-diff",
@@ -141,9 +145,10 @@ enum GitService {
   }
 
   static func resolveCommitTarget(repoRoot: String, commitRef: String = "HEAD") -> ResolvedTarget? {
-    guard let sha = resolveRef(repoRoot: repoRoot, ref: commitRef) else { return nil }
-    let base = commitRef == "HEAD" ? "HEAD" : sha
-    return ResolvedTarget(mode: .commit, baseRef: base, headRef: "WORKTREE", mergeBaseSha: sha)
+    guard let sha = resolveRef(repoRoot: repoRoot, ref: commitRef),
+      let base = parentCommitOrEmptyTree(repoRoot: repoRoot, commitSHA: sha)
+    else { return nil }
+    return ResolvedTarget(mode: .commit, baseRef: base, headRef: sha, mergeBaseSha: sha)
   }
 
   static func resolveUncommittedTarget(repoRoot: String) -> ResolvedTarget? {
@@ -195,6 +200,12 @@ enum GitService {
     let output = runGit(["-C", repoRoot, "merge-base", a, b]).trimmingCharacters(
       in: .whitespacesAndNewlines)
     return output.isEmpty ? nil : output
+  }
+
+  private static func parentCommitOrEmptyTree(repoRoot: String, commitSHA: String) -> String? {
+    let output = runGit(["-C", repoRoot, "rev-parse", "--verify", "\(commitSHA)^"])
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return output.isEmpty ? emptyTreeSHA : output
   }
 
   static func resolveRef(repoRoot: String, ref: String) -> String? {

@@ -88,6 +88,7 @@ pub fn build_review_diff(
         }
         ReviewMode::Commit => {
             command.arg(base_ref);
+            command.arg(head_ref);
         }
         ReviewMode::Uncommitted => {
             // Diff HEAD against the working tree, showing both staged and unstaged changes.
@@ -555,7 +556,7 @@ index 1111111..2222222 100644
     }
 
     #[test]
-    fn build_review_diff_commit_uses_worktree_sentinel() -> Result<()> {
+    fn build_review_diff_commit_shows_latest_commit_only() -> Result<()> {
         let repo = TempDir::new().context("temp repo")?;
         git(&repo, &["init"])?;
         git(&repo, &["config", "user.name", "Argon Test"])?;
@@ -564,7 +565,10 @@ index 1111111..2222222 100644
         fs::write(repo.path().join("a.txt"), "one\n").context("write file")?;
         git(&repo, &["add", "a.txt"])?;
         git(&repo, &["commit", "-m", "init"])?;
-        let base = git(&repo, &["rev-parse", "HEAD"])?;
+        fs::write(repo.path().join("a.txt"), "one\ncommitted\n").context("write committed")?;
+        git(&repo, &["commit", "-am", "second"])?;
+        let base = git(&repo, &["rev-parse", "HEAD~1"])?;
+        let head = git(&repo, &["rev-parse", "HEAD"])?;
 
         fs::write(repo.path().join("a.txt"), "one\nworking\n").context("write uncommitted")?;
 
@@ -572,13 +576,14 @@ index 1111111..2222222 100644
             repo.path(),
             crate::model::ReviewMode::Commit,
             &base,
-            "WORKTREE",
-            &base,
+            &head,
+            &head,
         )?;
         assert_eq!(diff.files.len(), 1);
         assert_eq!(diff.files[0].new_path, "a.txt");
         let added = collect_added_lines(&diff);
-        assert!(added.iter().any(|line| line == "working"));
+        assert!(added.iter().any(|line| line == "committed"));
+        assert!(!added.iter().any(|line| line == "working"));
         Ok(())
     }
 

@@ -1,7 +1,5 @@
 import AppKit
-import SwiftTerm
 import SwiftUI
-import UserNotifications
 
 enum AgentReviewState {
   case running
@@ -31,72 +29,12 @@ enum AgentReviewState {
   }
 }
 
-// MARK: - Terminal View (NSViewRepresentable wrapping SwiftTerm)
-
-struct AgentTerminalView: NSViewRepresentable {
+struct AgentTerminalView: View {
   let agent: ReviewerAgentInstance
   var terminalFontSize: CGFloat = 12
 
-  func makeNSView(context: Context) -> LocalProcessTerminalView {
-    let termView = LocalProcessTerminalView(frame: .zero)
-    termView.font = NSFont.monospacedSystemFont(ofSize: terminalFontSize, weight: .regular)
-    termView.nativeForegroundColor = .textColor
-    termView.nativeBackgroundColor = .textBackgroundColor
-    termView.processDelegate = context.coordinator
-
-    let processSpec: SandboxedProcessSpec
-    if agent.sandboxEnabled {
-      processSpec = ArgonSandbox.reviewerLaunchSpec(agent: agent)
-    } else {
-      processSpec = UserShell.launchSpec(command: agent.fullCommand)
-    }
-    termView.startProcess(
-      executable: processSpec.executable,
-      args: processSpec.args,
-      environment: buildEnvironment(),
-      execName: nil,
-      currentDirectory: agent.repoRoot
-    )
-
-    return termView
-  }
-
-  func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {
-    nsView.font = NSFont.monospacedSystemFont(ofSize: terminalFontSize, weight: .regular)
-  }
-
-  func makeCoordinator() -> Coordinator {
-    Coordinator(agent: agent)
-  }
-
-  private func buildEnvironment() -> [String] {
-    var env = ProcessInfo.processInfo.environment
-    env["ARGON_SESSION_ID"] = agent.sessionId
-    env["ARGON_REPO_ROOT"] = agent.repoRoot
-    if let cliCmd = ProcessInfo.processInfo.environment["ARGON_CLI_CMD"] {
-      env["ARGON_CLI_CMD"] = cliCmd
-    }
-    env["TERM"] = "xterm-256color"
-    return env.map { "\($0.key)=\($0.value)" }
-  }
-
-  class Coordinator: NSObject, LocalProcessTerminalViewDelegate {
-    let agent: ReviewerAgentInstance
-
-    init(agent: ReviewerAgentInstance) {
-      self.agent = agent
-    }
-
-    func processTerminated(source: TerminalView, exitCode: Int32?) {
-      let agent = self.agent
-      Task { @MainActor in
-        agent.isRunning = false
-      }
-    }
-
-    func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
-    func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
-    func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
+  var body: some View {
+    GhosttyTerminalView(agent: agent, terminalFontSize: terminalFontSize)
   }
 }
 
@@ -134,17 +72,26 @@ struct ReviewerAgentTabsView: View {
 
         // Terminal content – keep all terminals alive in a ZStack so
         // switching tabs doesn't destroy the NSView (and kill the process).
-        // Use zIndex to bring the selected terminal to front; all views stay
-        // fully opaque so SwiftUI eagerly creates every NSView.
+        // Hide inactive terminals with zero opacity so Ghostty background
+        // transparency can't bleed older tabs through the selected one.
         ZStack {
           ForEach(appState.reviewerAgents) { agent in
             let isSelected = effectiveSelectedId == agent.id
             AgentTerminalView(agent: agent, terminalFontSize: terminalFontSize)
               .id(agent.id)
               .zIndex(isSelected ? 1 : 0)
+              .opacity(isSelected ? 1 : 0)
               .allowsHitTesting(isSelected)
+              .accessibilityHidden(!isSelected)
           }
         }
+      }
+      .accessibilityIdentifier("reviewer-agent-tabs")
+      .onAppear {
+        UITestAutomationSignal.write(
+          "reviewer-tabs-appeared",
+          to: UITestAutomationConfig.current().signalFilePath
+        )
       }
     }
   }

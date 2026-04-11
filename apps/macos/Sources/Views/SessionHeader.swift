@@ -155,20 +155,20 @@ struct ModePicker: View {
   var body: some View {
     Menu {
       Button {
-        appState.switchMode(.branch)
+        appState.requestModeSwitch(.branch)
       } label: {
         Label(branchLabel, systemImage: "arrow.triangle.branch")
       }
       .disabled(appState.detectedBaseRef == nil)
 
       Button {
-        appState.switchMode(.commit)
+        appState.requestModeSwitch(.commit)
       } label: {
-        Label("Commit \u{2192} working tree", systemImage: "clock.arrow.circlepath")
+        Label("Latest commit", systemImage: "clock.arrow.circlepath")
       }
 
       Button {
-        appState.switchMode(.uncommitted)
+        appState.requestModeSwitch(.uncommitted)
       } label: {
         Label("Uncommitted changes", systemImage: "pencil.and.outline")
       }
@@ -184,6 +184,32 @@ struct ModePicker: View {
     }
     .menuStyle(.borderlessButton)
     .fixedSize()
+    .disabled(!appState.canSwitchReviewMode)
+    .help(appState.modeSwitchDisabledReason ?? "Switch review target")
+    .alert(
+      "Switch review target?",
+      isPresented: Binding(
+        get: { appState.showModeSwitchAlert },
+        set: { presented in
+          if presented {
+            appState.showModeSwitchAlert = true
+          } else {
+            appState.cancelModeSwitch()
+          }
+        }
+      )
+    ) {
+      Button("Switch", role: .destructive) {
+        appState.confirmModeSwitch()
+      }
+      Button("Cancel", role: .cancel) {
+        appState.cancelModeSwitch()
+      }
+    } message: {
+      Text(
+        "Switching the review target clears current review threads, pending drafts, the current decision, and any unsaved inline comment."
+      )
+    }
   }
 
   private var activeModeLabel: String {
@@ -191,7 +217,7 @@ struct ModePicker: View {
     case .branch:
       "\(shorten(appState.activeBaseRef))...\(shorten(appState.activeHeadRef))"
     case .commit:
-      "\(shorten(appState.activeBaseRef)) \u{2192} working tree"
+      "commit \(shorten(appState.activeHeadRef))"
     case .uncommitted:
       "uncommitted changes"
     }

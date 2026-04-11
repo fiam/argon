@@ -10,6 +10,7 @@ struct AgentLaunchButton: View {
     } label: {
       Label("Launch Reviewer", systemImage: "person.badge.plus")
     }
+    .accessibilityIdentifier("launch-reviewer-button")
     .controlSize(.small)
     .disabled(appState.session?.status == .approved || appState.session?.status == .closed)
     .sheet(isPresented: $showLaunchSheet) {
@@ -118,12 +119,14 @@ struct AgentLaunchSheet: View {
             )
           }
           .buttonStyle(.plain)
+          .accessibilityIdentifier("agent-launch-custom-button")
         }
 
         if useCustom {
           TextField("Command (e.g. claude --dangerously-skip-permissions)", text: $customCommand)
             .textFieldStyle(.roundedBorder)
             .font(.system(.body, design: .monospaced))
+            .accessibilityIdentifier("agent-launch-custom-command-field")
         }
 
         // YOLO toggle (only for agents that support it)
@@ -187,17 +190,20 @@ struct AgentLaunchSheet: View {
         Button("Cancel") {
           isPresented = false
         }
+        .accessibilityIdentifier("agent-launch-cancel-button")
         .keyboardShortcut(.cancelAction)
 
         Button("Launch") {
           launch()
         }
+        .accessibilityIdentifier("agent-launch-confirm-button")
         .keyboardShortcut(.defaultAction)
         .disabled(!canLaunch)
       }
     }
     .padding(24)
     .frame(width: 500)
+    .accessibilityIdentifier("agent-launch-sheet")
     .onAppear {
       agentAvailability.refresh(for: savedAgents.profiles)
       syncSelectedAgent()

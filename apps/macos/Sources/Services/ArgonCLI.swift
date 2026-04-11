@@ -265,6 +265,8 @@ enum ArgonCLI {
       lines.append("Focus your review on: \(focus)")
     }
     lines.append("Review the current changes and leave feedback using these commands:")
+    lines.append("Inspect changes: git -C \(repoRoot) status --short")
+    lines.append("Inspect diff: git -C \(repoRoot) diff --no-color HEAD")
     lines.append(
       "Comment: \(cli) --repo \(repoRoot) reviewer comment --session \(sessionId) --reviewer \"\(nickname)\" --message \"<comment>\" [--file <path> --line-new <n>]"
     )
@@ -274,7 +276,9 @@ enum ArgonCLI {
     lines.append(
       "Wait for replies: \(cli) --repo \(repoRoot) reviewer wait --session \(sessionId) --reviewer \"\(nickname)\" --json"
     )
-    lines.append("Do NOT approve — only the human reviewer can approve.")
+    lines.append(
+      "Review the change normally and submit your actual judgment with `commented` or `changes-requested`; only the human reviewer can approve or close the session."
+    )
     lines.append("Do NOT edit files. You may inspect the repo and run tests.")
     return lines.joined(separator: "\n")
   }

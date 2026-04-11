@@ -17,5 +17,11 @@ struct ReviewWindowView: View {
     ContentView()
       .environment(appState)
       .focusedValue(\.appState, appState)
+      .onAppear {
+        UITestAutomationSignal.write(
+          "review-window-appeared",
+          to: UITestAutomationConfig.current().signalFilePath
+        )
+      }
   }
 }

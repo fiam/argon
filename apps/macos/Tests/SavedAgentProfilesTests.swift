@@ -5,8 +5,8 @@ import Testing
 @Suite("SavedAgentProfiles")
 struct SavedAgentProfilesTests {
 
-  @Test("sandboxed Claude launches append bare mode")
-  func sandboxedClaudeAppendsBareMode() {
+  @Test("sandboxed Claude launches keep the configured command")
+  func sandboxedClaudeProfileStaysUnchanged() {
     let profile = SavedAgentProfile(
       id: "claude-code",
       name: "Claude Code",
@@ -15,10 +15,10 @@ struct SavedAgentProfilesTests {
       yoloFlag: "--dangerously-skip-permissions"
     )
 
-    #expect(profile.fullCommand(yolo: false, sandboxed: true) == "claude --bare")
+    #expect(profile.fullCommand(yolo: false, sandboxed: true) == "claude")
     #expect(
       profile.fullCommand(yolo: true, sandboxed: true)
-        == "claude --dangerously-skip-permissions --bare"
+        == "claude --dangerously-skip-permissions"
     )
   }
 

@@ -26,6 +26,8 @@
 	<true/>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.developer-tools</string>
+	<key>ArgonGhosttyResourcesPath</key>
+	<string>$(ARGON_GHOSTTY_RESOURCES_PATH)</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

@@ -25,6 +25,10 @@ struct ContentView: View {
       }
     }
     .onAppear {
+      UITestAutomationSignal.write(
+        "content-appeared",
+        to: UITestAutomationConfig.current().signalFilePath
+      )
       appState.loadSession()
       appState.startPolling()
     }
@@ -81,6 +85,7 @@ struct ReviewLayout: View {
           DiffDetailView()
         }
       }
+      .accessibilityIdentifier("review-layout")
       .inspector(isPresented: $showInspector) {
         ThreadsSidebar(session: session)
           .inspectorColumnWidth(min: 220, ideal: 260, max: 340)

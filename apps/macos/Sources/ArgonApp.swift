@@ -2,23 +2,44 @@ import SwiftUI
 
 @main
 struct ArgonApp: App {
+  private static let cliReviewTarget = AppLaunchTarget.current()
   @FocusedValue(\.appState) private var focusedAppState
   @State private var recentProjects = RecentProjects()
   @State private var savedAgents = SavedAgentProfiles()
   @State private var agentAvailability = AgentAvailability()
 
+  init() {
+    AppSignalHandling.installEmbeddedTerminalHandlers()
+  }
+
   var body: some Scene {
     // Welcome window (shown when app launches without CLI args)
     Window("Welcome to Argon", id: "welcome") {
-      WelcomeView()
-        .environment(recentProjects)
-        .environment(savedAgents)
-        .environment(agentAvailability)
-        .task(id: savedAgents.profiles) {
-          agentAvailability.refresh(for: savedAgents.profiles)
-        }
+      if let cliReviewTarget = Self.cliReviewTarget {
+        ReviewWindowView(target: cliReviewTarget)
+          .environment(recentProjects)
+          .environment(savedAgents)
+          .environment(agentAvailability)
+          .task {
+            recentProjects.add(repoRoot: cliReviewTarget.repoRoot)
+          }
+          .task(id: savedAgents.profiles) {
+            agentAvailability.refresh(for: savedAgents.profiles)
+          }
+      } else {
+        WelcomeView()
+          .environment(recentProjects)
+          .environment(savedAgents)
+          .environment(agentAvailability)
+          .task(id: savedAgents.profiles) {
+            agentAvailability.refresh(for: savedAgents.profiles)
+          }
+      }
     }
-    .defaultSize(width: 500, height: 450)
+    .defaultSize(
+      width: Self.cliReviewTarget == nil ? 500 : 1100,
+      height: Self.cliReviewTarget == nil ? 450 : 700
+    )
 
     // Review windows (one per session)
     WindowGroup(for: ReviewTarget.self) { $target in

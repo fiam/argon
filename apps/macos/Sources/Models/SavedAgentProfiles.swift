@@ -15,9 +15,6 @@ struct SavedAgentProfile: Codable, Identifiable, Hashable {
     if yolo && !yoloFlag.isEmpty {
       components.append(yoloFlag)
     }
-    if sandboxed && shouldUseBareClaudeMode {
-      components.append("--bare")
-    }
     return components.joined(separator: " ")
   }
 
@@ -28,13 +25,6 @@ struct SavedAgentProfile: Codable, Identifiable, Hashable {
 
   var baseCommand: String {
     command.split(separator: " ").first.map(String.init) ?? command
-  }
-
-  private var shouldUseBareClaudeMode: Bool {
-    let baseCommand = command.split(separator: " ").first.map(String.init) ?? command
-    return icon == "claude"
-      && (baseCommand == "claude" || baseCommand.hasSuffix("/claude"))
-      && !command.contains("--bare")
   }
 }
 

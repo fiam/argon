@@ -1362,7 +1362,7 @@ fn run_reviewer_comment(args: ReviewerCommentArgs, runtime: &RuntimeOptions) -> 
 fn run_reviewer_decide(args: ReviewerDecideArgs, runtime: &RuntimeOptions) -> Result<()> {
     if args.reviewer.is_some() && matches!(args.outcome, OutcomeArg::Approved) {
         bail!(
-            "named reviewer agents cannot approve a session; leave `commented` or `changes-requested` and let the human make the final approval"
+            "named reviewer agents cannot approve a session; use `commented` or `changes-requested`, and let the human reviewer decide whether to approve or close the session"
         );
     }
 
@@ -1411,6 +1411,10 @@ fn build_reviewer_prompt(
         "You may inspect the repo and run tests or other read-only commands to validate the work."
             .to_string(),
     );
+    lines.push("Inspect the review target with git before commenting:".to_string());
+    for command in reviewer_inspection_commands(session) {
+        lines.push(format!("  {command}"));
+    }
     lines.push("Use reviewer comment commands to record actionable findings.".to_string());
     lines.push(format!(
         "Comment template: {comment_command_template} --message \"<comment>\""
@@ -1435,11 +1439,11 @@ fn build_reviewer_prompt(
     );
     lines.push(format!("Decision template: {decision_command_template}"));
     lines.push(
-        "Use `changes-requested` when the agent must make changes. Use `commented` when the pass is clean or when feedback is non-blocking. You MUST always submit a decision — never end your review without one. The human sees your verdict to inform their final decision."
+        "Review the change normally and submit your actual judgment. Use `changes-requested` when the coding agent must make changes. Use `commented` when the pass is clean or when feedback is non-blocking. You MUST always submit a decision — never end your review without one. The human sees your verdict to inform their final decision."
             .to_string(),
     );
     lines.push(
-        "Do not use `approved`: the human reviewer has the last word and must decide whether to approve or close the session."
+        "Reviewer agents do not submit `approved`. Submit `commented` or `changes-requested`, and let the human reviewer decide whether to approve or close the session."
             .to_string(),
     );
     lines.push(format!(
@@ -1498,6 +1502,35 @@ fn build_reviewer_prompt(
         }
     }
     lines.join("\n")
+}
+
+fn reviewer_inspection_commands(session: &ReviewSession) -> Vec<String> {
+    let repo_root = shell_quote(&session.repo_root);
+    match session.mode {
+        ReviewMode::Branch => vec![
+            format!("git -C {repo_root} status --short"),
+            format!(
+                "git -C {repo_root} diff --no-color {} {}",
+                shell_quote(&session.merge_base_sha),
+                shell_quote(&session.head_ref)
+            ),
+        ],
+        ReviewMode::Commit => vec![
+            format!(
+                "git -C {repo_root} show --stat --patch --no-color {}",
+                shell_quote(&session.head_ref)
+            ),
+            format!(
+                "git -C {repo_root} diff --no-color {} {}",
+                shell_quote(&session.base_ref),
+                shell_quote(&session.head_ref)
+            ),
+        ],
+        ReviewMode::Uncommitted => vec![
+            format!("git -C {repo_root} status --short"),
+            format!("git -C {repo_root} diff --no-color HEAD"),
+        ],
+    }
 }
 
 fn collect_pending_feedback(session: &ReviewSession) -> Vec<PendingFeedback> {
@@ -2114,6 +2147,29 @@ mod tests {
         assert!(command.contains("--sid "));
         assert!(command.contains("Need changes"));
         assert!(!command.contains("{{prompt}}"));
+    }
+
+    #[test]
+    fn reviewer_prompt_tells_agents_to_submit_their_actual_judgment() {
+        let session = sample_session();
+        let prompt = build_reviewer_prompt(
+            &session,
+            "Frost",
+            &[],
+            "argon reviewer wait --session sid --reviewer Frost --json",
+            "argon reviewer comment --session sid --reviewer Frost",
+            "argon reviewer decide --session sid --reviewer Frost --outcome <changes-requested|commented>",
+        );
+
+        assert!(prompt.contains("Review the change normally and submit your actual judgment."));
+        assert!(prompt.contains("Reviewer agents do not submit `approved`."));
+        assert!(
+            prompt
+                .contains("let the human reviewer decide whether to approve or close the session.")
+        );
+        assert!(prompt.contains("Inspect the review target with git before commenting:"));
+        assert!(prompt.contains("git -C /tmp/repo status --short"));
+        assert!(prompt.contains("git -C /tmp/repo diff --no-color abc123 feature/x"));
     }
 
     #[test]

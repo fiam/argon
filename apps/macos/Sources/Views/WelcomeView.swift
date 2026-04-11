@@ -7,29 +7,6 @@ struct WelcomeView: View {
   @State private var isCreatingSession = false
   @State private var errorMessage: String?
 
-  private static let cliTarget: ReviewTarget? = {
-    let args = ProcessInfo.processInfo.arguments
-    var sessionId: String?
-    var repoRoot: String?
-    var i = 1
-    while i < args.count {
-      switch args[i] {
-      case "--session-id" where i + 1 < args.count:
-        sessionId = args[i + 1]
-        i += 2
-      case "--repo-root" where i + 1 < args.count:
-        repoRoot = args[i + 1]
-        i += 2
-      default:
-        i += 1
-      }
-    }
-    if let sessionId, let repoRoot {
-      return ReviewTarget(sessionId: sessionId, repoRoot: repoRoot)
-    }
-    return nil
-  }()
-
   var body: some View {
     ZStack {
       WelcomeBackground()
@@ -43,7 +20,7 @@ struct WelcomeView: View {
     }
     .frame(minWidth: 560, minHeight: 420)
     .onAppear {
-      if let target = Self.cliTarget {
+      if let target = AppLaunchTarget.current() {
         recentProjects.add(repoRoot: target.repoRoot)
         openWindow(value: target)
         dismissWindow(id: "welcome")
