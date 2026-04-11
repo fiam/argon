@@ -414,6 +414,8 @@ struct DecisionBanner: View {
       Text(label)
         .font(.caption)
         .fontWeight(.medium)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
       if let summary = decision.summary, !summary.isEmpty {
         Text("— \(summary)")
           .font(.caption)
