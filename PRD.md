@@ -1,425 +1,924 @@
-# Argon — PRD
+# Argon - PRD
 
-## 1. Problem Statement
+## 1. Product Reframe
 
-Coding agents are fast, but humans need to coordinate them: launch tasks,
-watch progress, review output, provide feedback, and approve results. Today
-this requires juggling multiple terminals, manually creating worktrees, and
-context-switching between agent output and review UIs.
+Argon is no longer primarily a review app.
 
-Argon is a **native macOS workspace for coordinating coding agents**. It
-gives the human a single window per project to:
+Argon is a native macOS workspace for managing Git worktrees, launching
+coding agents, writing code in embedded terminals, inspecting diffs, and
+handing work into review when the human wants it.
 
-- See all active worktrees and the agents working in them.
-- Launch new agent tasks into isolated worktrees.
-- Watch agent progress in embedded terminals.
-- Review diffs with GitHub-style inline commenting.
-- Approve, request changes, or delegate review to other agents.
+Review remains a core feature, but it becomes one component inside a
+workspace-first product:
 
-## 2. Vision
+- `argon <dir>` opens the main workspace UI for a single repository.
+- `argon review <dir>` opens the standalone review window.
+- the CLI is also the convenient human launcher for opening and focusing
+  app windows from the terminal
+- `argon agent ...` remains the machine-readable review loop for agents,
+  while prompt-driven handoff stays a first-class option and skills remain
+  optional convenience wrappers
 
-A native macOS app that is the human's command center for agent-assisted
-development:
+The new daily-driver experience is:
 
-- **One window per project** — shows the repo, its worktrees, and running
-  agents.
-- **Launch agents** — pick an agent (Claude Code, Codex, Gemini, custom),
-  write a prompt, and spin up a new worktree with the agent running in it.
-- **Embedded terminals** — watch agent output live via libghostty.
-- **Built-in review** — when an agent is ready for review (or the human
-  wants to inspect), open a full diff review UI with inline comments,
-  thread replies, draft batching, and approval.
-- **Agent-agnostic** — works with any CLI agent via skills. The review
-  loop is also accessible standalone from any agent outside the app.
-- **Shared Rust core** — all domain logic, git integration, session
-  management, and syntax highlighting in a portable Rust library.
+1. Open a repo workspace.
+2. Create or select a worktree.
+3. Work in agent or bare terminal tabs.
+4. Inspect diff and status from the right-side inspector.
+5. Launch review when ready.
+6. Merge back or fix conflicts through the active coder agent.
 
-## 3. Goals
+## 2. Problem Statement
 
-- Sub-second cold launch to project view.
-- Native text rendering, syntax highlighting (syntect + two-face), and
-  smooth scroll for diffs.
-- Support both **app-driven** (user launches from Argon) and
-  **CLI-driven** (agent triggers review via skill) workflows.
-- Ship a single self-contained `.app` bundle with embedded CLI.
-- Keep the CLI contract stable so existing agent skills work unchanged.
-- Architect for future platform UIs (Linux, Windows) without forking
-  the core.
+Coding agents can write code quickly, but the human still has to do the
+coordination work:
 
-## 4. Non-Goals (current phase)
+- create and track worktrees
+- keep multiple agents isolated
+- monitor progress and diff quality
+- decide when something is ready for review
+- handle branch conflicts as the base branch moves
+- turn branch work into a merge or pull request
 
-- Linux or Windows native UI (core compiles cross-platform; UI is
-  macOS-only for now).
-- GitHub PR sync.
-- Remote/SaaS mode (deferred — the `ReviewBackend` trait preserves the
-  option but we focus on local-first).
-- Mobile access.
+Today these actions are spread across multiple terminals, ad hoc Git
+commands, and separate review flows. Argon should unify them into one
+native workspace.
 
-## 5. Primary Users
+## 3. Vision
 
-- **Developer (human)**: opens a project, launches agent tasks into
-  worktrees, watches progress, reviews diffs, approves or requests
-  changes. Coordinates multiple agents simultaneously.
-- **Coding agent**: works in a worktree, triggers review via CLI skill,
-  blocks for feedback, applies fixes, and waits for approval.
-- **Reviewer agent**: launched by the human (from the app or CLI) to
-  perform focused reviews. Posts comments but cannot give final approval.
+Argon is the human control plane for local agent-driven development.
 
-## 6. Architecture
+One window maps to one repository. Inside that window the user can:
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                        macOS App (SwiftUI)                           │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │  Project Window (one per repo)                                 │  │
-│  │  ┌──────────┐  ┌────────────────────┐  ┌───────────────────┐  │  │
-│  │  │ Worktree │  │ Terminal           │  │ Review Summary    │  │  │
-│  │  │ Sidebar  │  │ (libghostty)       │  │ / Inspector       │  │  │
-│  │  │          │  │                    │  │                   │  │  │
-│  │  │ main     │  │ $ claude ...       │  │ 3 threads open    │  │  │
-│  │  │ ├ wt-1 ◉│  │ Working on task... │  │ +42 -8            │  │  │
-│  │  │ ├ wt-2 ◎│  │                    │  │ [Review →]        │  │  │
-│  │  │ └ wt-3 ✓│  │                    │  │                   │  │  │
-│  │  └──────────┘  └────────────────────┘  └───────────────────┘  │  │
-│  └────────────────────────────────────────────────────────────────┘  │
-│                                                                      │
-│  Review Window (opens from project window or CLI skill)              │
-│  ┌──────────┐  ┌──────────────────────────┐  ┌───────────────────┐  │
-│  │ File     │  │ Diff View (unified/sbs)  │  │ Threads           │  │
-│  │ Tree     │  │ syntax highlighted       │  │ Inspector         │  │
-│  │ + filter │  │ word-level changes       │  │                   │  │
-│  └──────────┘  └──────────────────────────┘  └───────────────────┘  │
-└──────────────────────────────────────────────────────────────────────┘
-                           │
-              ┌────────────┴────────────┐
-              │      argon-core (Rust)  │
-              │  sessions · worktrees   │
-              │  diffs · highlighting   │
-              │  git · storage · CLI    │
-              └─────────────────────────┘
-```
+- see every active worktree
+- launch one or more agent terminals per worktree
+- open bare shell tabs for manual commands
+- inspect the selected worktree's diff at a glance
+- start a formal review without leaving the workspace
+- ask the active coder agent to merge back or resolve conflicts
+- detect GitHub context and move naturally toward a PR when needed
 
-### 6.1 Window Model
+The review UI stays high quality and GitHub-like, but it is not the home
+screen anymore. The workspace window is.
 
-- **Project Window**: one per repo/directory. Shows worktrees, running
-  agents, and a summary of active reviews. The main daily-driver view.
-- **Review Window**: the full diff review UI. Opens when clicking
-  "Review" on a worktree, or when an agent triggers a review via CLI
-  skill. Can exist standalone (current behavior) or be launched from
-  a project window.
+## 4. Goals
 
-### 6.2 Rust Workspace
+- Make `argon <dir>` the primary human entry point.
+- Make the CLI the fastest way for a user to launch and focus the app
+  from the terminal.
+- Keep one workspace window per repository and one review window per
+  review session.
+- Let humans manage multiple worktrees without manual `git worktree`
+  bookkeeping.
+- Make terminals first-class so coding work can happen inside Argon, not
+  beside it.
+- Keep review explicit, native, and machine-readable.
+- Detect merge conflicts continuously as the base branch changes.
+- Route merge-back and conflict-fix actions through the active coder
+  agent instead of hiding Git operations behind silent automation.
+- Surface GitHub and PR actions when the repository supports them.
 
-```
-argon-native/
-├── crates/
-│   ├── argon-core/       # Domain types, ReviewBackend trait, LocalBackend,
-│   │                     # diff engine, syntax highlighting, git adapter
-│   ├── argon/            # CLI binary
-│   └── argon-ipc/        # IPC server (future)
-├── apps/
-│   └── macos/            # SwiftUI app (project.yml, .xcodeproj gitignored)
-│       ├── Sources/
-│       └── Tests/
-├── skills/               # Bundled agent skills
-├── scripts/              # Dev scripts
-├── Makefile              # make check, make fmt, make test
-├── deny.toml             # cargo-deny config
-└── Cargo.toml            # Workspace root
-```
+## 5. Non-Goals
 
-| Crate | Role |
-|---|---|
-| `argon-core` | Domain types, `ReviewBackend` trait, `LocalBackend`, diff engine, syntax highlighting (syntect + two-face), git adapter. Platform-agnostic. |
-| `argon` | CLI binary. All agent/reviewer/draft/diff commands. |
-| `argon-ipc` | Future: IPC server for native UI ↔ core communication. |
+- Replacing Git with a fully abstracted proprietary workflow.
+- Hiding all Git concepts from the user.
+- Multi-repo workspaces in a single window.
+- Cloud-hosted agent orchestration or remote sessions in this phase.
+- Full GitHub sync parity in the first PR integration milestone.
+- Rewriting the existing review UI before the workspace shell is in place.
 
-### 6.3 The `ReviewBackend` Trait
+## 6. Primary Users
 
-Per-session abstraction. Each review window holds one backend. The trait
-defines session lifecycle, comments, threads, decisions, diffs, and
-reactive watch. `LocalBackend` is the only implementation for now.
+- Human developer
+  Uses Argon as the main desktop app for launching worktrees, watching
+  agents, reviewing diffs, resolving conflicts, and merging work back.
+- Coding agent
+  Runs inside a worktree terminal, writes code, summarizes changes for
+  review, resolves conflicts, and performs merge-back work when asked.
+- Reviewer agent
+  Participates only in the review loop. Can comment and request changes,
+  but cannot approve or merge.
 
-### 6.4 Project Configuration
+## 7. Product Principles
 
-Each project directory can have an `.argon/config.toml`:
+- Workspace first: the default experience is managing live work, not just
+  reading a diff.
+- Review is explicit: approvals, requested changes, and closed sessions
+  remain formal review states.
+- One repository per window: avoid cross-project ambiguity.
+- Agent-visible actions: merge back, conflict fixing, and review summary
+  generation should be driven through a visible agent action path.
+- Deterministic state: worktree status, review status, and conflict status
+  should be explicit and inspectable.
+- Machine-readable first: CLI and internal contracts should stay stable
+  for agent workflows.
+- Human-convenient launch: the same CLI should be ergonomic for users who
+  want to open the right window from the terminal without extra flags.
+- Prompt-driven interoperability: agent workflows should be expressible
+  through copied prompts and CLI commands, not only through installed skills.
 
-```toml
-[project]
-name = "my-service"
+## 8. Command Model
 
-[agents]
-default = "claude"  # claude | codex | gemini | custom
-
-[agents.claude]
-command = "claude --dangerously-skip-permissions"
-sandbox = false
-
-[agents.codex]
-command = "codex --yolo"
-sandbox = false
-
-[agents.custom]
-command = "./scripts/my-agent.sh"
-sandbox = true
-
-[worktree]
-auto_cleanup = true      # remove worktree after merge/close
-base_branch = "main"
-```
-
-When no config exists, the app uses sensible defaults (auto-detect
-available agents, no sandboxing).
-
-### 6.5 Worktree Management
-
-- Each agent task runs in a **git worktree** — an isolated working
-  copy that shares the repo's object store.
-- The app creates worktrees via `git worktree add`, launches the
-  agent in the worktree directory, and tracks its lifecycle.
-- Worktree states: `creating`, `running` (agent active), `awaiting_review`,
-  `approved`, `closed`.
-- On approval, the worktree's branch can be merged or a PR created.
-- On close, the worktree is cleaned up (if `auto_cleanup` is on).
-
-### 6.6 Terminal Embedding (libghostty)
-
-- Embed [libghostty](https://github.com/ghostty-org/ghostty) for
-  terminal rendering — the same engine as Ghostty terminal.
-- Each running agent gets a terminal tab/panel in the project window.
-- The terminal shows live agent output (stdout/stderr).
-- The human can interact with the terminal if needed (e.g. to answer
-  agent prompts).
-
-### 6.7 Agent Launch Flow
-
-1. Human opens project window (or `argon open .` from terminal).
-2. Clicks "New Task" → picks agent, writes prompt, optionally configures
-   sandbox/YOLO mode.
-3. Argon creates a new worktree from the base branch.
-4. Argon launches the agent in the worktree with the prompt.
-5. The agent works, optionally triggers a review via `argon agent start`.
-6. The project window shows the worktree as "awaiting review".
-7. Human clicks "Review" → opens the review window for that worktree.
-8. Review loop proceeds (comments, replies, approve/close).
-9. On approval, Argon can merge the worktree branch.
-
-### 6.8 Standalone Review (current behavior)
-
-The review UI also works standalone, triggered by any agent from any
-terminal:
+### 8.1 Primary Commands
 
 ```bash
-argon agent start --repo <dir> --mode <mode> --description "..." --wait --json
+argon <dir>
+argon review <dir>
 ```
 
-This opens a review window without a project window. The full CLI
-contract is preserved — existing skills continue to work.
+- `argon <dir>`
+  Opens the workspace window for the repository containing `<dir>`.
+  If `<dir>` is already a worktree inside an existing repo, Argon resolves
+  the shared repository and focuses that worktree in the workspace.
+- `argon review <dir>`
+  Opens the standalone review window for the repository containing `<dir>`,
+  equivalent to today's direct review launch.
 
-### 6.9 Storage
+### 8.2 Backward Compatibility
 
-- JSON file store under `~/.cache/argon/` (current implementation).
-- Session, thread, comment, and draft data per repo.
-- Project config in `.argon/config.toml` per repo.
-- Worktree state tracked alongside sessions.
+The following flows stay supported during the transition:
 
-### 6.10 Git Integration
+- `argon review --repo <dir> ...`
+- `argon agent start --repo <dir> ...`
+- existing agent/reviewer/draft/diff commands
 
-- Shell out to `git` for diff, merge-base, worktree management.
-- Isolate behind a `GitAdapter` trait so tests can use fixtures.
-- Support branch, commit, and uncommitted review modes.
+The CLI should treat positional directory arguments as the preferred human
+syntax while preserving machine-readable flags for agents and scripts.
 
-## 7. Skill-Oriented Design
+### 8.3 Human Launcher Expectations
 
-Argon is **skill-driven**: agents interact via CLI, the app is the
-human's surface. This works for both app-launched agents (in worktrees)
-and external agents (triggered from any terminal).
+The CLI is not only an agent contract. It is also the user's convenient
+launcher for the native app.
 
-### 7.1 Coder Agent Skill
+Human-launch expectations:
 
-The skill defines the full review lifecycle:
+- short positional commands should be preferred for app launch
+- opening a directory that already has a workspace window should focus it
+- opening a directory inside an existing worktree should focus the correct
+  repository window and selected worktree
+- review launch should be equally convenient from the terminal
 
-1. `argon agent start --repo <dir> --mode <mode> --description "..." --wait --json`
-2. Acknowledge → implement → reply → re-wait until `approved` or `closed`.
-3. On approval: commit. On close: stop without committing.
+### 8.4 Agent Interaction Expectations
 
-### 7.2 Skill Auto-Install
+Argon should support agent interaction in three forms:
 
-- The bundled `.app` ships skills at `Argon.app/Contents/Resources/skills/`.
-- On first launch, auto-installs into detected agent skill homes.
-- CLI: `argon skill install [--agent <claude-code|codex|all>]`.
+- direct prompt-driven handoff from the UI
+- explicit CLI commands copied into an agent session
+- optional installed skills that wrap the same underlying commands
 
-### 7.3 Reviewer Agent Launch
+No core review or workspace workflow should require a skill installation if
+the same interaction can be expressed with prompt text and CLI commands.
 
-From the project window or review window, the human can launch reviewer
-agents:
+## 9. UX Overview
 
-- **Agent picker**: detects available agents.
-- **Focus prompt**: optional review scoping instructions.
-- **Terminal**: agent runs in an embedded terminal.
-- **Contract**: reviewer agents can inspect and test but cannot edit
-  files or approve — only the human can approve.
+### 9.1 Workspace Window
 
-## 8. Data Model
+Each workspace window handles one repository.
 
-### Review (existing)
+Layout:
 
-- **ReviewSession** — id, repo_root, mode, base_ref, head_ref,
-  change_summary, status, timestamps.
-- **ReviewThread** — id, state (open/addressed/resolved), comments.
-- **ReviewComment** — id, author, kind, anchor, body, timestamp.
-- **ReviewDecision** — outcome, summary, timestamp.
-- **DraftReview** — batched comments before submission.
+- Left pane
+  Worktree list for the repository.
+- Center pane
+  Terminal area with tabs for the selected worktree.
+- Right pane
+  Diff summary, full `--stat`, review controls, merge/conflict controls,
+  and PR actions.
 
-### Workspace (new)
+### 9.2 Review Window
 
-- **Project** — repo_root, config, list of worktrees.
-- **Worktree** — id, branch, path, agent_command, status
-  (creating/running/awaiting_review/approved/closed), session_id
-  (links to ReviewSession when in review), created_at.
-- **AgentProfile** — name, command, sandbox config, detected/custom.
+The existing review UI remains a separate window.
 
-## 9. CLI Contract
+It opens from:
 
-Existing commands preserved. New additions for workspace management:
+- `argon review <dir>`
+- the workspace "Review" action
+- `argon agent start ...`
 
+The review window continues to own:
+
+- diff browsing
+- inline comments
+- thread replies
+- draft review batching
+- human approval and close decisions
+- reviewer-agent collaboration
+
+### 9.3 Window Rules
+
+- One workspace window per repository root / Git common directory.
+- One review window per review session.
+- Opening the same workspace twice should focus the existing window.
+- Multiple review windows may exist if the user launches multiple sessions.
+
+## 10. Requirements
+
+### 10.1 Functional Requirements
+
+#### FR-1 Workspace Entry Point
+
+- `argon <dir>` must open the workspace UI.
+- The app must resolve `<dir>` to the repository root or Git common
+  directory before constructing the window state.
+- If the directory is not inside a Git repository, Argon should fail with
+  a clear message instead of opening an empty shell.
+
+#### FR-2 Review Entry Point
+
+- `argon review <dir>` must open the current review experience.
+- This path must stay compatible with the existing agent review loop.
+
+#### FR-3 Worktree Sidebar
+
+The left pane must list all worktrees for the repository, including:
+
+- display name or branch name
+- filesystem path
+- selected state
+- active agent count
+- diff status summary
+- review status summary
+- conflict indicator
+- merge readiness indicator
+
+The sidebar should make it obvious which worktree is:
+
+- the base branch worktree
+- currently selected
+- conflicted
+- awaiting review
+- ready to merge
+
+#### FR-4 Terminal Tabs
+
+The center pane must support multiple tabs per selected worktree.
+
+Tab types:
+
+- agent tab
+  A terminal launched by Argon with an associated agent command and an
+  optional control channel.
+- shell tab
+  A bare interactive terminal that lets the human type commands directly.
+
+Requirements:
+
+- users can create a new agent tab
+- users can create a new shell tab
+- tabs stay associated with one worktree
+- tab titles should expose worktree + terminal identity
+- closed tabs should not destroy worktree state
+
+#### FR-5 Diff Inspector
+
+The right pane must show diff information for the selected worktree
+relative to its configured base branch.
+
+It must include:
+
+- total added / removed counts
+- file count
+- full `git diff --stat` style summary
+- review session status if a review exists
+- last updated timestamp or refresh state
+
+#### FR-6 Review Action
+
+The right pane must expose a "Review" action that opens the existing
+review UI for the selected worktree.
+
+Before opening the review window, Argon must try to obtain a coder-agent
+summary of the changes to use as the review description / PR description.
+
+If there is:
+
+- one eligible coder agent
+  use it automatically
+- multiple eligible coder agents
+  ask the user to choose one
+- no eligible coder agent
+  prompt the user to launch one or continue with a manual summary
+
+The captured summary must be:
+
+- stored on the worktree
+- editable by the human before review submission
+- passed to reviewer agents as context
+
+#### FR-7 Merge Back Action
+
+The right pane must expose a "Merge Back" action for the selected
+worktree.
+
+Behavior:
+
+- the action targets the repository's configured base branch
+- Argon must not silently perform the merge in the background in phase 1
+- instead, Argon must send the task to an eligible coder agent attached
+  to that worktree
+
+Agent selection rules:
+
+- one eligible coder agent: use it automatically
+- multiple eligible coder agents: ask the user to choose
+- no eligible coder agents: prompt the user to launch one
+
+On successful merge-back, Argon should offer or automatically perform:
+
+- worktree close
+- worktree cleanup
+- terminal tab closure for that worktree
+
+based on repository configuration.
+
+#### FR-8 Continuous Conflict Detection
+
+Argon must continuously detect whether each open worktree conflicts with
+the latest base branch.
+
+Triggers:
+
+- base branch HEAD changes
+- worktree HEAD changes
+- worktree index / working tree changes when relevant
+- successful merge-back of another worktree
+
+Conflict state must update in the workspace UI without requiring the user
+to reopen the window.
+
+#### FR-9 Fix Conflicts Action
+
+When a worktree is marked conflicted, the right pane must expose a
+"Fix Conflicts" action.
+
+This action uses the same agent-selection rules as merge-back:
+
+- one eligible coder agent: use it automatically
+- multiple eligible coder agents: ask the user to choose
+- no eligible coder agents: prompt the user to launch one
+
+#### FR-10 GitHub Detection and PR Action
+
+Argon must automatically detect when the repository is connected to
+GitHub.
+
+At minimum, the right pane must show a PR action when the selected
+worktree belongs to a GitHub-backed repository.
+
+Phase 1 behavior may be:
+
+- open the branch or compare URL in GitHub
+- open an existing PR if one is already known
+- open the new-PR flow in the browser
+
+Later milestones may add direct PR creation and status sync.
+
+#### FR-11 Explicit State Model
+
+Review state must remain explicit:
+
+- `awaiting_reviewer`
+- `awaiting_agent`
+- `approved`
+- `closed`
+
+Workspace state must not overload review state.
+
+Each worktree should track at least:
+
+- worktree lifecycle state
+- review state
+- conflict state
+- terminal / agent activity state
+- merge readiness state
+
+#### FR-12 Review Handoff Context
+
+When a review is launched from the workspace, reviewer agents must receive
+the coder summary as first-class context, not just the raw diff.
+
+The summary should resemble a PR description and include:
+
+- summary of change intent
+- important implementation details
+- testing performed
+- known risks or follow-ups
+
+#### FR-13 Prompt-Driven Agent Interop
+
+Agent workflows must be usable without requiring a skill installation.
+
+Requirements:
+
+- the UI should be able to hand the human a prompt bundle or command text
+  for coder and reviewer agents
+- agents must be able to participate through copied prompts plus CLI
+  commands only
+- skills may accelerate the workflow, but they must not be the only
+  supported path
+
+#### FR-14 Post-Commit Review Reset
+
+Argon must not continue showing an old review decision as if it applied to
+new changes after the coder agent commits or otherwise materially changes
+the reviewed target.
+
+Requirements:
+
+- after commit, the coder agent should explicitly notify completion back to
+  Argon or through the human-visible handoff flow
+- that notification must let Argon clear, close, or retarget the old review
+  state
+- the UI must refresh so fresh post-commit changes appear unreviewed unless
+  a new review session has been created for them
+
+#### FR-15 Persistence
+
+Argon must persist enough workspace state to restore:
+
+- open worktrees
+- selected worktree
+- open terminal tabs metadata
+- review summaries
+- known PR metadata
+- conflict status cache
+
+Terminal scrollback persistence is optional in the first milestone.
+
+#### FR-16 Configuration
+
+The repository-level config must support:
+
+- base branch selection
+- merge-back cleanup policy
+- default agent selection
+- GitHub remote preference if multiple remotes exist
+
+### 10.2 Non-Functional Requirements
+
+#### NFR-1 Performance
+
+- workspace window cold open target: under 1 second for common repos
+- worktree list refresh should feel immediate
+- diff summary refresh should not block terminal interaction
+
+#### NFR-2 Reliability
+
+- background conflict checks must tolerate transient Git failures
+- app relaunch should not orphan persisted worktree metadata
+- review sessions must remain valid even if the workspace window closes
+
+#### NFR-3 Determinism
+
+- worktree detection and branch mapping should be reproducible
+- conflict status should be derived from explicit Git checks, not heuristics
+- action availability should be based on explicit state, not inferred UI timing
+
+#### NFR-4 Machine-Readable Contracts
+
+- all agent-facing CLI outputs must remain JSON-capable
+- any new action contract used to talk to coder agents should have a
+  structured representation even if the first UI transport is terminal-based
+
+## 11. SPEC
+
+### 11.1 Domain Model
+
+#### RepositoryWorkspace
+
+- `repo_root`
+- `git_common_dir`
+- `base_branch`
+- `worktrees`
+- `github_repo`
+- `selected_worktree_id`
+- `last_scan_at`
+
+#### WorkspaceWorktree
+
+- `id`
+- `branch`
+- `path`
+- `is_base_worktree`
+- `head_sha`
+- `dirty_state`
+- `review_session_id`
+- `review_state`
+- `conflict_state`
+- `merge_state`
+- `agent_tabs`
+- `latest_summary`
+- `pull_request`
+
+#### TerminalTab
+
+- `id`
+- `worktree_id`
+- `kind` = `agent` | `shell`
+- `title`
+- `cwd`
+- `launch_command`
+- `agent_capabilities`
+- `status`
+
+#### PullRequestReference
+
+- `provider`
+- `remote_name`
+- `owner`
+- `repo`
+- `number`
+- `url`
+- `head_branch`
+- `base_branch`
+
+### 11.2 State Separation
+
+Argon should model worktree state across separate axes instead of one
+flattened enum.
+
+Recommended axes:
+
+- `worktree_state`
+  `active` | `closing` | `closed`
+- `review_state`
+  `none` | `awaiting_reviewer` | `awaiting_agent` | `approved` | `closed`
+- `conflict_state`
+  `unknown` | `clean` | `conflicted`
+- `merge_state`
+  `idle` | `ready` | `merging` | `merged` | `failed`
+- `activity_state`
+  `idle` | `running_agent` | `running_shell_only`
+
+This prevents review lifecycle from being confused with Git mergeability or
+terminal activity.
+
+### 11.3 Workspace Layout Spec
+
+#### Left Pane
+
+- worktree rows with branch, short path, and badges
+- inline status badges for review / conflict / PR presence
+- sorting by base worktree first, then active worktrees, then recency
+- action affordance to create a new worktree
+
+#### Center Pane
+
+- tab strip scoped to the selected worktree
+- new agent tab button
+- new shell tab button
+- terminal view embedded with Ghostty
+- optional empty state when no tabs exist for the selected worktree
+
+#### Right Pane
+
+- diff summary header
+- added / removed / file counts
+- full `git diff --stat` block
+- latest coder summary preview
+- `Review` button
+- `Merge Back` button
+- `Fix Conflicts` button when needed
+- `PR` button when GitHub is detected
+
+### 11.4 CLI Routing Spec
+
+#### Workspace Launch
+
+```bash
+argon <dir>
 ```
-# Existing (review)
-argon .
-argon review --repo <dir> --mode <mode> [flags]
-argon agent start|wait|follow|status|close|ack|reply|prompt [flags]
-argon reviewer prompt|wait|comment|decide [flags]
-argon draft add|delete|list|submit [flags]
-argon diff --session <id> --theme <theme> --json
-argon skill install [--agent <name>]
 
-# New (workspace)
-argon open <dir>                      # open project window
-argon worktree create --prompt "..."  # create worktree + launch agent
-argon worktree list --json            # list worktrees
-argon worktree status <id> --json     # worktree status
-argon worktree close <id>             # close and cleanup
+Behavior:
+
+1. resolve repository root / common dir
+2. open or focus workspace window
+3. select the worktree matching `<dir>` if applicable
+
+#### Review Launch
+
+```bash
+argon review <dir>
 ```
 
-## 10. macOS UI Requirements
+Behavior:
 
-### 10.1 Project Window
+1. resolve repository root / review target
+2. create or reuse a review session
+3. open review window
 
-- **Worktree sidebar**: list of worktrees with status icons
-  (running ◉, awaiting review ◎, approved ✓, closed ✗).
-- **Terminal panel**: embedded libghostty terminal showing the
-  selected worktree's agent output.
-- **Review summary**: right inspector showing active review
-  threads, diff stats, and a "Review →" button.
-- **New Task button**: opens agent picker + prompt input.
-- **Project config**: accessible via toolbar or menu.
+Compatibility:
 
-### 10.2 Review Window (existing, polished)
+- keep `argon review --repo <dir>` working
+- keep `argon agent start --repo <dir>` unchanged for skills
 
-- File tree sidebar with fuzzy/glob/regex filtering.
-- Unified and side-by-side diff views with syntax highlighting.
-- Word-level change highlighting within modified lines.
-- Inline comment editor, draft review batching.
-- Thread replies and resolve from the UI.
-- Orphaned thread handling for files that left the diff.
-- Live diff refresh via FSEvents.
-- Search across diff content with match navigation.
-- Keyboard shortcuts (⌘F search, ⌘↑/↓ file nav, ⌘1/2 view mode).
-- Rolling number animations on diffstat changes.
+### 11.5 Agent Control Spec
 
-### 10.3 Notifications
+Argon needs a shared abstraction for "ask the coder agent to do a thing"
+that can power:
 
-- macOS native notifications when a worktree reaches
-  `awaiting_review` or when an agent replies to review feedback.
+- review-summary generation
+- merge back
+- fix conflicts
 
-## 11. UX Principles
+Proposed abstraction:
 
-- **Fast open**: project view within 1 second of launch.
-- **Clear status**: always show what each worktree/agent is doing.
-- **Minimal friction**: keyboard-first, single-action approve/launch.
-- **Traceability**: every thread shows author, timestamps, state.
-- **Native feel**: standard macOS chrome, libghostty terminals.
-- **Agent-agnostic**: works with any CLI agent, no lock-in.
+- `AgentControlTarget`
+  identifies an eligible agent tab for a worktree
+- `AgentControlRequest`
+  typed request with goal, repo path, worktree path, and structured context
+- `AgentControlResult`
+  success, failure, timeout, or declined
 
-## 12. Milestones
+Phase 1 transport can still be terminal-backed, but the request and result
+shapes should be explicit in Rust domain types.
 
-### M1 — Rust Core + CLI + Skill Install ✅
+The transport must support both:
 
-- argon-core with domain types, storage, diff, git integration.
-- Full CLI with agent/reviewer/draft/diff commands.
-- Skill auto-install.
+- prompt-driven agent handoff
+- optional skill-backed wrappers over the same request model
 
-### M2 — macOS Diff Viewer ✅
+### 11.6 Review Summary Spec
 
-- SwiftUI app with file tree, diff rendering, session loading.
-- CLI-driven launch (`argon .` opens app).
+When the user launches review from the workspace, Argon should request a
+structured summary from the chosen coder agent.
 
-### M3 — Review Loop ✅
+Required fields:
 
-- Inline comments, draft review batching, decisions.
-- Thread replies and resolve.
-- Session polling, close-on-exit, agent handoff.
-- Mode selector (branch/commit/uncommitted).
+- title
+- summary
+- testing
+- risks
 
-### M4 — Live Updates + Polish ✅
+Storage rules:
 
-- FSEvents file watcher, live diff refresh.
-- Syntax highlighting (syntect + two-face).
-- Word-level diff highlighting.
-- Unified/side-by-side toggle.
-- File tree with fuzzy/glob/regex filter.
-- Search across diff content.
-- Keyboard shortcuts and menu items.
-- Rolling number animations.
+- save it on the worktree record
+- prefill the review description UI
+- include it in reviewer-agent prompts
 
-### M5 — Bundled App
+Fallback rules:
 
-- Embed `argon` CLI in `Argon.app/Contents/Resources/bin/argon`.
-- `make package` target for distributable `.app`.
-- Skill auto-install on first launch.
-- URL scheme: `argon://session/<id>`.
+- if the agent request fails or times out, let the human author the summary
+- do not block the review window forever on summary generation
 
-### M6 — Project Window
+### 11.7 Merge-Back Spec
 
-- Window-per-directory project view.
-- Worktree sidebar with status tracking.
-- Project config (`.argon/config.toml`).
-- "New Task" flow: pick agent, write prompt, create worktree.
-- Review summary inspector.
+Merge-back targets the configured base branch, defaulting to `main`.
 
-### M7 — Terminal Embedding
+Flow:
 
-- libghostty integration for terminal rendering.
-- Terminal panel in project window per worktree.
-- Agent launch into terminal with prompt.
-- Interactive terminal support (human can type).
+1. user clicks `Merge Back`
+2. Argon resolves the eligible coder agent
+3. Argon sends merge instructions with repository context
+4. agent performs the merge work in the selected worktree
+5. Argon refreshes Git state
+6. if merged successfully, Argon offers cleanup / close
+7. conflict state for other worktrees is recomputed immediately
 
-### M8 — Agent Orchestration
+If the merge-back or approved work ends in a commit, the coder agent should
+report completion so Argon can reset or retarget the review state instead of
+showing the previous `approved` decision for fresh changes.
 
-- Agent picker with detected profiles (Claude Code, Codex, Gemini).
-- Sandbox/YOLO mode toggle per agent launch.
-- Worktree lifecycle: create → agent runs → review → approve → merge.
-- Reviewer agent launch from review window.
-- Multiple concurrent agents per project.
+### 11.8 Conflict Detection Spec
 
-## 13. Risks and Mitigations
+Conflict detection should compare each non-base worktree against the
+current base branch tip.
+
+Minimum contract:
+
+- use explicit Git operations that can answer "would this branch conflict
+  if merged now?"
+- rerun after base branch movement and after worktree changes
+- cache latest result and timestamp per worktree
+
+UI contract:
+
+- conflicted worktrees show a badge in the sidebar
+- selected conflicted worktrees show `Fix Conflicts`
+- merge-back should be disabled or guarded when conflict state is red
+
+### 11.9 GitHub / PR Spec
+
+GitHub detection should inspect configured remotes and identify whether the
+repository maps to a GitHub-hosted project.
+
+Phase 1 requirements:
+
+- detect provider + owner/repo from Git remotes
+- show a `PR` button in the workspace inspector
+- if a PR already exists for the branch, open it
+- otherwise open the compare / new-PR URL
+
+Future extension:
+
+- direct PR creation from Argon
+- PR status and review status sync
+
+## 12. Architecture Impact
+
+### 12.1 Rust Core
+
+`argon-core` needs new workspace-first services:
+
+- worktree discovery and refresh
+- workspace persistence
+- conflict monitor
+- GitHub remote parsing
+- agent control request types
+- diff summary / stat generation for worktree inspector
+
+The existing review types remain, but they should become one subsystem of a
+larger workspace domain.
+
+### 12.2 Backend Boundary
+
+The current `ReviewBackend` abstraction should remain for review windows.
+
+The workspace likely needs a separate backend or service layer rather than
+forcing review-only abstractions to own:
+
+- worktrees
+- terminals
+- conflicts
+- merge state
+- GitHub metadata
+
+### 12.3 CLI
+
+The CLI must be updated to:
+
+- route `argon <dir>` to workspace launch
+- accept `argon review <dir>`
+- preserve review-loop commands unchanged
+- add workspace-oriented machine-readable commands later if needed
+
+### 12.4 macOS App
+
+The macOS app should be split into:
+
+- workspace shell
+- review window
+- shared terminal components
+- shared Git / diff inspector models
+
+The current review UI should be reused instead of rewritten.
+
+## 13. Implementation Plan
+
+### Phase 0 - Rebaseline Around Workspace
+
+- update PRD and product messaging
+- keep review flow intact while redefining the top-level app model
+- decide repository identity model: repo root vs Git common dir
+
+Exit criteria:
+
+- product docs consistently describe workspace-first behavior
+- CLI transition plan is explicit
+
+### Phase 1 - CLI Split and Window Routing
+
+- make `argon <dir>` open the workspace window
+- make `argon review <dir>` open the review window
+- preserve `argon agent start ...` and current review contract, whether the
+  agent is following a copied prompt or an installed skill
+- add compatibility coverage for old flag-based review entry
+
+Exit criteria:
+
+- humans have a clear workspace entry point
+- current review workflows still function unchanged
+
+### Phase 2 - Workspace Shell and Worktree Catalog
+
+- build the new workspace window chrome
+- add left worktree sidebar
+- scan and persist repository worktrees
+- select and focus worktrees cleanly
+
+Exit criteria:
+
+- one repository window can display and switch between worktrees
+
+### Phase 3 - Terminal Tabs
+
+- add center-pane tab model
+- support bare shell tabs
+- support agent tabs
+- bind tabs to selected worktree
+
+Exit criteria:
+
+- user can do actual coding work inside Argon
+
+### Phase 4 - Diff Inspector and Review Handoff
+
+- add right-side diff summary
+- add full `git diff --stat`
+- add `Review` action from workspace
+- request coder summary before review launch
+- feed the summary into review sessions and reviewer prompts
+
+Exit criteria:
+
+- review launch feels like a transition from active work into formal review
+
+### Phase 5 - Merge Back Orchestration
+
+- add `Merge Back` action
+- implement agent selection flow
+- add cleanup / close behavior after success
+
+Exit criteria:
+
+- user can merge a worktree back from the workspace through the coder agent
+
+### Phase 6 - Conflict Detection and Resolution
+
+- run continuous mergeability checks
+- surface conflicts in the sidebar and inspector
+- add `Fix Conflicts` action using the same agent-selection flow
+
+Exit criteria:
+
+- workspace reacts when the base branch changes underneath open worktrees
+
+### Phase 7 - GitHub and PR Actions
+
+- detect GitHub remotes
+- surface PR button
+- open existing PR or new-PR flow
+- persist branch-to-PR references when known
+
+Exit criteria:
+
+- GitHub-backed repos have a natural path from local branch work to PR
+
+### Phase 8 - Polish and Stabilization
+
+- restore workspace state on relaunch
+- tighten notifications
+- test larger repos and multiple concurrent worktrees
+- update packaging and onboarding docs
+
+Exit criteria:
+
+- workspace mode is stable enough to replace the current review-first entry
+
+## 14. Milestones
+
+| Milestone | Scope | Outcome |
+|---|---|---|
+| M0 | Existing foundation | Review engine, review UI, live diff refresh, and agent review loop remain intact. |
+| M1 | CLI routing | `argon <dir>` opens workspace, `argon review <dir>` opens review, compatibility preserved. |
+| M2 | Workspace shell | Left / center / right layout ships with repository-scoped window model. |
+| M3 | Worktree management | Worktree discovery, selection, status badges, and persistence land. |
+| M4 | Terminal tabs | Agent tabs and shell tabs work in the center pane. |
+| M5 | Diff inspector | Right pane shows diff summary, full `--stat`, and review entry point. |
+| M6 | Review handoff | Coder summary is requested and injected into review / reviewer context. |
+| M7 | Merge-back flow | Merge-back action delegates to coder agent and supports close / cleanup. |
+| M8 | Conflict handling | Continuous conflict detection and `Fix Conflicts` action ship. |
+| M9 | GitHub / PR flow | GitHub detection and PR button ship for supported repos. |
+| M10 | Stabilization | Persistence, UX polish, and reliability hardening complete the transition. |
+
+## 15. Testing and Validation Requirements
+
+- Add extensive UI and unit test coverage for the new workspace-first
+  flows, including worktree selection, terminal tab management, review
+  launch, merge-back, conflict handling, PR actions, and post-commit UI
+  reset.
+- Add Rust tests for worktree discovery, conflict detection, GitHub remote
+  parsing, and any new CLI routing behavior.
+- Add Swift tests for workspace state restoration, worktree selection, and
+  inspector action availability.
+- Keep existing review-session tests passing unchanged.
+- Add end-to-end coverage for:
+  - launching workspace from a directory
+  - opening review from workspace
+  - agent-selection prompts for merge-back and conflict fix
+  - conflict status updates after base branch movement
+- Validate performance on repositories with multiple open worktrees and
+  moderately large diffs.
+
+## 16. Risks and Mitigations
 
 | Risk | Mitigation |
 |---|---|
-| libghostty integration complexity | Start with a simple PTY wrapper; upgrade to libghostty incrementally. |
-| Worktree management edge cases | Git worktrees are well-tested; add cleanup on close and conflict detection. |
-| Terminal performance in SwiftUI | Use NSViewRepresentable for the terminal; SwiftUI for chrome. |
-| Agent diversity (different CLIs) | Abstract via command template + env vars; test with Claude Code, Codex, and a shell script. |
-| Diff rendering for large repos | Stream hunks lazily; fingerprint-based refresh avoids unnecessary re-parses. |
+| Workspace scope sprawls beyond review foundation | Keep review UI reusable and layer workspace features around it incrementally. |
+| Terminal complexity blocks core product work | Start with tab and process model first; keep terminal renderer work isolated. |
+| Merge-back through agents feels unreliable | Define explicit agent control request/result types and visible status. |
+| Conflict detection becomes noisy or slow | Trigger checks from explicit Git events and cache results per worktree. |
+| GitHub integration creates premature API surface | Start with remote detection and browser deep links before full API sync. |
 
-## 14. Open Questions
+## 17. Open Questions
 
-- libghostty licensing and embedding story — is it available as a library?
-- Should worktree branches auto-name (e.g. `argon/task-<id>`) or let
-  the user choose?
-- Merge strategy on approval: squash merge, regular merge, or just
-  leave the branch for the user to merge?
-- Should the project window show a combined diff across all worktrees,
-  or only per-worktree?
-- Agent sandboxing: Docker, macOS sandbox, or just file system
-  permissions?
+- Should the repository identity key be the repo root path or the Git common
+  directory path when opening workspace windows?
+- Should the base worktree itself appear in the left pane as a selectable row,
+  or stay implicit as the target branch context only?
+- What is the first structured transport for coder-agent control requests:
+  terminal prompt injection, a sidecar CLI contract, or both?
+- Should merge-back default to a merge commit, rebase + fast-forward, or
+  another policy controlled by config?
+- Should PR detection support GitHub Enterprise in phase 1 or only
+  `github.com` remotes?

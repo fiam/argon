@@ -1,28 +1,37 @@
 # Argon
 
-Argon is a native macOS code review app for coding agents.
+Argon is a native macOS workspace for coding agents.
 
 It combines:
 
-- a SwiftUI desktop app for human review
-- a bundled `argon` CLI for machine-readable agent workflows
-- a local-first review loop that works both from the app and from a shell
+- a SwiftUI desktop app for managing worktrees, terminals, and review
+- a bundled `argon` CLI for convenient app launch and machine-readable
+  agent workflows
+- a local-first review loop that still works both from the app and from a shell
 
 Product detail lives in [PRD.md](PRD.md). The agent-facing review contract
 lives in [skills/argon-app-review/SKILL.md](skills/argon-app-review/SKILL.md).
+That skill is an optional wrapper, not the only supported agent path.
 
 ## What Argon Does
 
 Argon gives the human a single place to coordinate agent work:
 
-- open a repo in the macOS app
-- inspect diffs with inline comments and draft review submission
+- open or focus the right Argon window from the terminal with `argon <dir>`
+- manage multiple worktrees in one repository window
+- work in embedded agent terminals or bare shell tabs
+- inspect diffs and launch formal review when ready
 - launch reviewer agents such as Claude, Codex, Gemini, or a custom command
 - keep review sessions explicit and machine-readable through the CLI
 
 The same review flow also works without the app initiating it. An agent can
 start a session from a shell, block for reviewer feedback, address comments,
 and wait for approval through `argon agent ...` commands.
+
+Humans can also start review directly from the app by clicking the
+workspace `Review` button, or from the terminal with `argon review <dir>`.
+Agents can be driven entirely by copied prompts and CLI commands; installed
+skills are optional convenience.
 
 ## Main Pieces
 
@@ -35,7 +44,7 @@ and wait for approval through `argon agent ...` commands.
 - `crates/sandbox`
   Cross-platform sandbox abstraction with a macOS implementation today.
 - `skills/`
-  Bundled skills that agents use to enter and stay inside the review loop.
+  Bundled optional skills that wrap the review loop for compatible agents.
 
 ## Review Loop
 
@@ -92,7 +101,7 @@ bash scripts/dev-argon.sh .
 Project rules worth keeping in mind:
 
 - `make check` must pass before commits
-- tests should ship with behavior changes
+- unit tests and UI tests should ship with behavior changes
 - the CLI stays machine-readable first
 - review states stay explicit
 

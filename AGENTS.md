@@ -2,11 +2,12 @@
 
 ## Project Purpose
 
-Argon is a native macOS code review app for coding agents. It provides:
+Argon is a native macOS workspace for coding agents. It provides:
 
-- A SwiftUI desktop app for GitHub-style diff review with inline comments.
+- A SwiftUI desktop app for managing Git worktrees, terminals, and review.
 - A CLI (`argon`) for agent-safe, non-interactive control.
-- A skill-driven workflow where agents wait for reviewer input, address feedback, and re-request approval.
+- A review workflow that can be launched from the UI or from the CLI,
+  while agents may follow either prompt-driven or skill-backed handoff.
 
 ## Source of Truth
 
@@ -18,7 +19,8 @@ If behavior conflicts, prioritize `PRD.md` and update the other docs.
 ## Collaboration Rules
 
 1. Run `make check` before every commit; all checks must pass.
-2. Add or update tests in the same commit as behavior changes.
+2. Add or update unit tests and UI tests in the same commit as behavior
+   changes; new workspace and review flows should have extensive coverage.
 3. Keep the CLI machine-readable first (`--json` output is required for agent workflows).
 4. Keep all review states explicit (`awaiting_reviewer`, `awaiting_agent`, `approved`, `closed`).
 5. Preserve comment thread identity across review iterations.
@@ -73,6 +75,9 @@ argon-native/
 - **SwiftUI primary**: use SwiftUI for all UI, AppKit only for hard limitations (NSTextView, PTY terminals).
 - **ReviewBackend trait**: the core abstraction. LocalBackend ships first; RemoteBackend enables SaaS mode later.
 - **Per-session backends**: each app window holds one backend managing one session.
-- **Skill-driven**: agents interact via CLI skills only. The app is the human's surface.
+- **Dual review entry**: review can start from the workspace UI or from the
+  CLI.
+- **Prompt-first agent handoff**: agents may be driven entirely through
+  copied prompts and CLI commands; bundled skills are optional wrappers.
 - **Draft review mode**: comments accumulate as drafts, submitted together with a decision (like GitHub).
 - **FSEvents file watcher**: diff refreshes automatically when the working tree changes.
