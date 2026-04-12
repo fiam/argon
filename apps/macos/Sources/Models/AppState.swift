@@ -1,5 +1,10 @@
 import SwiftUI
 
+enum CoderConnectionState: Equatable {
+  case awaitingConnection
+  case connected(lastSeenAt: Date)
+}
+
 @MainActor
 @Observable
 final class AppState {
@@ -580,7 +585,124 @@ final class AppState {
   var handoffCommand: String {
     guard let sessionId, let repoRoot else { return "" }
     let cli = ProcessInfo.processInfo.environment["ARGON_CLI_CMD"] ?? "argon"
-    return "\(cli) --repo \(repoRoot) agent prompt --session \(sessionId)"
+    return "\(cli) --repo \(shellQuote(repoRoot)) agent prompt --session \(sessionId)"
+  }
+
+  var coderHasConnected: Bool {
+    session?.agentLastSeenAt != nil
+  }
+
+  var coderConnectionState: CoderConnectionState {
+    if let lastSeenAt = session?.agentLastSeenAt {
+      return .connected(lastSeenAt: lastSeenAt)
+    }
+    return .awaitingConnection
+  }
+
+  var coderNeedsPromptHandoff: Bool {
+    guard let session else { return false }
+    return session.status != .approved && session.status != .closed
+      && coderConnectionState == .awaitingConnection
+  }
+
+  var coderConnectionLabel: String {
+    switch coderConnectionState {
+    case .awaitingConnection:
+      "No coder yet"
+    case .connected:
+      "Coder connected"
+    }
+  }
+
+  var coderConnectionHelpText: String {
+    switch coderConnectionState {
+    case .awaitingConnection:
+      "No coder agent heartbeat yet. Copy Agent Prompt to hand off this session."
+    case .connected(let lastSeenAt):
+      "A coder agent has connected to this session. Last heartbeat \(relativeTimeDescription(since: lastSeenAt))."
+    }
+  }
+
+  var handoffPrompt: String {
+    guard let session, let repoRoot else { return "" }
+
+    let cli = ProcessInfo.processInfo.environment["ARGON_CLI_CMD"] ?? "argon"
+    let continueCommand =
+      "\(cli) --repo \(shellQuote(repoRoot)) agent wait --session \(session.id.uuidString) --json"
+    var lines: [String] = []
+    lines.append("You are reviewing feedback for Argon session \(session.id) in \(repoRoot).")
+    lines.append(
+      "Review target: mode=\(session.mode.rawValue) base=\(session.baseRef) head=\(session.headRef)"
+    )
+    if let changeSummary = session.changeSummary, !changeSummary.isEmpty {
+      lines.append("Planned changes for this review: \(changeSummary)")
+    }
+    lines.append("Execution contract:")
+    lines.append(
+      "1) Use this blocking wait command to pause until reviewer activity or a final state: \(continueCommand)"
+    )
+    lines.append(
+      "2) If the current snapshot already has open reviewer threads, address them now. Otherwise run the wait command and react as soon as it returns reviewer feedback."
+    )
+    lines.append(
+      "   acknowledge command template: \(cli) --repo \(shellQuote(repoRoot)) agent ack --session \(session.id.uuidString) --thread <thread-id>"
+    )
+    lines.append(
+      "3) After acknowledging, implement the changes and reply on every acknowledged thread."
+    )
+    lines.append(
+      "   reply command template: \(cli) --repo \(shellQuote(repoRoot)) agent reply --session \(session.id.uuidString) --thread <thread-id> --message \"<what changed>\" --addressed"
+    )
+    lines.append(
+      "4) After replying, run the same wait command again and continue this loop without disconnecting."
+    )
+    lines.append(
+      "5) If the wait command returns `approved`, commit your changes (unless the reviewer explicitly asked for a different finalization step) and then stop. If it returns `closed`, the human ended the Argon session. Those are the only terminal states."
+    )
+    lines.append(
+      "6) Do not keep a background `agent follow --jsonl` process as the primary loop in Codex; its output does not drive the agent's control flow."
+    )
+    lines.append(
+      "7) Do not stop just because another reviewer agent says the work looks good; keep going until the human approves or closes the session."
+    )
+
+    if let decision = session.decision {
+      let summary = decision.summary?.isEmpty == false ? decision.summary! : "no summary"
+      lines.append(
+        "Current reviewer decision snapshot: \(decision.outcome.rawValue) — \(summary)."
+      )
+      lines.append(
+        "Treat non-terminal reviewer decisions as part of the active review. Address them if needed, then stay in the wait loop until the session is approved or closed."
+      )
+    }
+
+    let pending = currentPendingFeedback(for: session)
+    if pending.isEmpty {
+      lines.append("Current snapshot: no open reviewer threads right now.")
+    } else {
+      lines.append("Current snapshot: pending reviewer feedback (address immediately):")
+      for (index, item) in pending.enumerated() {
+        let anchor: String = {
+          if let path = item.anchor.filePath {
+            return
+              "\(path) (old:\(String(describing: item.anchor.lineOld)) new:\(String(describing: item.anchor.lineNew)))"
+          }
+          return "global"
+        }()
+        lines.append(
+          "\(index + 1). thread \(item.threadID.uuidString) at \(anchor) -> \(item.comment)"
+        )
+        lines.append(
+          "   acknowledge with: \(cli) --repo \(shellQuote(repoRoot)) agent ack --session \(session.id.uuidString) --thread \(item.threadID.uuidString)"
+        )
+        lines.append(
+          "   reply with: \(cli) --repo \(shellQuote(repoRoot)) agent reply --session \(session.id.uuidString) --thread \(item.threadID.uuidString) --message \"<what changed>\" --addressed"
+        )
+      }
+      lines.append("Address these now while keeping the stream open.")
+    }
+
+    return lines.joined(separator: "\n")
   }
 
   // MARK: - File Navigation
@@ -620,6 +742,37 @@ final class AppState {
       searchMatches = []
       currentSearchMatchIndex = 0
     }
+  }
+
+  private struct PendingHandoffFeedback {
+    let threadID: UUID
+    let anchor: CommentAnchor
+    let comment: String
+  }
+
+  private func relativeTimeDescription(since date: Date) -> String {
+    let formatter = RelativeDateTimeFormatter()
+    formatter.unitsStyle = .full
+    return formatter.localizedString(for: date, relativeTo: Date())
+  }
+
+  private func currentPendingFeedback(for session: ReviewSession) -> [PendingHandoffFeedback] {
+    session.threads.compactMap { thread in
+      guard thread.state == .open, let latest = thread.comments.last, latest.author == .reviewer
+      else { return nil }
+      return PendingHandoffFeedback(
+        threadID: thread.id, anchor: latest.anchor, comment: latest.body)
+    }
+  }
+
+  private func shellQuote(_ raw: String) -> String {
+    let allowed = CharacterSet.alphanumerics.union(
+      CharacterSet(charactersIn: "/._-:+")
+    )
+    if !raw.isEmpty, raw.unicodeScalars.allSatisfy({ allowed.contains($0) }) {
+      return raw
+    }
+    return "'\(raw.replacingOccurrences(of: "'", with: "'\\''"))'"
   }
 
   func updateSearchMatches() {

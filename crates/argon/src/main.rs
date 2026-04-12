@@ -612,6 +612,12 @@ struct ReviewerFeedback {
     created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentWaitSignature {
+    decision: Option<argon_core::ReviewDecision>,
+    pending_feedback: Vec<(Uuid, Uuid)>,
+}
+
 #[derive(Debug, Clone)]
 enum WaitResult {
     Ready(ReviewSession),
@@ -1196,7 +1202,6 @@ fn resolve_review_target_for_review(
 
 fn run_wait(args: WaitArgs, runtime: &RuntimeOptions) -> Result<()> {
     let store = open_store_for_current_repo(runtime)?;
-    let _ = store.mark_agent_seen(args.session)?;
     let wait_result = wait_for_decision(&store, args.session, args.timeout_secs)?;
     print_wait_result(CliCommand::Wait, wait_result, args.json, args.timeout_secs)
 }
@@ -1213,7 +1218,7 @@ fn run_follow(args: FollowArgs, runtime: &RuntimeOptions) -> Result<()> {
 
 fn run_status(args: StatusArgs, runtime: &RuntimeOptions) -> Result<()> {
     let store = open_store_for_current_repo(runtime)?;
-    let session = store.load(args.session)?;
+    let session = store.mark_agent_seen(args.session)?;
     print_session(CliCommand::Status, &session, args.json)
 }
 
@@ -1670,6 +1675,13 @@ fn pending_feedback_signature(session: &ReviewSession) -> Vec<(Uuid, Uuid)> {
         .collect()
 }
 
+fn agent_wait_signature(session: &ReviewSession) -> AgentWaitSignature {
+    AgentWaitSignature {
+        decision: session.decision.clone(),
+        pending_feedback: pending_feedback_signature(session),
+    }
+}
+
 fn current_follow_signature(session: &ReviewSession) -> FollowStateSignature {
     FollowStateSignature {
         status: session.status,
@@ -1757,10 +1769,11 @@ fn build_agent_prompt(
         session.id
     ));
     lines.push(
-        "4) After replying, run the same wait command again and continue this loop.".to_string(),
+        "4) After replying, run the same wait command again and continue this loop without disconnecting."
+            .to_string(),
     );
     lines.push(
-        "5) If the wait command returns `approved`, treat that as human approval. If it returns `closed`, the human ended the Argon session. Those are the only terminal states."
+        "5) If the wait command returns `approved`, commit your changes (unless the reviewer explicitly asked for a different finalization step) and then stop. If it returns `closed`, the human ended the Argon session. Those are the only terminal states."
             .to_string(),
     );
     lines.push(
@@ -1771,6 +1784,22 @@ fn build_agent_prompt(
         "7) Do not stop just because another reviewer agent says the work looks good; keep going until the human approves or closes the session."
             .to_string(),
     );
+
+    if let Some(decision) = session.decision.as_ref() {
+        let outcome = match decision.outcome {
+            ReviewOutcome::Approved => "approved",
+            ReviewOutcome::ChangesRequested => "changes_requested",
+            ReviewOutcome::Commented => "commented",
+        };
+        let summary = decision.summary.as_deref().unwrap_or("no summary");
+        lines.push(format!(
+            "Current reviewer decision snapshot: {outcome} — {summary}."
+        ));
+        lines.push(
+            "Treat non-terminal reviewer decisions as part of the active review. Address them if needed, then stay in the wait loop until the session is approved or closed."
+                .to_string(),
+        );
+    }
 
     if pending_feedback.is_empty() {
         lines.push("Current snapshot: no open reviewer threads right now.".to_string());
@@ -2182,6 +2211,70 @@ mod tests {
     }
 
     #[test]
+    fn agent_prompt_tells_coder_to_commit_on_approval() {
+        let session = sample_session();
+        let prompt = build_agent_prompt(
+            &session,
+            &[],
+            "argon --repo /tmp/repo agent wait --session sid --json",
+        );
+
+        assert!(prompt.contains("commit your changes"));
+        assert!(prompt.contains("without disconnecting"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wait_for_decision_ignores_stale_non_terminal_snapshot() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        fs::create_dir_all(&repo_root).expect("create repo");
+        let store = SessionStore::for_repo_root_with_storage_root(
+            &repo_root,
+            temp.path().join(".argon-home"),
+        );
+        let session = store
+            .create_session_with_mode(ReviewMode::Uncommitted, "HEAD", "WORKTREE", "abc123")
+            .expect("session");
+        let (session, thread_id) = store
+            .add_reviewer_comment(
+                session.id,
+                "issue: please clean this up",
+                Some("Frost".to_string()),
+                CommentKind::Global,
+                CommentAnchor::default(),
+                None,
+            )
+            .expect("reviewer comment");
+        let session = store
+            .set_decision(
+                session.id,
+                ReviewOutcome::Commented,
+                Some("noted".to_string()),
+            )
+            .expect("decision");
+        let _session = store
+            .mark_thread_resolved(session.id, thread_id)
+            .expect("resolve thread");
+
+        let wait_result =
+            wait_for_decision(&store, session.id, Some(0)).expect("wait should return");
+
+        match wait_result {
+            WaitResult::TimedOut(session) => {
+                assert_eq!(session.status, SessionStatus::AwaitingReviewer);
+                assert!(session.decision.is_some());
+            }
+            WaitResult::Ready(session) => {
+                panic!(
+                    "stale non-terminal session should not wake agent wait immediately: {:?}",
+                    session.status
+                );
+            }
+        }
+    }
+
+    #[test]
     fn direct_path_invocation_accepts_agent_flag() {
         let raw_args = vec![
             "argon".to_string(),
@@ -2316,20 +2409,47 @@ fn wait_for_decision(
     timeout_secs: Option<u64>,
 ) -> Result<WaitResult> {
     let started = Instant::now();
+    let initial_session = store.load(session_id)?;
+    if matches!(
+        initial_session.status,
+        SessionStatus::Approved | SessionStatus::Closed
+    ) {
+        let session = store.mark_agent_seen(session_id)?;
+        return Ok(WaitResult::Ready(session));
+    }
+
+    let initial_pending_feedback = collect_pending_feedback(&initial_session);
+    if !initial_pending_feedback.is_empty() {
+        let session = store.mark_agent_seen(session_id)?;
+        return Ok(WaitResult::Ready(session));
+    }
+
+    let initial_signature = agent_wait_signature(&initial_session);
+
     loop {
         let session = store.load(session_id)?;
-        if session.decision.is_some()
-            || matches!(
-                session.status,
-                SessionStatus::Approved | SessionStatus::AwaitingAgent | SessionStatus::Closed
-            )
+        if matches!(
+            session.status,
+            SessionStatus::Approved | SessionStatus::Closed
+        ) {
+            let session = store.mark_agent_seen(session_id)?;
+            return Ok(WaitResult::Ready(session));
+        }
+
+        let current_signature = agent_wait_signature(&session);
+        let current_pending_feedback = collect_pending_feedback(&session);
+        if current_signature.decision != initial_signature.decision
+            || (!current_pending_feedback.is_empty()
+                && current_signature.pending_feedback != initial_signature.pending_feedback)
         {
+            let session = store.mark_agent_seen(session_id)?;
             return Ok(WaitResult::Ready(session));
         }
 
         if let Some(timeout_secs) = timeout_secs {
             let timeout = Duration::from_secs(timeout_secs);
             if started.elapsed() >= timeout {
+                let session = store.mark_agent_seen(session_id)?;
                 return Ok(WaitResult::TimedOut(session));
             }
         }

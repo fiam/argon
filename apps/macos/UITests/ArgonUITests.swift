@@ -61,10 +61,10 @@ final class ArgonUITests: XCTestCase {
     XCTAssertTrue(waitForSignal("reviewer-tabs-appeared", at: signalFile, timeout: 10))
     sleep(8)
 
-    let copyButton = app.buttons["Copy Agent Command"]
+    let copyButton = app.buttons["CoderHandoffButton"]
     XCTAssertTrue(copyButton.waitForExistence(timeout: 10))
     copyButton.tap()
-    XCTAssertTrue(app.buttons["Copied"].waitForExistence(timeout: 3))
+    XCTAssertTrue(app.otherElements["AgentPromptToast"].waitForExistence(timeout: 3))
 
     XCTAssertEqual(app.state, .runningForeground)
     XCTAssertEqual(
@@ -108,10 +108,10 @@ final class ArgonUITests: XCTestCase {
     XCTAssertTrue(window.waitForExistence(timeout: 10))
     window.coordinate(withNormalizedOffset: CGVector(dx: 0.72, dy: 0.78)).click()
 
-    let copyButton = app.buttons["Copy Agent Command"]
+    let copyButton = app.buttons["CoderHandoffButton"]
     XCTAssertTrue(copyButton.waitForExistence(timeout: 10))
     copyButton.tap()
-    XCTAssertTrue(app.buttons["Copied"].waitForExistence(timeout: 3))
+    XCTAssertTrue(app.otherElements["AgentPromptToast"].waitForExistence(timeout: 3))
 
     XCTAssertEqual(app.state, .runningForeground)
     XCTAssertEqual(

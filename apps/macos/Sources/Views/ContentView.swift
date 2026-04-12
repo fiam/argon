@@ -72,6 +72,7 @@ struct ReviewLayout: View {
               .padding(.trailing, 8)
           }
         }
+        .zIndex(1)
         Divider()
 
         if appState.showAgentTerminals && !appState.reviewerAgents.isEmpty {

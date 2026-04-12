@@ -62,6 +62,52 @@ struct AppStateTests {
     #expect(state.modeSwitchDisabledReason != nil)
   }
 
+  @Test("coder prompt handoff is highlighted before first agent heartbeat")
+  func coderPromptHandoffNeedsAttentionBeforeFirstHeartbeat() {
+    let state = AppState()
+    state.sessionId = UUID().uuidString.lowercased()
+    state.repoRoot = "/tmp/repo path"
+    state.session = makeSessionWithThread()
+
+    #expect(!state.coderHasConnected)
+    #expect(state.coderNeedsPromptHandoff)
+    #expect(state.coderConnectionState == .awaitingConnection)
+    #expect(state.coderConnectionLabel == "No coder yet")
+    #expect(state.coderConnectionHelpText.contains("No coder agent heartbeat yet"))
+    #expect(state.handoffPrompt.contains("commit your changes"))
+    #expect(state.handoffPrompt.contains("continue this loop without disconnecting"))
+    #expect(state.handoffPrompt.contains("issue: fix this"))
+  }
+
+  @Test("coder prompt handoff quiets down after first heartbeat")
+  func coderPromptHandoffStopsNeedingAttentionAfterHeartbeat() {
+    let state = AppState()
+    state.sessionId = UUID().uuidString.lowercased()
+    state.repoRoot = "/tmp/repo"
+    var session = makeSessionWithThread()
+    session = ReviewSession(
+      id: session.id,
+      repoRoot: session.repoRoot,
+      mode: session.mode,
+      baseRef: session.baseRef,
+      headRef: session.headRef,
+      mergeBaseSha: session.mergeBaseSha,
+      changeSummary: session.changeSummary,
+      status: session.status,
+      threads: session.threads,
+      decision: session.decision,
+      agentLastSeenAt: Date(),
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt
+    )
+    state.session = session
+
+    #expect(state.coderHasConnected)
+    #expect(!state.coderNeedsPromptHandoff)
+    #expect(state.coderConnectionLabel == "Coder connected")
+    #expect(state.coderConnectionHelpText.contains("Last heartbeat"))
+  }
+
   private func makeFile(path: String, lineText: String) -> FileDiff {
     let line = DiffLine(kind: .added, content: lineText, oldLine: nil, newLine: 1)
     let hunk = DiffHunk(header: "@@ -0,0 +1 @@", oldStart: 0, newStart: 1, lines: [line])

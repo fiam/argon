@@ -7,6 +7,8 @@ struct SessionHeader: View {
   @State private var showSubmitSheet = false
   @State private var submitSummary = ""
   @State private var submitOutcome: String = "commented"
+  @State private var showPromptToast = false
+  @State private var toastDismissWorkItem: DispatchWorkItem?
 
   var body: some View {
     HStack(spacing: 10) {
@@ -38,7 +40,10 @@ struct SessionHeader: View {
 
       if session.status != .approved && session.status != .closed {
         AgentLaunchButton()
-        HandoffButton()
+        HandoffButton {
+          showAgentPromptToast()
+        }
+        CoderConnectionBadge()
         Divider().frame(height: 16)
         reviewActions
       } else if session.status == .approved {
@@ -55,6 +60,16 @@ struct SessionHeader: View {
     .padding(.horizontal, 10)
     .padding(.vertical, 3)
     .background(Color(nsColor: .controlBackgroundColor))
+    .overlay(alignment: .bottomTrailing) {
+      if showPromptToast {
+        AgentPromptToast()
+          .offset(x: -8, y: 40)
+          .transition(.move(edge: .top).combined(with: .opacity))
+          .allowsHitTesting(false)
+          .zIndex(1)
+      }
+    }
+    .zIndex(showPromptToast ? 2 : 0)
     .sheet(isPresented: $showSubmitSheet) {
       SubmitReviewSheet(
         draftCount: appState.pendingDrafts.count,
@@ -77,6 +92,10 @@ struct SessionHeader: View {
     }
     .onAppear {
       appState.reloadDrafts()
+    }
+    .onDisappear {
+      toastDismissWorkItem?.cancel()
+      toastDismissWorkItem = nil
     }
   }
 
@@ -105,6 +124,19 @@ struct SessionHeader: View {
     }
   }
 
+  private func showAgentPromptToast() {
+    toastDismissWorkItem?.cancel()
+    withAnimation(.easeInOut(duration: 0.2)) {
+      showPromptToast = true
+    }
+    let workItem = DispatchWorkItem {
+      withAnimation(.easeInOut(duration: 0.2)) {
+        showPromptToast = false
+      }
+    }
+    toastDismissWorkItem = workItem
+    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: workItem)
+  }
 }
 
 // MARK: - Diff Mode Toggle
@@ -457,26 +489,119 @@ struct DecisionBanner: View {
 
 struct HandoffButton: View {
   @Environment(AppState.self) private var appState
-  @State private var copied = false
+  let onCopy: () -> Void
 
   var body: some View {
     Button {
       NSPasteboard.general.clearContents()
-      NSPasteboard.general.setString(appState.handoffCommand, forType: .string)
-      copied = true
-      DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-        copied = false
-      }
+      NSPasteboard.general.setString(appState.handoffPrompt, forType: .string)
+      onCopy()
     } label: {
-      Label(
-        copied ? "Copied" : "Copy Agent Command", systemImage: copied ? "checkmark" : "doc.on.doc")
+      HStack(spacing: 6) {
+        Image(systemName: icon)
+        Text("Copy Agent Prompt")
+          .lineLimit(1)
+      }
     }
     .controlSize(.small)
-    .help(appState.handoffCommand)
+    .fixedSize()
+    .background(attentionBackground)
+    .clipShape(RoundedRectangle(cornerRadius: 6))
+    .overlay(attentionBorder)
+    .help(helpText)
+    .accessibilityIdentifier("CoderHandoffButton")
+  }
+
+  private var icon: String {
+    appState.coderNeedsPromptHandoff ? "bolt.badge.clock" : "doc.on.doc"
+  }
+
+  @ViewBuilder
+  private var attentionBackground: some View {
+    if appState.coderNeedsPromptHandoff {
+      RoundedRectangle(cornerRadius: 6)
+        .fill(Color.orange.opacity(0.1))
+    }
+  }
+
+  @ViewBuilder
+  private var attentionBorder: some View {
+    if appState.coderNeedsPromptHandoff {
+      RoundedRectangle(cornerRadius: 6)
+        .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+    }
+  }
+
+  private var helpText: String {
+    if appState.coderNeedsPromptHandoff {
+      return
+        "No coder agent heartbeat yet. Copy the full agent prompt, then paste it into your coder agent or start an agent with that prompt."
+    }
+    return
+      "Copy the full agent prompt again. Paste it into your coder agent or start an agent with that prompt."
+  }
+}
+
+private struct CoderConnectionBadge: View {
+  @Environment(AppState.self) private var appState
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Circle()
+        .fill(color)
+        .frame(width: 7, height: 7)
+      Text(appState.coderConnectionLabel)
+        .lineLimit(1)
+    }
+    .font(.caption2)
+    .fontWeight(.medium)
+    .padding(.horizontal, 8)
+    .padding(.vertical, 4)
+    .background(color.opacity(0.14))
+    .foregroundStyle(color)
+    .clipShape(Capsule())
+    .fixedSize()
+    .help(appState.coderConnectionHelpText)
+    .accessibilityIdentifier("CoderConnectionBadge")
+  }
+
+  private var color: Color {
+    switch appState.coderConnectionState {
+    case .awaitingConnection:
+      .orange
+    case .connected:
+      .green
+    }
+  }
+}
+
+private struct AgentPromptToast: View {
+  var body: some View {
+    HStack(spacing: 8) {
+      Image(systemName: "checkmark.circle.fill")
+        .foregroundStyle(.green)
+      Text(
+        "Agent prompt copied. Paste it into your coder agent or start an agent with that prompt."
+      )
+      .font(.caption)
+      .fixedSize(horizontal: false, vertical: true)
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 8)
+    .background(.regularMaterial)
+    .overlay {
+      RoundedRectangle(cornerRadius: 8)
+        .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 1)
+    }
+    .clipShape(RoundedRectangle(cornerRadius: 8))
+    .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+    .frame(width: 300, alignment: .leading)
+    .accessibilityIdentifier("AgentPromptToast")
   }
 }
 
 struct StatusBadge: View {
+  @Environment(AppState.self) private var appState
   let status: SessionStatus
 
   var body: some View {
@@ -490,6 +615,7 @@ struct StatusBadge: View {
       .background(color.opacity(0.15))
       .foregroundStyle(color)
       .clipShape(Capsule())
+      .help(helpText)
   }
 
   private var label: String {
@@ -507,6 +633,23 @@ struct StatusBadge: View {
     case .awaitingAgent: .blue
     case .approved: .green
     case .closed: .secondary
+    }
+  }
+
+  private var helpText: String {
+    switch status {
+    case .awaitingReviewer:
+      "Waiting for reviewer feedback."
+    case .awaitingAgent:
+      if appState.coderNeedsPromptHandoff {
+        "Waiting for a coder agent to connect. Use Copy Agent Prompt to hand off the session."
+      } else {
+        "Waiting for the coder agent to respond to the current review feedback. \(appState.coderConnectionHelpText)"
+      }
+    case .approved:
+      "The reviewer approved the current changes."
+    case .closed:
+      "The review session was closed."
     }
   }
 }
