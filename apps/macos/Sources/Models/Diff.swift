@@ -34,6 +34,10 @@ struct DiffAnchor: Hashable, Codable, Sendable, Identifiable {
     Self(id: "pair:\(fileID):\(ordinal)")
   }
 
+  static func omittedContext(fileID: String, ordinal: Int) -> Self {
+    Self(id: "omitted-context:\(fileID):\(ordinal)")
+  }
+
   static func thread(_ threadID: UUID) -> Self {
     Self(id: "thread:\(threadID.uuidString)")
   }
@@ -228,7 +232,9 @@ struct DiffHunk: Identifiable {
   let anchor: DiffAnchor
   let header: String
   let oldStart: UInt32
+  let oldLineCount: UInt32
   let newStart: UInt32
+  let newLineCount: UInt32
   let lines: [DiffLine]
 
   var id: String {
@@ -239,14 +245,51 @@ struct DiffHunk: Identifiable {
     anchor: DiffAnchor = DiffAnchor(id: UUID().uuidString),
     header: String,
     oldStart: UInt32,
+    oldLineCount: UInt32 = 0,
     newStart: UInt32,
+    newLineCount: UInt32 = 0,
     lines: [DiffLine]
   ) {
     self.anchor = anchor
     self.header = header
     self.oldStart = oldStart
+    self.oldLineCount = oldLineCount
     self.newStart = newStart
+    self.newLineCount = newLineCount
     self.lines = lines
+  }
+}
+
+enum DiffContextSourceSide: String, Sendable {
+  case old
+  case new
+}
+
+struct DiffContextSource: Sendable {
+  let side: DiffContextSourceSide
+  let lines: [String]
+}
+
+struct DiffContextExpansion: Equatable, Sendable {
+  var revealFromTop: Int = 0
+  var revealFromBottom: Int = 0
+}
+
+enum DiffContextExpandDirection {
+  case up
+  case down
+  case all
+}
+
+struct DiffOmittedContextBlock: Identifiable {
+  let anchor: DiffAnchor
+  let fileID: String
+  let filePath: String
+  let totalLineCount: Int
+  let hiddenLineCount: Int
+
+  var id: String {
+    anchor.id
   }
 }
 
@@ -308,7 +351,9 @@ struct FileDiff: Identifiable, Hashable {
         ),
         header: hunk.header,
         oldStart: hunk.oldStart,
+        oldLineCount: hunk.oldLineCount,
         newStart: hunk.newStart,
+        newLineCount: hunk.newLineCount,
         lines: hunk.lines.map { stabilizeLine($0, fileID: fileID) }
       )
     }

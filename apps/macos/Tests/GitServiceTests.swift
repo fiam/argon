@@ -92,6 +92,36 @@ struct GitServiceTests {
     #expect(!diff.contains("working"))
   }
 
+  @Test("context sources use working tree for uncommitted diffs")
+  func contextSourcesUseWorkingTreeForUncommittedDiffs() throws {
+    let repo = try makeRepo()
+    defer { try? FileManager.default.removeItem(at: repo) }
+
+    try git(repo, ["init"])
+    try git(repo, ["config", "user.name", "Argon Test"])
+    try git(repo, ["config", "user.email", "argon-test@example.com"])
+
+    try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    try git(repo, ["add", "a.txt"])
+    try git(repo, ["commit", "-m", "init"])
+
+    try "one\nworking\n".write(
+      to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+
+    let file = FileDiff(oldPath: "a.txt", newPath: "a.txt", hunks: [])
+    let sources = GitService.contextSources(
+      for: [file],
+      repoRoot: repo.path,
+      mode: .uncommitted,
+      baseRef: "HEAD",
+      headRef: "WORKTREE",
+      mergeBaseSha: "HEAD"
+    )
+
+    #expect(sources[file.id]?.side == .new)
+    #expect(sources[file.id]?.lines == ["one", "working"])
+  }
+
   private func makeRepo() throws -> URL {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

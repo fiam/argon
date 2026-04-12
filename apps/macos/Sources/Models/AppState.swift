@@ -5,6 +5,25 @@ enum CoderConnectionState: Equatable {
   case connected(lastSeenAt: Date)
 }
 
+enum DiffViewportRestoreMode: Equatable {
+  case gapAnchor
+  case nextVisibleRow
+  case previousVisibleRow
+  case origin
+}
+
+struct DiffViewportRestoreRequest: Identifiable, Equatable {
+  let id: UUID
+  let mode: DiffViewportRestoreMode
+  let anchor: DiffAnchor?
+
+  init(id: UUID = UUID(), mode: DiffViewportRestoreMode, anchor: DiffAnchor? = nil) {
+    self.id = id
+    self.mode = mode
+    self.anchor = anchor
+  }
+}
+
 @MainActor
 @Observable
 final class AppState {
@@ -16,6 +35,9 @@ final class AppState {
   var isPolling = false
   var pendingDrafts: [DraftComment] = []
   var diffNavigationRequest: DiffNavigationRequest?
+  var diffContextSources: [String: DiffContextSource] = [:]
+  var diffContextExpansion: [String: DiffContextExpansion] = [:]
+  var diffViewportRestoreRequest: DiffViewportRestoreRequest?
 
   // Reviewer agents
   var reviewerAgents: [ReviewerAgentInstance] = []
@@ -115,6 +137,7 @@ final class AppState {
         detectedBaseRef = data.detectedBase
         detectedHeadRef = data.detectedHead
         lastDiffFingerprint = data.diffFingerprint
+        diffContextSources = data.contextSources
         applyNewFiles(data.files)
         UITestAutomationSignal.write("session-loaded", to: uiTestAutomationConfig.signalFilePath)
         runUITestAutomationIfNeeded()
@@ -198,6 +221,7 @@ final class AppState {
         pendingDrafts = []
         activeCommentLineId = nil
         activeCommentText = ""
+        diffContextSources = data.contextSources
         applyNewFiles(data.files)
         if let s = data.updatedSession {
           session = s
@@ -235,6 +259,7 @@ final class AppState {
   private struct LoadData: Sendable {
     let session: ReviewSession
     let files: [FileDiff]
+    let contextSources: [String: DiffContextSource]
     let detectedBase: String?
     let detectedHead: String?
     let diffFingerprint: String
@@ -243,6 +268,7 @@ final class AppState {
   private struct SwitchData: Sendable {
     let target: ResolvedTarget
     let files: [FileDiff]
+    let contextSources: [String: DiffContextSource]
     let updatedSession: ReviewSession?
   }
 
@@ -271,6 +297,24 @@ final class AppState {
     return DiffParser.parse(rawDiff)
   }
 
+  nonisolated private static func loadContextSources(
+    files: [FileDiff],
+    repoRoot: String,
+    mode: ReviewMode,
+    baseRef: String,
+    headRef: String,
+    mergeBaseSha: String
+  ) -> [String: DiffContextSource] {
+    GitService.contextSources(
+      for: files,
+      repoRoot: repoRoot,
+      mode: mode,
+      baseRef: baseRef,
+      headRef: headRef,
+      mergeBaseSha: mergeBaseSha
+    )
+  }
+
   nonisolated private static func doLoadSession(
     sessionId: String, repoRoot: String, theme: String
   ) -> Result<LoadData, Error> {
@@ -282,6 +326,14 @@ final class AppState {
         headRef: session.headRef, mergeBaseSha: session.mergeBaseSha,
         theme: theme
       )
+      let contextSources = loadContextSources(
+        files: files,
+        repoRoot: repoRoot,
+        mode: session.mode,
+        baseRef: session.baseRef,
+        headRef: session.headRef,
+        mergeBaseSha: session.mergeBaseSha
+      )
       let detectedBase = GitService.inferBaseRef(repoRoot: repoRoot)
       let detectedHead = GitService.currentBranchName(repoRoot: repoRoot)
       let fingerprint = GitService.diffFingerprint(
@@ -291,7 +343,11 @@ final class AppState {
       )
       return .success(
         LoadData(
-          session: session, files: files, detectedBase: detectedBase, detectedHead: detectedHead,
+          session: session,
+          files: files,
+          contextSources: contextSources,
+          detectedBase: detectedBase,
+          detectedHead: detectedHead,
           diffFingerprint: fingerprint))
     } catch {
       return .failure(error)
@@ -327,6 +383,14 @@ final class AppState {
       headRef: target.headRef, mergeBaseSha: target.mergeBaseSha,
       theme: theme
     )
+    let contextSources = loadContextSources(
+      files: files,
+      repoRoot: repoRoot,
+      mode: target.mode,
+      baseRef: target.baseRef,
+      headRef: target.headRef,
+      mergeBaseSha: target.mergeBaseSha
+    )
 
     var updatedSession: ReviewSession?
     if let sessionId {
@@ -338,7 +402,14 @@ final class AppState {
       updatedSession = try? SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
     }
 
-    return .success(SwitchData(target: target, files: files, updatedSession: updatedSession))
+    return .success(
+      SwitchData(
+        target: target,
+        files: files,
+        contextSources: contextSources,
+        updatedSession: updatedSession
+      )
+    )
   }
 
   // MARK: - Polling
@@ -457,6 +528,52 @@ final class AppState {
     activeCommentLineId = lineId
   }
 
+  func expandOmittedContext(
+    _ block: DiffOmittedContextBlock,
+    direction: DiffContextExpandDirection,
+    chunkSize: Int = 20
+  ) {
+    let key = block.id
+    var expansion = diffContextExpansion[key] ?? DiffContextExpansion()
+    let remaining = max(
+      0,
+      block.totalLineCount - expansion.revealFromTop - expansion.revealFromBottom
+    )
+    guard remaining > 0 else { return }
+
+    switch direction {
+    case .up:
+      expansion.revealFromTop += min(chunkSize, remaining)
+    case .down:
+      expansion.revealFromBottom += min(chunkSize, remaining)
+    case .all:
+      expansion.revealFromTop = block.totalLineCount
+      expansion.revealFromBottom = 0
+    }
+
+    let gapRemainsVisible =
+      expansion.revealFromTop + expansion.revealFromBottom < block.totalLineCount
+    let restoreMode: DiffViewportRestoreMode =
+      switch direction {
+      case .up where gapRemainsVisible:
+        .gapAnchor
+      case .up:
+        .nextVisibleRow
+      case .down where gapRemainsVisible:
+        .gapAnchor
+      case .down:
+        .previousVisibleRow
+      case .all:
+        .nextVisibleRow
+      }
+
+    diffViewportRestoreRequest = DiffViewportRestoreRequest(
+      mode: restoreMode,
+      anchor: block.anchor
+    )
+    diffContextExpansion[key] = expansion
+  }
+
   func stopPolling() {
     sessionWatcher?.stop()
     sessionWatcher = nil
@@ -493,6 +610,17 @@ final class AppState {
           theme: theme
         )
       }.value
+      let newContextSources = await Task.detached {
+        Self.loadContextSources(
+          files: newFiles,
+          repoRoot: repoRoot,
+          mode: mode,
+          baseRef: base,
+          headRef: head,
+          mergeBaseSha: mergeBase
+        )
+      }.value
+      diffContextSources = newContextSources
       applyNewFiles(newFiles)
     }
     lastDiffFingerprint = fingerprint
@@ -863,6 +991,11 @@ final class AppState {
   func clearDiffNavigationRequest(_ requestID: UUID) {
     guard diffNavigationRequest?.id == requestID else { return }
     diffNavigationRequest = nil
+  }
+
+  func clearDiffViewportRestoreRequest(_ requestID: UUID) {
+    guard diffViewportRestoreRequest?.id == requestID else { return }
+    diffViewportRestoreRequest = nil
   }
 
   func dismissAll() {

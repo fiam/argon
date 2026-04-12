@@ -15,6 +15,16 @@ struct AppKitDiffViewport: NSViewControllerRepresentable {
 }
 
 final class DiffViewportController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
+  private struct ScrollSnapshot {
+    let anchor: DiffAnchor
+    let visibleOffset: CGFloat
+  }
+
+  private enum ScrollRestoreSnapshot {
+    case anchor(ScrollSnapshot)
+    case origin(CGFloat)
+  }
+
   private let containerView = NSView()
   private let scrollView = NSScrollView()
   private let tableView = NSTableView()
@@ -79,12 +89,40 @@ final class DiffViewportController: NSViewController, NSTableViewDataSource, NST
   }
 
   func update(document: DiffDocument, appState: AppState) {
+    let previousRowIDs = self.document.rows.map(\.id)
+    let viewportRestoreRequest = appState.diffViewportRestoreRequest
+    let scrollSnapshot: ScrollRestoreSnapshot? =
+      switch viewportRestoreRequest?.mode {
+      case .origin:
+        .origin(scrollView.contentView.documentVisibleRect.minY)
+      case .gapAnchor:
+        captureScrollSnapshot(for: viewportRestoreRequest?.anchor).map(ScrollRestoreSnapshot.anchor)
+      case .nextVisibleRow:
+        captureAdjacentScrollSnapshot(
+          for: viewportRestoreRequest?.anchor,
+          rowOffset: 1
+        ).map(ScrollRestoreSnapshot.anchor)
+      case .previousVisibleRow:
+        captureAdjacentScrollSnapshot(
+          for: viewportRestoreRequest?.anchor,
+          rowOffset: -1
+        ).map(ScrollRestoreSnapshot.anchor)
+      case .none:
+        captureScrollSnapshot(for: viewportRestoreRequest?.anchor).map(ScrollRestoreSnapshot.anchor)
+      }
+
     self.document = document
     self.appState = appState
 
     tableView.reloadData()
     if !document.rows.isEmpty {
       tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<document.rows.count))
+    }
+    if let scrollSnapshot {
+      restoreScrollSnapshot(scrollSnapshot)
+    }
+    if let viewportRestoreRequest, previousRowIDs != document.rows.map(\.id) {
+      appState.clearDiffViewportRestoreRequest(viewportRestoreRequest.id)
     }
     updateStickyHeader()
     performNavigationIfNeeded()
@@ -272,6 +310,91 @@ final class DiffViewportController: NSViewController, NSTableViewDataSource, NST
     stickyHeaderHeightConstraint?.constant = max(1, hostingView.fittingSize.height)
   }
 
+  private func captureScrollSnapshot(for anchor: DiffAnchor? = nil) -> ScrollSnapshot? {
+    guard !document.rows.isEmpty else { return nil }
+
+    let visibleRect = scrollView.contentView.documentVisibleRect
+    if let anchor,
+      let row = document.index(for: anchor),
+      row < document.rows.count
+    {
+      let rowRect = tableView.rect(ofRow: row)
+      return ScrollSnapshot(
+        anchor: anchor,
+        visibleOffset: visibleRect.minY - rowRect.minY
+      )
+    }
+
+    let rowsRange = tableView.rows(in: visibleRect)
+    guard rowsRange.length > 0 else { return nil }
+    let topRow = max(0, rowsRange.location)
+    guard topRow < document.rows.count else { return nil }
+
+    let rowRect = tableView.rect(ofRow: topRow)
+    return ScrollSnapshot(
+      anchor: document.rows[topRow].anchor,
+      visibleOffset: visibleRect.minY - rowRect.minY
+    )
+  }
+
+  private func captureAdjacentScrollSnapshot(
+    for anchor: DiffAnchor?,
+    rowOffset: Int
+  ) -> ScrollSnapshot? {
+    guard let anchor, let row = document.index(for: anchor) else {
+      return captureScrollSnapshot(for: anchor)
+    }
+
+    let adjacentRow = row + rowOffset
+    guard adjacentRow >= 0, adjacentRow < document.rows.count else {
+      return captureScrollSnapshot(for: anchor) ?? captureScrollSnapshot()
+    }
+
+    return captureScrollSnapshot(for: document.rows[adjacentRow].anchor)
+  }
+
+  private func restoreScrollSnapshot(_ snapshot: ScrollRestoreSnapshot) {
+    switch snapshot {
+    case .anchor(let snapshot):
+      restoreAnchorScrollSnapshot(snapshot)
+    case .origin(let originY):
+      restoreOriginScrollSnapshot(originY)
+    }
+  }
+
+  private func restoreAnchorScrollSnapshot(_ snapshot: ScrollSnapshot) {
+    guard let row = document.index(for: snapshot.anchor), row < tableView.numberOfRows else {
+      return
+    }
+
+    view.layoutSubtreeIfNeeded()
+    tableView.layoutSubtreeIfNeeded()
+
+    let rowRect = tableView.rect(ofRow: row)
+    let clipView = scrollView.contentView
+    let viewportHeight = clipView.bounds.height
+    let documentHeight = tableView.bounds.height
+    let maxOriginY = max(0, documentHeight - viewportHeight)
+    let originY = min(max(rowRect.minY + snapshot.visibleOffset, 0), maxOriginY)
+
+    clipView.scroll(to: NSPoint(x: 0, y: originY))
+    scrollView.reflectScrolledClipView(clipView)
+  }
+
+  private func restoreOriginScrollSnapshot(_ originY: CGFloat) {
+    view.layoutSubtreeIfNeeded()
+    tableView.layoutSubtreeIfNeeded()
+
+    let clipView = scrollView.contentView
+    let viewportHeight = clipView.bounds.height
+    let documentHeight = tableView.bounds.height
+    let maxOriginY = max(0, documentHeight - viewportHeight)
+    let clampedOriginY = min(max(originY, 0), maxOriginY)
+
+    clipView.scroll(to: NSPoint(x: 0, y: clampedOriginY))
+    scrollView.reflectScrolledClipView(clipView)
+  }
+
   private func currentFloatingHeaderFile() -> FileDiff? {
     guard !document.rows.isEmpty else { return nil }
 
@@ -354,6 +477,8 @@ private struct DiffDocumentRowView: View {
         showSplitGuide: appState.diffMode == .sideBySide,
         showTopSeparator: showTopSeparator
       )
+    case .omittedContext(let block):
+      DiffOmittedContextRow(block: block)
     case .hunkHeader(_, let hunk):
       DiffHunkHeaderRow(hunk: hunk)
     case .unifiedLine(let filePath, let line):
@@ -434,6 +559,57 @@ private struct DiffHunkHeaderRow: View {
       Spacer()
     }
     .background(Color.blue.opacity(0.06))
+  }
+}
+
+private struct DiffOmittedContextRow: View {
+  @Environment(AppState.self) private var appState
+  let block: DiffOmittedContextBlock
+
+  var body: some View {
+    HStack(spacing: 10) {
+      Button {
+        appState.expandOmittedContext(block, direction: .up)
+      } label: {
+        Label("Expand Up", systemImage: "chevron.up")
+          .labelStyle(.iconOnly)
+      }
+      .buttonStyle(.plain)
+      .help("Show more context above")
+
+      Button {
+        appState.expandOmittedContext(block, direction: .all)
+      } label: {
+        Text("Show \(block.hiddenLineCount) more lines")
+          .font(.system(.caption, design: .monospaced))
+          .foregroundStyle(.secondary)
+      }
+      .buttonStyle(.plain)
+
+      Button {
+        appState.expandOmittedContext(block, direction: .down)
+      } label: {
+        Label("Expand Down", systemImage: "chevron.down")
+          .labelStyle(.iconOnly)
+      }
+      .buttonStyle(.plain)
+      .help("Show more context below")
+
+      Spacer()
+    }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 6)
+    .background(Color(nsColor: .controlBackgroundColor).opacity(0.6))
+    .overlay(alignment: .top) {
+      Rectangle()
+        .fill(Color(nsColor: .separatorColor))
+        .frame(height: 0.5)
+    }
+    .overlay(alignment: .bottom) {
+      Rectangle()
+        .fill(Color(nsColor: .separatorColor))
+        .frame(height: 0.5)
+    }
   }
 }
 

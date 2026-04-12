@@ -111,6 +111,42 @@ enum GitService {
       mergeBaseSha: session.mergeBaseSha)
   }
 
+  static func contextSources(
+    for files: [FileDiff],
+    repoRoot: String,
+    mode: ReviewMode,
+    baseRef: String,
+    headRef: String,
+    mergeBaseSha: String
+  ) -> [String: DiffContextSource] {
+    var result: [String: DiffContextSource] = [:]
+    let isHeadCheckedOut: Bool =
+      if mode == .branch,
+        let currentHead = resolveRef(repoRoot: repoRoot, ref: "HEAD"),
+        let targetHead = resolveRef(repoRoot: repoRoot, ref: headRef)
+      {
+        currentHead == targetHead
+      } else {
+        false
+      }
+
+    for file in files {
+      if let source = contextSource(
+        for: file,
+        repoRoot: repoRoot,
+        mode: mode,
+        baseRef: baseRef,
+        headRef: headRef,
+        mergeBaseSha: mergeBaseSha,
+        isHeadCheckedOut: isHeadCheckedOut
+      ) {
+        result[file.id] = source
+      }
+    }
+
+    return result
+  }
+
   // MARK: - Target Detection
 
   /// Auto-detect the best review mode for the repo.
@@ -212,6 +248,107 @@ enum GitService {
     let output = runGit(["-C", repoRoot, "rev-parse", "--verify", "\(ref)^{commit}"])
       .trimmingCharacters(in: .whitespacesAndNewlines)
     return output.isEmpty ? nil : output
+  }
+
+  private static func contextSource(
+    for file: FileDiff,
+    repoRoot: String,
+    mode: ReviewMode,
+    baseRef: String,
+    headRef: String,
+    mergeBaseSha: String,
+    isHeadCheckedOut: Bool
+  ) -> DiffContextSource? {
+    if file.newPath != "/dev/null",
+      let lines = newSideContextLines(
+        repoRoot: repoRoot,
+        filePath: file.newPath,
+        mode: mode,
+        headRef: headRef,
+        isHeadCheckedOut: isHeadCheckedOut
+      )
+    {
+      return DiffContextSource(side: .new, lines: lines)
+    }
+
+    if file.oldPath != "/dev/null",
+      let lines = oldSideContextLines(
+        repoRoot: repoRoot,
+        filePath: file.oldPath,
+        mode: mode,
+        baseRef: baseRef,
+        mergeBaseSha: mergeBaseSha
+      )
+    {
+      return DiffContextSource(side: .old, lines: lines)
+    }
+
+    return nil
+  }
+
+  private static func newSideContextLines(
+    repoRoot: String,
+    filePath: String,
+    mode: ReviewMode,
+    headRef: String,
+    isHeadCheckedOut: Bool
+  ) -> [String]? {
+    switch mode {
+    case .uncommitted:
+      workingTreeLines(repoRoot: repoRoot, filePath: filePath)
+    case .branch:
+      if isHeadCheckedOut {
+        workingTreeLines(repoRoot: repoRoot, filePath: filePath)
+      } else {
+        blobLines(repoRoot: repoRoot, ref: headRef, filePath: filePath)
+      }
+    case .commit:
+      blobLines(repoRoot: repoRoot, ref: headRef, filePath: filePath)
+    }
+  }
+
+  private static func oldSideContextLines(
+    repoRoot: String,
+    filePath: String,
+    mode: ReviewMode,
+    baseRef: String,
+    mergeBaseSha: String
+  ) -> [String]? {
+    let ref: String =
+      switch mode {
+      case .branch:
+        mergeBaseSha
+      case .commit:
+        baseRef
+      case .uncommitted:
+        "HEAD"
+      }
+
+    return blobLines(repoRoot: repoRoot, ref: ref, filePath: filePath)
+  }
+
+  private static func workingTreeLines(repoRoot: String, filePath: String) -> [String]? {
+    let url = URL(fileURLWithPath: repoRoot).appendingPathComponent(filePath)
+    guard let data = try? Data(contentsOf: url),
+      let contents = String(data: data, encoding: .utf8)
+    else {
+      return nil
+    }
+    return splitLines(contents)
+  }
+
+  private static func blobLines(repoRoot: String, ref: String, filePath: String) -> [String]? {
+    let contents = runGit(["-C", repoRoot, "show", "\(ref):\(filePath)"])
+    guard !contents.isEmpty else { return nil }
+    return splitLines(contents)
+  }
+
+  private static func splitLines(_ text: String) -> [String] {
+    var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    if text.hasSuffix("\n"), !lines.isEmpty {
+      lines.removeLast()
+    }
+    return lines
   }
 
   static func runGit(_ args: [String]) -> String {

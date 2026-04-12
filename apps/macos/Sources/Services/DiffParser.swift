@@ -11,10 +11,13 @@ enum DiffParser {
       let response = try JSONDecoder().decode(HighlightedDiffResponse.self, from: data)
       return response.files.map { file in
         let hunks = file.unifiedHunks.map { hunk in
-          DiffHunk(
+          let parsedHeader = parseHunkHeader(hunk.header)
+          return DiffHunk(
             header: hunk.header,
-            oldStart: parseOldStart(hunk.header),
-            newStart: parseNewStart(hunk.header),
+            oldStart: parsedHeader?.oldStart ?? 0,
+            oldLineCount: parsedHeader?.oldLineCount ?? 0,
+            newStart: parsedHeader?.newStart ?? 0,
+            newLineCount: parsedHeader?.newLineCount ?? 0,
             lines: hunk.lines.map { line in
               DiffLine(
                 kind: line.decodedKind,
@@ -123,16 +126,6 @@ enum DiffParser {
     }
   }
 
-  private static func parseOldStart(_ header: String) -> UInt32 {
-    guard let parsed = parseHunkHeader(header) else { return 0 }
-    return parsed.oldStart
-  }
-
-  private static func parseNewStart(_ header: String) -> UInt32 {
-    guard let parsed = parseHunkHeader(header) else { return 0 }
-    return parsed.newStart
-  }
-
   // MARK: - Legacy Raw Diff Parsing (fallback)
 
   static func parse(_ raw: String) -> [FileDiff] {
@@ -143,7 +136,9 @@ enum DiffParser {
     var currentLines: [DiffLine] = []
     var currentHeader = ""
     var oldStart: UInt32 = 0
+    var oldLineCount: UInt32 = 0
     var newStart: UInt32 = 0
+    var newLineCount: UInt32 = 0
     var oldCursor: UInt32 = 0
     var newCursor: UInt32 = 0
 
@@ -153,7 +148,9 @@ enum DiffParser {
           DiffHunk(
             header: currentHeader,
             oldStart: oldStart,
+            oldLineCount: oldLineCount,
             newStart: newStart,
+            newLineCount: newLineCount,
             lines: currentLines
           ))
         currentLines = []
@@ -188,7 +185,9 @@ enum DiffParser {
         finalizeHunk()
         if let parsed = parseHunkHeader(line) {
           oldStart = parsed.oldStart
+          oldLineCount = parsed.oldLineCount
           newStart = parsed.newStart
+          newLineCount = parsed.newLineCount
           oldCursor = parsed.oldStart
           newCursor = parsed.newStart
           currentHeader = line
@@ -249,7 +248,9 @@ enum DiffParser {
 
   private struct ParsedHunk {
     let oldStart: UInt32
+    let oldLineCount: UInt32
     let newStart: UInt32
+    let newLineCount: UInt32
   }
 
   private static func parseHunkHeader(_ line: String) -> ParsedHunk? {
@@ -268,7 +269,15 @@ enum DiffParser {
       let newStart = UInt32(newPart[0])
     else { return nil }
 
-    return ParsedHunk(oldStart: oldStart, newStart: newStart)
+    let oldLineCount = UInt32(oldPart.count > 1 ? oldPart[1] : "1") ?? 1
+    let newLineCount = UInt32(newPart.count > 1 ? newPart[1] : "1") ?? 1
+
+    return ParsedHunk(
+      oldStart: oldStart,
+      oldLineCount: oldLineCount,
+      newStart: newStart,
+      newLineCount: newLineCount
+    )
   }
 
   private static func shouldSkipMetadata(_ line: String) -> Bool {

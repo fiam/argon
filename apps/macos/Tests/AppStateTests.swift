@@ -108,6 +108,83 @@ struct AppStateTests {
     #expect(state.coderConnectionHelpText.contains("Last heartbeat"))
   }
 
+  @Test("expanding omitted context reveals lines from the requested edge")
+  func expandingOmittedContextTracksPerBlockState() {
+    let state = AppState()
+    let block = DiffOmittedContextBlock(
+      anchor: .omittedContext(fileID: "Sources/First.swift", ordinal: 0),
+      fileID: "Sources/First.swift",
+      filePath: "Sources/First.swift",
+      totalLineCount: 25,
+      hiddenLineCount: 25
+    )
+
+    state.expandOmittedContext(block, direction: .up, chunkSize: 10)
+    #expect(
+      state.diffContextExpansion[block.id]
+        == DiffContextExpansion(revealFromTop: 10, revealFromBottom: 0))
+    #expect(state.diffViewportRestoreRequest?.mode == .gapAnchor)
+    #expect(state.diffViewportRestoreRequest?.anchor == block.anchor)
+
+    state.expandOmittedContext(block, direction: .down, chunkSize: 8)
+    #expect(
+      state.diffContextExpansion[block.id]
+        == DiffContextExpansion(revealFromTop: 10, revealFromBottom: 8))
+    #expect(state.diffViewportRestoreRequest?.mode == .gapAnchor)
+    #expect(state.diffViewportRestoreRequest?.anchor == block.anchor)
+
+    state.expandOmittedContext(block, direction: .all)
+    #expect(
+      state.diffContextExpansion[block.id]
+        == DiffContextExpansion(revealFromTop: 25, revealFromBottom: 0))
+    #expect(state.diffViewportRestoreRequest?.mode == .nextVisibleRow)
+    #expect(state.diffViewportRestoreRequest?.anchor == block.anchor)
+  }
+
+  @Test("expanding omitted context continues to use the full gap size after rebuilds")
+  func expandingOmittedContextUsesTotalGapSize() {
+    let state = AppState()
+    let firstBlock = DiffOmittedContextBlock(
+      anchor: .omittedContext(fileID: "Sources/First.swift", ordinal: 0),
+      fileID: "Sources/First.swift",
+      filePath: "Sources/First.swift",
+      totalLineCount: 45,
+      hiddenLineCount: 45
+    )
+
+    state.expandOmittedContext(firstBlock, direction: .down, chunkSize: 20)
+
+    let rebuiltBlock = DiffOmittedContextBlock(
+      anchor: firstBlock.anchor,
+      fileID: firstBlock.fileID,
+      filePath: firstBlock.filePath,
+      totalLineCount: 45,
+      hiddenLineCount: 25
+    )
+
+    state.expandOmittedContext(rebuiltBlock, direction: .down, chunkSize: 20)
+    #expect(
+      state.diffContextExpansion[firstBlock.id]
+        == DiffContextExpansion(revealFromTop: 0, revealFromBottom: 40))
+    #expect(state.diffViewportRestoreRequest?.mode == .gapAnchor)
+    #expect(state.diffViewportRestoreRequest?.anchor == firstBlock.anchor)
+
+    let finalBlock = DiffOmittedContextBlock(
+      anchor: firstBlock.anchor,
+      fileID: firstBlock.fileID,
+      filePath: firstBlock.filePath,
+      totalLineCount: 45,
+      hiddenLineCount: 5
+    )
+
+    state.expandOmittedContext(finalBlock, direction: .down, chunkSize: 20)
+    #expect(
+      state.diffContextExpansion[firstBlock.id]
+        == DiffContextExpansion(revealFromTop: 0, revealFromBottom: 45))
+    #expect(state.diffViewportRestoreRequest?.mode == .previousVisibleRow)
+    #expect(state.diffViewportRestoreRequest?.anchor == firstBlock.anchor)
+  }
+
   private func makeFile(path: String, lineText: String) -> FileDiff {
     let line = DiffLine(kind: .added, content: lineText, oldLine: nil, newLine: 1)
     let hunk = DiffHunk(header: "@@ -0,0 +1 @@", oldStart: 0, newStart: 1, lines: [line])

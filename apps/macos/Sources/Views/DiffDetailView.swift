@@ -9,7 +9,9 @@ struct DiffDetailView: View {
       session: appState.session,
       pendingDrafts: appState.pendingDrafts,
       diffMode: appState.diffMode,
-      activeCommentLineID: appState.activeCommentLineId
+      activeCommentLineID: appState.activeCommentLineId,
+      contextSources: appState.diffContextSources,
+      contextExpansion: appState.diffContextExpansion
     )
   }
 

@@ -22,7 +22,9 @@ struct DiffDocumentTests {
       session: nil,
       pendingDrafts: [],
       diffMode: .unified,
-      activeCommentLineID: firstLine.id
+      activeCommentLineID: firstLine.id,
+      contextSources: [:],
+      contextExpansion: [:]
     )
 
     #expect(
@@ -72,7 +74,9 @@ struct DiffDocumentTests {
       session: session,
       pendingDrafts: [draft],
       diffMode: .unified,
-      activeCommentLineID: nil
+      activeCommentLineID: nil,
+      contextSources: [:],
+      contextExpansion: [:]
     )
 
     #expect(document.rows.first?.kind == .orphanedThread)
@@ -97,7 +101,9 @@ struct DiffDocumentTests {
       session: nil,
       pendingDrafts: [],
       diffMode: .sideBySide,
-      activeCommentLineID: nil
+      activeCommentLineID: nil,
+      contextSources: [:],
+      contextExpansion: [:]
     )
 
     #expect(document.row(for: file.sideBySide[0].left!.anchor)?.kind == .sideBySidePair)
@@ -128,7 +134,9 @@ struct DiffDocumentTests {
       session: session,
       pendingDrafts: [draft],
       diffMode: .sideBySide,
-      activeCommentLineID: file.sideBySide[0].left?.id
+      activeCommentLineID: file.sideBySide[0].left?.id,
+      contextSources: [:],
+      contextExpansion: [:]
     )
 
     #expect(document.row(for: file.sideBySide[0].left!.anchor)?.kind == .sideBySidePair)
@@ -144,8 +152,125 @@ struct DiffDocumentTests {
   }
 
   private func makeFile(path: String, lines: [DiffLine]) -> FileDiff {
-    let hunk = DiffHunk(header: "@@ -1,1 +1,2 @@", oldStart: 1, newStart: 1, lines: lines)
+    let hunk = DiffHunk(
+      header: "@@ -1,1 +1,2 @@",
+      oldStart: 1,
+      oldLineCount: 1,
+      newStart: 1,
+      newLineCount: 2,
+      lines: lines
+    )
     return FileDiff(oldPath: path, newPath: path, hunks: [hunk])
+  }
+
+  @Test("builder inserts omitted context rows for hidden unchanged lines")
+  func insertsOmittedContextRows() {
+    let line = DiffLine(kind: .added, content: "changed", oldLine: nil, newLine: 5)
+    let hunk = DiffHunk(
+      header: "@@ -5,0 +5,1 @@",
+      oldStart: 5,
+      oldLineCount: 0,
+      newStart: 5,
+      newLineCount: 1,
+      lines: [line]
+    )
+    let file = FileDiff(oldPath: "Sources/Foo.swift", newPath: "Sources/Foo.swift", hunks: [hunk])
+    let contextSource = DiffContextSource(
+      side: .new,
+      lines: ["1", "2", "3", "4", "changed", "6", "7"]
+    )
+
+    let document = DiffDocumentBuilder.build(
+      files: [file],
+      session: nil,
+      pendingDrafts: [],
+      diffMode: .unified,
+      activeCommentLineID: nil,
+      contextSources: [file.id: contextSource],
+      contextExpansion: [:]
+    )
+
+    #expect(
+      document.rows.map(\.kind)
+        == [
+          .fileHeader,
+          .omittedContext,
+          .hunkHeader,
+          .unifiedLine,
+          .omittedContext,
+        ]
+    )
+    #expect(document.contains(anchor: .omittedContext(fileID: file.id, ordinal: 0)))
+    #expect(document.contains(anchor: .omittedContext(fileID: file.id, ordinal: 1)))
+    if case .omittedContext(let block)? = document.row(
+      for: .omittedContext(fileID: file.id, ordinal: 0))?.payload
+    {
+      #expect(block.totalLineCount == 4)
+      #expect(block.hiddenLineCount == 4)
+    } else {
+      Issue.record("expected omitted context block for the leading gap")
+    }
+  }
+
+  @Test("builder reveals expanded context around omitted blocks")
+  func revealsExpandedContext() {
+    let line = DiffLine(kind: .added, content: "changed", oldLine: nil, newLine: 5)
+    let hunk = DiffHunk(
+      header: "@@ -5,0 +5,1 @@",
+      oldStart: 5,
+      oldLineCount: 0,
+      newStart: 5,
+      newLineCount: 1,
+      lines: [line]
+    )
+    let file = FileDiff(oldPath: "Sources/Foo.swift", newPath: "Sources/Foo.swift", hunks: [hunk])
+    let contextSource = DiffContextSource(
+      side: .new,
+      lines: ["1", "2", "3", "4", "changed", "6", "7"]
+    )
+    let topGapAnchor = DiffAnchor.omittedContext(fileID: file.id, ordinal: 0)
+
+    let document = DiffDocumentBuilder.build(
+      files: [file],
+      session: nil,
+      pendingDrafts: [],
+      diffMode: .unified,
+      activeCommentLineID: nil,
+      contextSources: [file.id: contextSource],
+      contextExpansion: [
+        topGapAnchor.id: DiffContextExpansion(revealFromTop: 2, revealFromBottom: 1)
+      ]
+    )
+
+    let rowKinds = document.rows.map(\.kind)
+    #expect(
+      rowKinds
+        == [
+          .fileHeader,
+          .unifiedLine,
+          .unifiedLine,
+          .omittedContext,
+          .unifiedLine,
+          .hunkHeader,
+          .unifiedLine,
+          .omittedContext,
+        ]
+    )
+    #expect(
+      document.contains(
+        anchor: DiffAnchor.line(fileID: file.id, kind: .context, oldLine: 1, newLine: 1)))
+    #expect(
+      document.contains(
+        anchor: DiffAnchor.line(fileID: file.id, kind: .context, oldLine: 2, newLine: 2)))
+    #expect(
+      document.contains(
+        anchor: DiffAnchor.line(fileID: file.id, kind: .context, oldLine: 4, newLine: 4)))
+    if case .omittedContext(let block)? = document.row(for: topGapAnchor)?.payload {
+      #expect(block.totalLineCount == 4)
+      #expect(block.hiddenLineCount == 1)
+    } else {
+      Issue.record("expected the leading gap to remain after partial expansion")
+    }
   }
 
   private func makeThread(
