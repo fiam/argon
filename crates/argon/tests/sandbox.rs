@@ -2,6 +2,7 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use tempfile::tempdir;
@@ -225,6 +226,69 @@ fn sandbox_exec_defaults_write_root_to_current_directory() -> Result<()> {
     assert!(
         !outside_file.exists(),
         "paths outside the cwd should remain read-only by default"
+    );
+    Ok(())
+}
+
+#[test]
+fn sandbox_exec_allows_standard_system_tmp_root() -> Result<()> {
+    let temp = tempdir()?;
+    let root = temp.path().canonicalize()?;
+    let fake_home = root.join("home");
+    let fake_tmp = root.join("tmp");
+    let cwd_root = root.join("cwd");
+    std::fs::create_dir_all(&fake_home)?;
+    std::fs::create_dir_all(&fake_tmp)?;
+    std::fs::create_dir_all(&cwd_root)?;
+
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("clock went backwards")?
+        .as_nanos();
+    let system_tmp_root = if Path::new("/private/tmp").exists() {
+        Path::new("/private/tmp")
+    } else {
+        Path::new("/tmp")
+    };
+    let temp_dir = system_tmp_root.join(format!("argon-sandbox-{stamp}"));
+    let temp_file = temp_dir.join("ok.txt");
+    let script = format!(
+        "cleanup() {{ rm -f {file} 2>/dev/null || true; rmdir {dir} 2>/dev/null || true; }}; \
+         trap cleanup EXIT; \
+         mkdir -p {dir} && touch {file}",
+        dir = shell_quote(&temp_dir),
+        file = shell_quote(&temp_file)
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_argon"))
+        .env("HOME", &fake_home)
+        .env("TMPDIR", &fake_tmp)
+        .current_dir(&cwd_root)
+        .arg("sandbox")
+        .arg("exec")
+        .arg("--write-root")
+        .arg(&cwd_root)
+        .arg("--")
+        .arg("/bin/sh")
+        .arg("-c")
+        .arg(&script)
+        .output()
+        .context("failed to run sandbox helper for system tmp root")?;
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "sandbox exec for system tmp root failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    assert!(
+        !temp_dir.exists(),
+        "temporary system tmp directory should be cleaned up"
     );
     Ok(())
 }

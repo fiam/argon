@@ -396,6 +396,9 @@ pub fn profile_parameters(policy: &SandboxPolicy) -> Vec<String> {
 fn append_built_in_defaults(rules: &mut SandboxRules) {
     rules.push_path(PathBuf::from("/dev/null")).ok();
     rules.push_root(std::env::temp_dir()).ok();
+    for root in ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"] {
+        rules.push_root(PathBuf::from(root)).ok();
+    }
 
     if let Some(path) = non_empty_env_path("TMPDIR") {
         rules.push_root(path).ok();
@@ -710,18 +713,34 @@ mod tests {
                 .iter()
                 .any(|path| path == Path::new("/dev/null"))
         );
+        for temp_root in [Path::new("/private/tmp"), Path::new("/private/var/tmp")] {
+            if let Ok(temp_root) = temp_root.canonicalize() {
+                assert!(
+                    policy
+                        .writable_roots()
+                        .iter()
+                        .any(|path| path == &temp_root),
+                    "expected built-in defaults to include {}",
+                    temp_root.display()
+                );
+            }
+        }
         if let Some(home) = non_empty_env_path("HOME") {
+            let claude_config_path =
+                normalize_location(home.join(".claude.json")).expect("normalize Claude config");
+            let claude_lock_root = normalize_location(home.join(".claude.json.lock"))
+                .expect("normalize Claude lock root");
             assert!(
                 policy
                     .writable_paths()
                     .iter()
-                    .any(|path| path == &home.join(".claude.json"))
+                    .any(|path| path == &claude_config_path)
             );
             assert!(
                 policy
                     .writable_roots()
                     .iter()
-                    .any(|path| path == &home.join(".claude.json.lock"))
+                    .any(|path| path == &claude_lock_root)
             );
         }
     }

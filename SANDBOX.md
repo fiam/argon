@@ -43,7 +43,8 @@ argon sandbox defaults --json
 The defaults are environment-sensitive. On macOS they currently include:
 
 - exact path: `/dev/null`
-- temp roots from `std::env::temp_dir()` and `TMPDIR`
+- temp roots from `std::env::temp_dir()`, `TMPDIR`, `/tmp`, `/private/tmp`,
+  `/var/tmp`, and `/private/var/tmp`
 - `XDG_STATE_HOME` when set
 - `XDG_CACHE_HOME` when set
 - under `HOME`:
