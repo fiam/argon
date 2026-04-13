@@ -16,7 +16,26 @@ final class AppLaunchTargetTests: XCTestCase {
           "--repo-root", "/tmp/repo",
         ]
       ),
-      ReviewTarget(sessionId: "session-123", repoRoot: "/tmp/repo")
+      .review(ReviewTarget(sessionId: "session-123", repoRoot: "/tmp/repo"))
+    )
+  }
+
+  func testCurrentParsesWorkspaceArguments() {
+    XCTAssertEqual(
+      AppLaunchTarget.current(
+        arguments: [
+          "Argon",
+          "--workspace-repo-root", "/tmp/repo",
+          "--workspace-common-dir", "/tmp/repo/.git",
+          "--selected-worktree-path", "/tmp/repo-worktrees/feature-a",
+        ]
+      ),
+      .workspace(
+        WorkspaceTarget(
+          repoRoot: "/tmp/repo",
+          repoCommonDir: "/tmp/repo/.git",
+          selectedWorktreePath: "/tmp/repo-worktrees/feature-a"
+        ))
     )
   }
 }

@@ -1,14 +1,199 @@
 import Foundation
 
-struct ResolvedTarget {
+struct ResolvedTarget: Sendable {
   let mode: ReviewMode
   let baseRef: String
   let headRef: String
   let mergeBaseSha: String
 }
 
+struct DiscoveredWorktree: Identifiable, Hashable, Sendable {
+  var id: String { path }
+
+  let path: String
+  let branchName: String?
+  let headSHA: String?
+  let isBaseWorktree: Bool
+  let isDetached: Bool
+}
+
+struct WorktreeDiffSummary: Hashable, Sendable {
+  static let empty = WorktreeDiffSummary(fileCount: 0, addedLineCount: 0, removedLineCount: 0)
+
+  let fileCount: Int
+  let addedLineCount: Int
+  let removedLineCount: Int
+
+  var hasChanges: Bool {
+    fileCount > 0 || addedLineCount > 0 || removedLineCount > 0
+  }
+}
+
 enum GitService {
   private static let emptyTreeSHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+  enum GitError: LocalizedError {
+    case commandFailed(String)
+
+    var errorDescription: String? {
+      switch self {
+      case .commandFailed(let message):
+        return message
+      }
+    }
+  }
+
+  // MARK: - Workspace
+
+  static func resolveWorkspaceTarget(path: String) throws -> WorkspaceTarget {
+    let selectedWorktreePath = try requireGit([
+      "-C", path,
+      "rev-parse", "--show-toplevel",
+    ]).trimmingCharacters(in: .whitespacesAndNewlines)
+    let repoCommonDir = try requireGit([
+      "-C", path,
+      "rev-parse", "--path-format=absolute", "--git-common-dir",
+    ]).trimmingCharacters(in: .whitespacesAndNewlines)
+
+    guard !selectedWorktreePath.isEmpty else {
+      throw GitError.commandFailed("Could not resolve the current worktree.")
+    }
+    guard !repoCommonDir.isEmpty else {
+      throw GitError.commandFailed("Could not resolve the shared Git common directory.")
+    }
+
+    let repoRoot = baseWorktreePath(repoCommonDir: repoCommonDir) ?? selectedWorktreePath
+    return WorkspaceTarget(
+      repoRoot: normalizePath(repoRoot),
+      repoCommonDir: normalizePath(repoCommonDir),
+      selectedWorktreePath: normalizePath(selectedWorktreePath)
+    )
+  }
+
+  static func discoverWorktrees(repoRoot: String, repoCommonDir: String) throws
+    -> [DiscoveredWorktree]
+  {
+    let output = try requireGit([
+      "-C", repoRoot,
+      "worktree", "list", "--porcelain",
+    ])
+    return parseWorktreeList(
+      output,
+      baseWorktreePath: baseWorktreePath(repoCommonDir: repoCommonDir) ?? repoRoot
+    )
+  }
+
+  static func createWorktree(
+    repoRoot: String,
+    branchName: String,
+    path: String,
+    startPoint: String
+  ) throws {
+    let trimmedBranchName = branchName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedStartPoint = startPoint.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    guard !trimmedBranchName.isEmpty else {
+      throw GitError.commandFailed("Branch name is required.")
+    }
+
+    guard !trimmedPath.isEmpty else {
+      throw GitError.commandFailed("Worktree path is required.")
+    }
+
+    _ = try requireGit([
+      "-C", repoRoot,
+      "worktree", "add",
+      "-b", trimmedBranchName,
+      normalizePath(trimmedPath),
+      trimmedStartPoint.isEmpty ? "HEAD" : trimmedStartPoint,
+    ])
+  }
+
+  static func diffSummary(repoRoot: String) -> WorktreeDiffSummary {
+    let files = diffFiles(repoRoot: repoRoot)
+    guard !files.isEmpty else {
+      return .empty
+    }
+
+    return WorktreeDiffSummary(
+      fileCount: files.count,
+      addedLineCount: files.reduce(0) { $0 + $1.addedCount },
+      removedLineCount: files.reduce(0) { $0 + $1.removedCount }
+    )
+  }
+
+  static func diffStat(repoRoot: String) -> String {
+    formatDiffStat(files: diffFiles(repoRoot: repoRoot))
+  }
+
+  static func diffFiles(repoRoot: String) -> [FileDiff] {
+    guard let target = autoDetectTarget(repoRoot: repoRoot) else {
+      return []
+    }
+
+    let diffOutput = diff(
+      repoRoot: repoRoot,
+      mode: target.mode,
+      baseRef: target.baseRef,
+      headRef: target.headRef,
+      mergeBaseSha: target.mergeBaseSha
+    )
+    return DiffParser.parse(diffOutput)
+  }
+
+  static func hasConflicts(repoRoot: String) -> Bool {
+    let output = runGit([
+      "-C", repoRoot, "diff", "--name-only", "--diff-filter=U",
+    ]).trimmingCharacters(in: .whitespacesAndNewlines)
+    return !output.isEmpty
+  }
+
+  static func pullRequestCompareURL(
+    repoRoot: String,
+    mode: ReviewMode,
+    baseRef: String,
+    headRef: String
+  ) -> String? {
+    guard mode == .branch, let repositoryURL = githubRepositoryURL(repoRoot: repoRoot) else {
+      return nil
+    }
+
+    let baseBranch = githubBranchName(baseRef)
+    let headBranch = githubBranchName(headRef)
+    guard !baseBranch.isEmpty, !headBranch.isEmpty, baseBranch != headBranch else { return nil }
+
+    return "\(repositoryURL)/compare/\(baseBranch)...\(headBranch)?expand=1"
+  }
+
+  static func formatDiffStat(files: [FileDiff]) -> String {
+    guard !files.isEmpty else { return "" }
+
+    let displayPaths = files.map(\.displayPath)
+    let pathColumnWidth = min(
+      max(displayPaths.map(\.count).max() ?? 0, 12),
+      52
+    )
+
+    let lines = files.map { file -> String in
+      let displayPath =
+        if file.displayPath.count > pathColumnWidth {
+          String(file.displayPath.suffix(pathColumnWidth))
+        } else {
+          file.displayPath
+        }
+      let padding = String(repeating: " ", count: max(pathColumnWidth - displayPath.count, 0))
+      let lineDelta = file.addedCount + file.removedCount
+      let graph = diffStatGraph(added: file.addedCount, removed: file.removedCount)
+      return "\(displayPath)\(padding) | \(lineDelta) \(graph)"
+    }
+
+    let added = files.reduce(0) { $0 + $1.addedCount }
+    let removed = files.reduce(0) { $0 + $1.removedCount }
+    let summary = "\(files.count) files changed, \(added) insertions(+), \(removed) deletions(-)"
+
+    return (lines + [summary]).joined(separator: "\n")
+  }
 
   // MARK: - Diff Fingerprint (lightweight check for changes)
 
@@ -102,6 +287,61 @@ enum GitService {
       .split(separator: "\n")
       .map(String.init)
       .filter { !$0.isEmpty }
+  }
+
+  private static func diffStatGraph(added: Int, removed: Int) -> String {
+    let total = max(added + removed, 1)
+    let maxWidth = 16
+    let addedUnits = min(
+      maxWidth, max(1, Int(round(Double(added) / Double(total) * Double(maxWidth)))))
+    let removedUnits =
+      removed == 0
+      ? 0
+      : max(
+        1,
+        min(
+          maxWidth - min(addedUnits, maxWidth),
+          Int(round(Double(removed) / Double(total) * Double(maxWidth)))))
+
+    return String(repeating: "+", count: added > 0 ? addedUnits : 0)
+      + String(repeating: "-", count: removed > 0 ? removedUnits : 0)
+  }
+
+  private static func githubRepositoryURL(repoRoot: String) -> String? {
+    let remoteURL = runGit([
+      "-C", repoRoot, "remote", "get-url", "origin",
+    ]).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !remoteURL.isEmpty else { return nil }
+
+    let path: String
+    if remoteURL.hasPrefix("git@github.com:") {
+      path = String(remoteURL.dropFirst("git@github.com:".count))
+    } else if remoteURL.hasPrefix("ssh://git@github.com/") {
+      path = String(remoteURL.dropFirst("ssh://git@github.com/".count))
+    } else if remoteURL.hasPrefix("https://github.com/") {
+      path = String(remoteURL.dropFirst("https://github.com/".count))
+    } else if remoteURL.hasPrefix("http://github.com/") {
+      path = String(remoteURL.dropFirst("http://github.com/".count))
+    } else if remoteURL.hasPrefix("git://github.com/") {
+      path = String(remoteURL.dropFirst("git://github.com/".count))
+    } else {
+      return nil
+    }
+
+    let trimmedPath =
+      path.hasSuffix(".git")
+      ? String(path.dropLast(4))
+      : path
+    let normalizedPath = trimmedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    guard !normalizedPath.isEmpty else { return nil }
+    return "https://github.com/\(normalizedPath)"
+  }
+
+  private static func githubBranchName(_ ref: String) -> String {
+    ref
+      .replacingOccurrences(of: "refs/heads/", with: "")
+      .replacingOccurrences(of: "refs/remotes/", with: "")
+      .replacingOccurrences(of: "origin/", with: "")
   }
 
   static func diff(session: ReviewSession) -> String {
@@ -349,6 +589,116 @@ enum GitService {
       lines.removeLast()
     }
     return lines
+  }
+
+  private static func parseWorktreeList(
+    _ output: String,
+    baseWorktreePath: String
+  ) -> [DiscoveredWorktree] {
+    let normalizedBasePath = normalizePath(baseWorktreePath)
+    var worktrees: [DiscoveredWorktree] = []
+
+    var currentPath: String?
+    var currentBranch: String?
+    var currentHeadSHA: String?
+    var isDetached = false
+
+    func flushCurrentWorktree() {
+      guard let path = currentPath else { return }
+      let normalizedPath = normalizePath(path)
+      worktrees.append(
+        DiscoveredWorktree(
+          path: normalizedPath,
+          branchName: currentBranch,
+          headSHA: currentHeadSHA,
+          isBaseWorktree: normalizedPath == normalizedBasePath,
+          isDetached: isDetached
+        ))
+      currentPath = nil
+      currentBranch = nil
+      currentHeadSHA = nil
+      isDetached = false
+    }
+
+    for line in output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
+      if line.isEmpty {
+        flushCurrentWorktree()
+        continue
+      }
+
+      if line.hasPrefix("worktree ") {
+        flushCurrentWorktree()
+        currentPath = String(line.dropFirst("worktree ".count))
+        continue
+      }
+
+      if line.hasPrefix("branch ") {
+        let branchRef = String(line.dropFirst("branch ".count))
+        currentBranch = branchRef.replacingOccurrences(of: "refs/heads/", with: "")
+        continue
+      }
+
+      if line.hasPrefix("HEAD ") {
+        currentHeadSHA = String(line.dropFirst("HEAD ".count))
+        continue
+      }
+
+      if line == "detached" {
+        isDetached = true
+      }
+    }
+
+    flushCurrentWorktree()
+
+    return worktrees.sorted { lhs, rhs in
+      if lhs.isBaseWorktree != rhs.isBaseWorktree {
+        return lhs.isBaseWorktree && !rhs.isBaseWorktree
+      }
+      let lhsBranch = lhs.branchName ?? lhs.path
+      let rhsBranch = rhs.branchName ?? rhs.path
+      return lhsBranch.localizedStandardCompare(rhsBranch) == .orderedAscending
+    }
+  }
+
+  private static func baseWorktreePath(repoCommonDir: String) -> String? {
+    let commonDirURL = URL(fileURLWithPath: repoCommonDir).standardizedFileURL
+    guard commonDirURL.lastPathComponent == ".git" else { return nil }
+    return commonDirURL.deletingLastPathComponent().path
+  }
+
+  private static func normalizePath(_ path: String) -> String {
+    URL(fileURLWithPath: path).standardizedFileURL.path
+  }
+
+  static func requireGit(_ args: [String]) throws -> String {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+    process.arguments = args
+
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardOutput = stdout
+    process.standardError = stderr
+
+    do {
+      try process.run()
+    } catch {
+      throw GitError.commandFailed(error.localizedDescription)
+    }
+
+    let outputData = stdout.fileHandleForReading.readDataToEndOfFile()
+    let errorData = stderr.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+
+    if process.terminationStatus != 0 {
+      let message =
+        String(data: errorData, encoding: .utf8)?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      throw GitError.commandFailed(
+        message.map { $0.isEmpty ? "Git command failed." : $0 } ?? "Git command failed.")
+    }
+
+    return String(data: outputData, encoding: .utf8) ?? ""
   }
 
   static func runGit(_ args: [String]) -> String {

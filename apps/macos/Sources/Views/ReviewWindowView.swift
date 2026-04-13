@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct ReviewWindowView: View {
+  @Environment(CommandContext.self) private var commandContext
+  @Environment(ReviewWindowRegistry.self) private var reviewWindowRegistry
   let target: ReviewTarget
   @State private var appState: AppState
 
@@ -17,11 +19,21 @@ struct ReviewWindowView: View {
     ContentView()
       .environment(appState)
       .focusedValue(\.appState, appState)
+      .background {
+        WindowKeyObserver(
+          onBecomeKey: { commandContext.activate(appState: appState) },
+          onResignKey: { commandContext.clear(appState: appState) }
+        )
+      }
       .onAppear {
+        reviewWindowRegistry.markOpened(repoRoot: target.repoRoot)
         UITestAutomationSignal.write(
           "review-window-appeared",
           to: UITestAutomationConfig.current().signalFilePath
         )
+      }
+      .onDisappear {
+        reviewWindowRegistry.markClosed(repoRoot: target.repoRoot)
       }
   }
 }

@@ -38,6 +38,8 @@ struct SettingsView: View {
   @AppStorage("defaultDiffViewMode") private var defaultDiffViewMode = "unified"
   @AppStorage("diffFontSize") private var diffFontSize = 13.0
   @AppStorage("terminalFontSize") private var terminalFontSize = 12.0
+  @AppStorage(WorkspaceShellExitBehavior.storageKey) private var workspaceShellExitBehavior =
+    WorkspaceShellExitBehavior.closeTab.rawValue
   @State private var selectedAgentId: String?
   @State private var editingNewAgent = false
 
@@ -169,10 +171,26 @@ struct SettingsView: View {
         Text("$ argon review --mode uncommitted")
           .font(.system(size: terminalFontSize, design: .monospaced))
           .foregroundStyle(.secondary)
+
+        Picker("Shell exit", selection: $workspaceShellExitBehavior) {
+          ForEach(WorkspaceShellExitBehavior.allCases) { behavior in
+            Text(behavior.title)
+              .tag(behavior.rawValue)
+          }
+        }
+        .pickerStyle(.segmented)
+
+        Text(selectedShellExitBehavior.helpText)
+          .font(.caption)
+          .foregroundStyle(.secondary)
       }
     }
     .formStyle(.grouped)
     .padding()
+  }
+
+  private var selectedShellExitBehavior: WorkspaceShellExitBehavior {
+    WorkspaceShellExitBehavior(rawValue: workspaceShellExitBehavior) ?? .closeTab
   }
 }
 

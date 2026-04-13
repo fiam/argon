@@ -33,6 +33,15 @@ enum UserShell {
     )
   }
 
+  static func interactiveLaunchSpec(
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> SandboxedProcessSpec {
+    SandboxedProcessSpec(
+      executable: resolvedPath(environment: environment),
+      args: ["-i", "-l"]
+    )
+  }
+
   static func commandExists(
     _ command: String,
     environment: [String: String] = ProcessInfo.processInfo.environment

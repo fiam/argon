@@ -45,6 +45,15 @@ struct DiffModelTests {
     #expect(diff.displayPath == "new/path.swift")
   }
 
+  @Test("preferred open path uses the new path unless the file was deleted")
+  func preferredOpenPathUsesNewestAvailablePath() {
+    let modified = FileDiff(oldPath: "old/path.swift", newPath: "new/path.swift", hunks: [])
+    let deleted = FileDiff(oldPath: "gone.swift", newPath: "/dev/null", hunks: [])
+
+    #expect(modified.preferredOpenPath == "new/path.swift")
+    #expect(deleted.preferredOpenPath == "gone.swift")
+  }
+
   @Test("DiffLine kinds are correct")
   func diffLineKinds() {
     let context = DiffLine(kind: .context, content: " unchanged", oldLine: 1, newLine: 1)

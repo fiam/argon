@@ -1,11 +1,19 @@
 import SwiftUI
 
 struct WelcomeView: View {
+  let launchRequest: AppLaunchTarget.LaunchRequest?
   @Environment(RecentProjects.self) private var recentProjects
+  @Environment(WorkspaceWindowRegistry.self) private var workspaceWindowRegistry
   @Environment(\.openWindow) private var openWindow
   @Environment(\.dismissWindow) private var dismissWindow
   @State private var isCreatingSession = false
   @State private var errorMessage: String?
+  @State private var pendingLaunchRequest: AppLaunchTarget.LaunchRequest?
+
+  init(launchRequest: AppLaunchTarget.LaunchRequest? = nil) {
+    self.launchRequest = launchRequest
+    self._pendingLaunchRequest = State(initialValue: launchRequest)
+  }
 
   var body: some View {
     ZStack {
@@ -20,9 +28,18 @@ struct WelcomeView: View {
     }
     .frame(minWidth: 560, minHeight: 420)
     .onAppear {
-      if let target = AppLaunchTarget.current() {
-        recentProjects.add(repoRoot: target.repoRoot)
-        openWindow(value: target)
+      if let launchRequest = pendingLaunchRequest {
+        pendingLaunchRequest = nil
+        switch launchRequest {
+        case .workspace(let target):
+          recentProjects.add(repoRoot: target.repoRoot)
+          workspaceWindowRegistry.open(target: target) { target in
+            openWindow(value: target)
+          }
+        case .review(let target):
+          recentProjects.add(repoRoot: target.repoRoot)
+          openWindow(value: target)
+        }
         dismissWindow(id: "welcome")
       }
     }
@@ -40,20 +57,20 @@ struct WelcomeView: View {
       VStack(alignment: .leading, spacing: 8) {
         Text("Argon")
           .font(.system(size: 34, weight: .bold, design: .rounded))
-        Text("Native code review for coding agents")
+        Text("Workspace control for coding agents")
           .font(.title3.weight(.medium))
           .foregroundStyle(.secondary)
         Text(
-          "Review diffs, coordinate agent work, and jump back into recent repositories without leaving macOS."
+          "Open a repository, switch worktrees, launch review when ready, and keep the entire coding loop inside one native workspace."
         )
         .font(.callout)
         .foregroundStyle(.secondary)
-        .lineLimit(2)
+        .lineLimit(3)
 
         HStack(spacing: 8) {
-          WelcomeBadge(icon: "arrow.left.arrow.right", label: "Diff Review")
-          WelcomeBadge(icon: "text.bubble", label: "Inline Threads")
-          WelcomeBadge(icon: "terminal", label: "CLI-Driven")
+          WelcomeBadge(icon: "square.stack.3d.up", label: "Worktrees")
+          WelcomeBadge(icon: "terminal", label: "Embedded Terminals")
+          WelcomeBadge(icon: "arrow.trianglehead.branch", label: "Review Handoff")
         }
       }
 
@@ -101,7 +118,7 @@ struct WelcomeView: View {
           Text("No recent projects yet")
             .font(.headline)
           Text(
-            "Open a repository to start a review workspace. Your recent projects will appear here."
+            "Open a repository or worktree to start a workspace. Your recent projects will appear here."
           )
           .font(.callout)
           .foregroundStyle(.secondary)
@@ -148,20 +165,12 @@ struct WelcomeView: View {
           .foregroundStyle(.red)
           .lineLimit(2)
       } else {
-        Text("Press Command-O to open a repository.")
+        Text("Press Command-O to open a repository or worktree.")
           .font(.caption)
           .foregroundStyle(.secondary)
       }
 
       Spacer()
-
-      if let recent = recentProjects.projects.first {
-        Button("Open Latest") {
-          openProject(repoRoot: recent.repoRoot)
-        }
-        .buttonStyle(.bordered)
-        .disabled(isCreatingSession)
-      }
 
       Button("Open Directory...") {
         pickDirectory()
@@ -183,7 +192,7 @@ struct WelcomeView: View {
     panel.canChooseFiles = false
     panel.canChooseDirectories = true
     panel.allowsMultipleSelection = false
-    panel.message = "Select a Git repository to review"
+    panel.message = "Select a Git repository or worktree"
 
     guard panel.runModal() == .OK, let url = panel.url else { return }
     openProject(repoRoot: url.path)
@@ -197,11 +206,15 @@ struct WelcomeView: View {
     Task {
       do {
         let target = try await Task.detached {
-          try ArgonCLI.createSession(repoRoot: repoRoot)
+          try GitService.resolveWorkspaceTarget(path: repoRoot)
         }.value
 
         recentProjects.add(repoRoot: target.repoRoot)
-        openWindow(value: target)
+        await MainActor.run {
+          workspaceWindowRegistry.open(target: target) { target in
+            openWindow(value: target)
+          }
+        }
       } catch {
         errorMessage = error.localizedDescription
       }

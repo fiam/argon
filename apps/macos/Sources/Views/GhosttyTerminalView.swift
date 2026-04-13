@@ -108,8 +108,35 @@ private func ghosttyCloseSurfaceCallback(
 }
 
 struct GhosttyTerminalView: NSViewRepresentable {
-  let agent: ReviewerAgentInstance
+  let controller: any TerminalProcessControlling
+  let launch: TerminalLaunchConfiguration
   var terminalFontSize: CGFloat = 12
+  var waitAfterCommand = true
+  var onProcessExit: (() -> Void)?
+  var focusRequestID: UUID?
+
+  @MainActor
+  init(agent: ReviewerAgentInstance, terminalFontSize: CGFloat = 12) {
+    self.controller = agent
+    self.launch = .forReviewerAgent(agent)
+    self.terminalFontSize = terminalFontSize
+  }
+
+  init(
+    controller: any TerminalProcessControlling,
+    launch: TerminalLaunchConfiguration,
+    terminalFontSize: CGFloat = 12,
+    waitAfterCommand: Bool = true,
+    onProcessExit: (() -> Void)? = nil,
+    focusRequestID: UUID? = nil
+  ) {
+    self.controller = controller
+    self.launch = launch
+    self.terminalFontSize = terminalFontSize
+    self.waitAfterCommand = waitAfterCommand
+    self.onProcessExit = onProcessExit
+    self.focusRequestID = focusRequestID
+  }
 
   func makeNSView(context: Context) -> GhosttyTerminalHostView {
     UITestAutomationSignal.write(
@@ -117,14 +144,19 @@ struct GhosttyTerminalView: NSViewRepresentable {
       to: UITestAutomationConfig.current().signalFilePath
     )
     return GhosttyTerminalHostView(
-      agent: agent,
-      launch: ReviewerTerminalLaunch.forAgent(agent),
-      terminalFontSize: terminalFontSize
+      controller: controller,
+      launch: launch,
+      terminalFontSize: terminalFontSize,
+      waitAfterCommand: waitAfterCommand,
+      onProcessExit: onProcessExit,
+      focusRequestID: focusRequestID
     )
   }
 
   func updateNSView(_ nsView: GhosttyTerminalHostView, context: Context) {
     nsView.updateTerminalFontSize(terminalFontSize)
+    nsView.updateProcessExitHandler(onProcessExit)
+    nsView.updateFocusRequestID(focusRequestID)
   }
 
   static func dismantleNSView(_ nsView: GhosttyTerminalHostView, coordinator: ()) {
@@ -133,9 +165,13 @@ struct GhosttyTerminalView: NSViewRepresentable {
 }
 
 final class GhosttyTerminalHostView: NSView {
-  private let agent: ReviewerAgentInstance
-  private let launch: ReviewerTerminalLaunch
+  private let controller: any TerminalProcessControlling
+  private let launch: TerminalLaunchConfiguration
   private var terminalFontSize: CGFloat
+  private let waitAfterCommand: Bool
+  private var onProcessExit: (() -> Void)?
+  private var pendingFocusRequestID: UUID?
+  private var appliedFocusRequestID: UUID?
   private var callbackUserdata: UnsafeMutableRawPointer?
   private var app: ghostty_app_t?
   private var config: ghostty_config_t?
@@ -160,13 +196,19 @@ final class GhosttyTerminalHostView: NSView {
   override var acceptsFirstResponder: Bool { true }
 
   init(
-    agent: ReviewerAgentInstance,
-    launch: ReviewerTerminalLaunch,
-    terminalFontSize: CGFloat
+    controller: any TerminalProcessControlling,
+    launch: TerminalLaunchConfiguration,
+    terminalFontSize: CGFloat,
+    waitAfterCommand: Bool,
+    onProcessExit: (() -> Void)?,
+    focusRequestID: UUID?
   ) {
-    self.agent = agent
+    self.controller = controller
     self.launch = launch
     self.terminalFontSize = terminalFontSize
+    self.waitAfterCommand = waitAfterCommand
+    self.onProcessExit = onProcessExit
+    self.pendingFocusRequestID = focusRequestID
     super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
     self.callbackUserdata = GhosttyHostRegistry.register(self)
     initializeTerminal()
@@ -207,6 +249,15 @@ final class GhosttyTerminalHostView: NSView {
     terminalFontSize = newValue
   }
 
+  func updateProcessExitHandler(_ onProcessExit: (() -> Void)?) {
+    self.onProcessExit = onProcessExit
+  }
+
+  func updateFocusRequestID(_ focusRequestID: UUID?) {
+    pendingFocusRequestID = focusRequestID
+    applyPendingFocusRequestIfNeeded()
+  }
+
   override func layout() {
     super.layout()
     updateSurfaceMetrics()
@@ -215,6 +266,7 @@ final class GhosttyTerminalHostView: NSView {
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
     updateSurfaceMetrics()
+    applyPendingFocusRequestIfNeeded()
   }
 
   override func viewDidChangeBackingProperties() {
@@ -441,6 +493,10 @@ final class GhosttyTerminalHostView: NSView {
     guard event.type == .keyDown else { return false }
     guard window?.firstResponder === self else { return false }
 
+    if shouldPassThroughAppShortcut(event) {
+      return false
+    }
+
     if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) {
       keyDown(with: event)
       return true
@@ -527,7 +583,7 @@ final class GhosttyTerminalHostView: NSView {
       ?? 2.0
     surfaceConfig.scale_factor = scaleFactor
     surfaceConfig.font_size = Float32(terminalFontSize)
-    surfaceConfig.wait_after_command = true
+    surfaceConfig.wait_after_command = waitAfterCommand
 
     let envPairs = launch.environment.keys.sorted().map { key in
       (key, launch.environment[key] ?? "")
@@ -607,7 +663,30 @@ final class GhosttyTerminalHostView: NSView {
   private func markProcessExited() {
     guard !didMarkProcessExited else { return }
     didMarkProcessExited = true
-    agent.isRunning = false
+    controller.isRunning = false
+    if let onProcessExit {
+      Task { @MainActor in
+        onProcessExit()
+      }
+    }
+  }
+
+  private func applyPendingFocusRequestIfNeeded() {
+    guard let requestID = pendingFocusRequestID, appliedFocusRequestID != requestID else { return }
+    guard window != nil else { return }
+
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      guard self.pendingFocusRequestID == requestID, self.appliedFocusRequestID != requestID else {
+        return
+      }
+      guard let window = self.window else { return }
+
+      if window.firstResponder !== self {
+        _ = window.makeFirstResponder(self)
+      }
+      self.appliedFocusRequestID = requestID
+    }
   }
 
   private func showMessage(_ message: String) {
@@ -701,8 +780,22 @@ final class GhosttyTerminalHostView: NSView {
   private func localEventKeyUp(_ event: NSEvent) -> NSEvent? {
     guard event.modifierFlags.contains(.command) else { return event }
     guard window?.firstResponder === self else { return event }
+    if shouldPassThroughAppShortcut(event) { return event }
     keyUp(with: event)
     return nil
+  }
+
+  private func shouldPassThroughAppShortcut(_ event: NSEvent) -> Bool {
+    guard let characters = event.charactersIgnoringModifiers?.lowercased() else { return false }
+    guard characters == "t" else { return false }
+
+    let relevantModifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
+    switch relevantModifiers {
+    case [.command], [.command, .shift], [.command, .shift, .option]:
+      return true
+    default:
+      return false
+    }
   }
 
   private func syncPreedit(clearIfNeeded: Bool = true) {

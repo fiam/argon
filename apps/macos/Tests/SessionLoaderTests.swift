@@ -31,6 +31,53 @@ struct SessionLoaderTests {
     #expect(name == name.lowercased())
   }
 
+  @Test("latest review snapshots choose the newest session per repo root")
+  func latestReviewSnapshotsChooseNewestSessionPerRepoRoot() throws {
+    let storageRoot = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: storageRoot, withIntermediateDirectories: true)
+    defer {
+      unsetenv("ARGON_HOME")
+      try? FileManager.default.removeItem(at: storageRoot)
+    }
+
+    setenv("ARGON_HOME", storageRoot.path, 1)
+
+    let repoRoot = "/tmp/repo-window"
+    let sessionsDirectory =
+      storageRoot
+      .appendingPathComponent("sessions")
+      .appendingPathComponent("fixture-repo")
+    try FileManager.default.createDirectory(
+      at: sessionsDirectory, withIntermediateDirectories: true)
+
+    try write(
+      session: makeSession(
+        id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+        repoRoot: repoRoot,
+        status: .awaitingReviewer,
+        updatedAt: Date(timeIntervalSince1970: 10)
+      ),
+      to: sessionsDirectory.appendingPathComponent("older.json")
+    )
+    try write(
+      session: makeSession(
+        id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+        repoRoot: repoRoot,
+        status: .awaitingAgent,
+        updatedAt: Date(timeIntervalSince1970: 20)
+      ),
+      to: sessionsDirectory.appendingPathComponent("newer.json")
+    )
+
+    let snapshots = SessionLoader.latestReviewSnapshots(forRepoRoots: [repoRoot])
+
+    #expect(snapshots.count == 1)
+    #expect(
+      snapshots[repoRoot]?.sessionId == UUID(uuidString: "22222222-2222-2222-2222-222222222222"))
+    #expect(snapshots[repoRoot]?.status == .awaitingAgent)
+  }
+
   // Mirror the SessionLoader's private methods for testing
   private func testRepoStorageKey(_ repoRoot: String) -> String {
     let url = URL(fileURLWithPath: repoRoot)
@@ -60,5 +107,36 @@ struct SessionLoaderTests {
       hash = hash &* 0x100_0000_01b3
     }
     return hash
+  }
+
+  private func makeSession(
+    id: UUID,
+    repoRoot: String,
+    status: SessionStatus,
+    updatedAt: Date
+  ) -> ReviewSession {
+    ReviewSession(
+      id: id,
+      repoRoot: repoRoot,
+      mode: .branch,
+      baseRef: "origin/main",
+      headRef: "feature/workspace",
+      mergeBaseSha: "abc123",
+      changeSummary: "Add workspace tabs",
+      status: status,
+      threads: [],
+      decision: nil,
+      agentLastSeenAt: nil,
+      createdAt: updatedAt,
+      updatedAt: updatedAt
+    )
+  }
+
+  private func write(session: ReviewSession, to url: URL) throws {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    encoder.dateEncodingStrategy = .iso8601
+    let data = try encoder.encode(session)
+    try data.write(to: url)
   }
 }

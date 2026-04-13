@@ -1,6 +1,6 @@
 import Foundation
 
-struct ReviewerTerminalLaunch: Sendable {
+struct TerminalLaunchConfiguration: Sendable {
   let processSpec: SandboxedProcessSpec
   let environment: [String: String]
   let currentDirectory: String
@@ -16,7 +16,7 @@ struct ReviewerTerminalLaunch: Sendable {
   ]
 
   @MainActor
-  static func forAgent(
+  static func forReviewerAgent(
     _ agent: ReviewerAgentInstance,
     environment: [String: String] = ProcessInfo.processInfo.environment
   ) -> Self {
@@ -31,10 +31,76 @@ struct ReviewerTerminalLaunch: Sendable {
       processSpec: processSpec,
       environment: terminalEnvironment(
         base: environment,
-        sessionId: agent.sessionId,
-        repoRoot: agent.repoRoot
+        extraEnvironment: [
+          "ARGON_SESSION_ID": agent.sessionId,
+          "ARGON_REPO_ROOT": agent.repoRoot,
+        ]
       ),
       currentDirectory: agent.repoRoot
+    )
+  }
+
+  static func shell(
+    currentDirectory: String,
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> Self {
+    Self(
+      processSpec: UserShell.interactiveLaunchSpec(environment: environment),
+      environment: terminalEnvironment(base: environment),
+      currentDirectory: currentDirectory
+    )
+  }
+
+  static func sandboxedShell(
+    currentDirectory: String,
+    writableRoots: [String],
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> Self {
+    let cli = ArgonCLI.cliPath()
+    let launch = UserShell.interactiveLaunchSpec(environment: environment)
+    let args =
+      ["sandbox", "exec"]
+      + writableRoots.flatMap { ["--write-root", $0] }
+      + ["--", launch.executable]
+      + launch.args
+
+    return Self(
+      processSpec: SandboxedProcessSpec(executable: cli, args: args),
+      environment: terminalEnvironment(base: environment),
+      currentDirectory: currentDirectory
+    )
+  }
+
+  static func command(
+    _ command: String,
+    currentDirectory: String,
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> Self {
+    Self(
+      processSpec: UserShell.launchSpec(command: command, environment: environment),
+      environment: terminalEnvironment(base: environment),
+      currentDirectory: currentDirectory
+    )
+  }
+
+  static func sandboxedCommand(
+    _ command: String,
+    currentDirectory: String,
+    writableRoots: [String],
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> Self {
+    let cli = ArgonCLI.cliPath()
+    let launch = UserShell.launchSpec(command: command, environment: environment)
+    let args =
+      ["sandbox", "exec"]
+      + writableRoots.flatMap { ["--write-root", $0] }
+      + ["--", launch.executable]
+      + launch.args
+
+    return Self(
+      processSpec: SandboxedProcessSpec(executable: cli, args: args),
+      environment: terminalEnvironment(base: environment),
+      currentDirectory: currentDirectory
     )
   }
 
@@ -43,10 +109,25 @@ struct ReviewerTerminalLaunch: Sendable {
     sessionId: String,
     repoRoot: String
   ) -> [String: String] {
+    terminalEnvironment(
+      base: base,
+      extraEnvironment: [
+        "ARGON_SESSION_ID": sessionId,
+        "ARGON_REPO_ROOT": repoRoot,
+      ]
+    )
+  }
+
+  static func terminalEnvironment(
+    base: [String: String],
+    extraEnvironment: [String: String] = [:]
+  ) -> [String: String] {
     var launchEnvironment = base
     sanitizeInheritedTerminalIdentity(&launchEnvironment)
-    launchEnvironment["ARGON_SESSION_ID"] = sessionId
-    launchEnvironment["ARGON_REPO_ROOT"] = repoRoot
+
+    for (key, value) in extraEnvironment where !value.isEmpty {
+      launchEnvironment[key] = value
+    }
 
     if let cliCmd = base["ARGON_CLI_CMD"], !cliCmd.isEmpty {
       launchEnvironment["ARGON_CLI_CMD"] = cliCmd
@@ -100,3 +181,5 @@ struct ReviewerTerminalLaunch: Sendable {
     return identifier.isEmpty ? "en_US.UTF-8" : "\(identifier).UTF-8"
   }
 }
+
+typealias ReviewerTerminalLaunch = TerminalLaunchConfiguration

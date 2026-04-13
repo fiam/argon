@@ -331,6 +331,16 @@ struct FileDiff: Identifiable, Hashable {
 
   var displayPath: String { newPath }
 
+  var preferredOpenPath: String? {
+    if newPath != "/dev/null" {
+      return newPath
+    }
+    if oldPath != "/dev/null" {
+      return oldPath
+    }
+    return nil
+  }
+
   static func == (lhs: FileDiff, rhs: FileDiff) -> Bool {
     lhs.id == rhs.id && lhs.lineCount == rhs.lineCount
   }

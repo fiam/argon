@@ -11,24 +11,68 @@ enum SessionLoader {
       .appendingPathComponent("\(sessionId).json")
 
     let data = try Data(contentsOf: sessionFile)
-    let decoder = JSONDecoder()
-    decoder.dateDecodingStrategy = .custom { decoder in
-      let container = try decoder.singleValueContainer()
-      let string = try container.decode(String.self)
-      if let date = ISO8601DateFormatter().date(from: string) {
-        return date
-      }
-      // Try with fractional seconds
-      let formatter = ISO8601DateFormatter()
-      formatter.formatOptions.insert(.withFractionalSeconds)
-      if let date = formatter.date(from: string) {
-        return date
-      }
-      throw DecodingError.dataCorrupted(
-        .init(codingPath: decoder.codingPath, debugDescription: "Invalid date: \(string)")
+    return try makeDecoder().decode(ReviewSession.self, from: data)
+  }
+
+  static func latestReviewSnapshots(forRepoRoots repoRoots: Set<String>)
+    -> [String: WorkspaceReviewSnapshot]
+  {
+    let normalizedRepoRoots = Set(repoRoots.map(normalizePath))
+    guard !normalizedRepoRoots.isEmpty else { return [:] }
+
+    let sessionsRoot = argonStorageRoot().appendingPathComponent("sessions")
+    guard
+      let repoDirectories = try? FileManager.default.contentsOfDirectory(
+        at: sessionsRoot,
+        includingPropertiesForKeys: [.isDirectoryKey],
+        options: [.skipsHiddenFiles]
       )
+    else {
+      return [:]
     }
-    return try decoder.decode(ReviewSession.self, from: data)
+
+    var latestSessionsByRepoRoot: [String: ReviewSession] = [:]
+    let decoder = makeDecoder()
+
+    for repoDirectory in repoDirectories {
+      guard (try? repoDirectory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+      else {
+        continue
+      }
+
+      guard
+        let sessionFiles = try? FileManager.default.contentsOfDirectory(
+          at: repoDirectory,
+          includingPropertiesForKeys: [.isRegularFileKey],
+          options: [.skipsHiddenFiles]
+        )
+      else {
+        continue
+      }
+
+      for sessionFile in sessionFiles where sessionFile.pathExtension == "json" {
+        guard
+          (try? sessionFile.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
+          let data = try? Data(contentsOf: sessionFile),
+          let session = try? decoder.decode(ReviewSession.self, from: data)
+        else {
+          continue
+        }
+
+        let normalizedRepoRoot = normalizePath(session.repoRoot)
+        guard normalizedRepoRoots.contains(normalizedRepoRoot) else { continue }
+
+        if let current = latestSessionsByRepoRoot[normalizedRepoRoot],
+          current.updatedAt >= session.updatedAt
+        {
+          continue
+        }
+
+        latestSessionsByRepoRoot[normalizedRepoRoot] = session
+      }
+    }
+
+    return latestSessionsByRepoRoot.mapValues(WorkspaceReviewSnapshot.init(session:))
   }
 
   static func loadDraftReview(sessionId: String, repoRoot: String) throws -> [DraftComment] {
@@ -41,6 +85,11 @@ enum SessionLoader {
     }
 
     let data = try Data(contentsOf: draftFile)
+    let draft = try makeDecoder().decode(DraftReviewData.self, from: data)
+    return draft.comments
+  }
+
+  private static func makeDecoder() -> JSONDecoder {
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .custom { decoder in
       let container = try decoder.singleValueContainer()
@@ -57,8 +106,7 @@ enum SessionLoader {
         .init(codingPath: decoder.codingPath, debugDescription: "Invalid date: \(string)")
       )
     }
-    let draft = try decoder.decode(DraftReviewData.self, from: data)
-    return draft.comments
+    return decoder
   }
 
   private static func sessionsDirectoryURL(repoRoot: String) -> URL {
@@ -79,6 +127,10 @@ enum SessionLoader {
     }
     let home = FileManager.default.homeDirectoryForCurrentUser
     return home.appendingPathComponent(".cache/argon")
+  }
+
+  private static func normalizePath(_ path: String) -> String {
+    URL(fileURLWithPath: path).standardizedFileURL.path
   }
 
   private static func repoStorageKey(repoRoot: String) -> String {

@@ -50,6 +50,13 @@ struct RuntimeOptions {
     repo_root_override: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone)]
+struct WorkspaceLaunchTarget {
+    repo_root: PathBuf,
+    repo_common_dir: PathBuf,
+    selected_worktree_root: PathBuf,
+}
+
 #[derive(Subcommand, Debug)]
 enum Commands {
     Review(ReviewArgs),
@@ -161,6 +168,7 @@ struct StartArgs {
 
 #[derive(clap::Args, Debug)]
 struct ReviewArgs {
+    path: Option<PathBuf>,
     #[arg(long)]
     base: Option<String>,
     #[arg(long)]
@@ -638,7 +646,7 @@ fn main() {
 fn run() -> Result<()> {
     let raw_args: Vec<String> = std::env::args().collect();
     if let Some((path, launch)) = maybe_direct_path_invocation(&raw_args) {
-        return run_path_review(path, &launch);
+        return run_path_workspace(path, &launch);
     }
 
     let cli = Cli::parse();
@@ -768,29 +776,27 @@ fn is_command_token(token: &str) -> bool {
     )
 }
 
-fn run_path_review(path: PathBuf, launch: &LaunchOptions) -> Result<()> {
-    if launch.sandbox_agent && launch.agent_command.is_none() {
-        bail!("--sandbox requires --agent");
+fn run_path_workspace(path: PathBuf, launch: &LaunchOptions) -> Result<()> {
+    if launch.agent_command.is_some() {
+        bail!("--agent is only supported with session-starting review commands");
+    }
+    if launch.sandbox_agent {
+        bail!("--sandbox is only supported with session-starting review commands");
+    }
+    if launch.change_summary.is_some() {
+        bail!("--description is only supported with session-starting review commands");
     }
 
-    let repo_root = git_repo_root_from(&path)?;
-    let target = auto_detect_review_target(&repo_root)?;
-    let store = SessionStore::for_repo_root(repo_root);
-    let session = store.create_session_with_details(
-        target.mode,
-        target.base_ref,
-        target.head_ref,
-        target.merge_base_sha,
-        launch.change_summary.clone(),
-    )?;
-    launch_desktop_app_for_session(store.repo_root(), session.id, launch);
-    maybe_launch_agent_for_session(
-        &session,
-        launch.agent_command.as_deref(),
-        launch.sandbox_agent,
-    )?;
+    let target = resolve_workspace_launch_target(&path)?;
+    launch_desktop_app_for_workspace(&target, launch);
 
-    print_session(CliCommand::Review, &session, false)
+    println!("workspace: {}", target.repo_root.display());
+    println!("common-dir: {}", target.repo_common_dir.display());
+    println!(
+        "selected-worktree: {}",
+        target.selected_worktree_root.display()
+    );
+    Ok(())
 }
 
 fn run_agent(command: AgentCommands, runtime: &RuntimeOptions) -> Result<()> {
@@ -1109,7 +1115,7 @@ fn run_review(args: ReviewArgs, runtime: &RuntimeOptions) -> Result<()> {
         bail!("--agent cannot be combined with --json");
     }
 
-    let repo_root = resolved_repo_root(runtime)?;
+    let repo_root = resolved_review_repo_root(&args, runtime)?;
     let target = resolve_review_target_for_review(&repo_root, &args)?;
 
     let store = SessionStore::for_repo_root(repo_root.clone());
@@ -2307,6 +2313,17 @@ mod tests {
         assert!(launch.sandbox_agent);
     }
 
+    #[test]
+    fn review_command_accepts_positional_directory() {
+        let cli = Cli::try_parse_from(["argon", "review", "/tmp/repo"]).expect("parse review");
+        match cli.command {
+            Commands::Review(args) => {
+                assert_eq!(args.path, Some(PathBuf::from("/tmp/repo")));
+            }
+            other => panic!("expected review command, got {other:?}"),
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn desktop_spawn_detaches_into_new_session() {
@@ -2320,8 +2337,8 @@ mod tests {
         let mut command = Command::new("sh");
         command.arg("-c").arg(script);
 
-        spawn_desktop_command(command, temp.path(), temp.path(), "test-session", false)
-            .expect("spawn desktop command");
+        let envs = vec![("ARGON_SESSION_ID", "test-session".to_string())];
+        spawn_desktop_command(command, temp.path(), &envs).expect("spawn desktop command");
 
         for _ in 0..20 {
             if sid_path.exists() {
@@ -2726,39 +2743,48 @@ fn shell_quote(raw: &str) -> String {
 }
 
 fn launch_desktop_app_for_session(repo_root: &Path, session_id: Uuid, launch: &LaunchOptions) {
-    if let Err(error) = try_launch_desktop_app(repo_root, session_id, launch) {
+    if let Err(error) = try_launch_desktop_app_for_session(repo_root, session_id, launch) {
         eprintln!("warning: failed to launch Argon desktop app automatically: {error}");
     }
 }
 
-fn try_launch_desktop_app(
+fn launch_desktop_app_for_workspace(target: &WorkspaceLaunchTarget, launch: &LaunchOptions) {
+    if let Err(error) = try_launch_desktop_app_for_workspace(target, launch) {
+        eprintln!("warning: failed to launch Argon desktop app automatically: {error}");
+    }
+}
+
+fn try_launch_desktop_app_for_session(
     repo_root: &Path,
     session_id: Uuid,
     launch: &LaunchOptions,
 ) -> Result<&'static str> {
     let session = session_id.to_string();
+    let reviewed_repo = repo_root.to_string_lossy().to_string();
+    let launch_args = vec![
+        "--session-id".to_string(),
+        session.clone(),
+        "--repo-root".to_string(),
+        reviewed_repo.clone(),
+    ];
+    let envs = vec![
+        ("ARGON_SESSION_ID", session.clone()),
+        ("ARGON_REPO_ROOT", reviewed_repo.clone()),
+        ("ARGON_CLI_CMD", argon_cli_command().to_string()),
+    ];
 
     if let Some(launcher_path) = launch
         .desktop_launch
         .clone()
         .or_else(|| std::env::var_os("ARGON_DESKTOP_LAUNCH").map(PathBuf::from))
         .map(normalize_path)
-        && spawn_desktop_command(
-            Command::new(launcher_path),
-            repo_root,
-            repo_root,
-            &session,
-            false,
-        )
-        .is_ok()
+        && spawn_desktop_command(Command::new(launcher_path), repo_root, &envs).is_ok()
     {
         return Ok("desktop-launch-flag");
     }
 
     #[cfg(target_os = "macos")]
     {
-        let reviewed_repo = repo_root.to_string_lossy().to_string();
-
         // Try ARGON_APP env var pointing to a specific .app bundle
         if let Some(app_path) = std::env::var_os("ARGON_APP").filter(|v| !v.is_empty()) {
             let app = PathBuf::from(app_path);
@@ -2767,19 +2793,12 @@ fn try_launch_desktop_app(
                     {
                         let mut command = Command::new("open");
                         command.args(["-a", &app.to_string_lossy()]);
-                        command.args([
-                            "--args",
-                            "--session-id",
-                            &session,
-                            "--repo-root",
-                            &reviewed_repo,
-                        ]);
+                        command.arg("--args");
+                        command.args(&launch_args);
                         command
                     },
                     repo_root,
-                    repo_root,
-                    &session,
-                    false,
+                    &envs,
                 )
                 .is_ok()
             {
@@ -2792,19 +2811,93 @@ fn try_launch_desktop_app(
             {
                 let mut command = Command::new("open");
                 command.args(["-a", "Argon"]);
-                command.args([
-                    "--args",
-                    "--session-id",
-                    &session,
-                    "--repo-root",
-                    &reviewed_repo,
-                ]);
+                command.arg("--args");
+                command.args(&launch_args);
                 command
             },
             repo_root,
-            repo_root,
-            &session,
-            false,
+            &envs,
+        )
+        .is_ok()
+        {
+            return Ok("macos-open");
+        }
+    }
+
+    bail!(
+        "no compatible launch method found (use --desktop-launch, ARGON_APP, or install Argon.app)"
+    )
+}
+
+fn try_launch_desktop_app_for_workspace(
+    target: &WorkspaceLaunchTarget,
+    launch: &LaunchOptions,
+) -> Result<&'static str> {
+    let repo_root = target.repo_root.to_string_lossy().to_string();
+    let repo_common_dir = target.repo_common_dir.to_string_lossy().to_string();
+    let selected_worktree = target.selected_worktree_root.to_string_lossy().to_string();
+    let launch_args = vec![
+        "--workspace-repo-root".to_string(),
+        repo_root.clone(),
+        "--workspace-common-dir".to_string(),
+        repo_common_dir.clone(),
+        "--selected-worktree-path".to_string(),
+        selected_worktree.clone(),
+    ];
+    let envs = vec![
+        ("ARGON_WORKSPACE_REPO_ROOT", repo_root.clone()),
+        ("ARGON_WORKSPACE_COMMON_DIR", repo_common_dir.clone()),
+        ("ARGON_SELECTED_WORKTREE_PATH", selected_worktree.clone()),
+        ("ARGON_CLI_CMD", argon_cli_command().to_string()),
+    ];
+
+    if let Some(launcher_path) = launch
+        .desktop_launch
+        .clone()
+        .or_else(|| std::env::var_os("ARGON_DESKTOP_LAUNCH").map(PathBuf::from))
+        .map(normalize_path)
+        && spawn_desktop_command(
+            Command::new(launcher_path),
+            &target.selected_worktree_root,
+            &envs,
+        )
+        .is_ok()
+    {
+        return Ok("desktop-launch-flag");
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(app_path) = std::env::var_os("ARGON_APP").filter(|v| !v.is_empty()) {
+            let app = PathBuf::from(app_path);
+            if app.exists()
+                && spawn_desktop_command(
+                    {
+                        let mut command = Command::new("open");
+                        command.args(["-a", &app.to_string_lossy()]);
+                        command.arg("--args");
+                        command.args(&launch_args);
+                        command
+                    },
+                    &target.selected_worktree_root,
+                    &envs,
+                )
+                .is_ok()
+            {
+                return Ok("argon-app-env");
+            }
+        }
+
+        if spawn_desktop_command(
+            {
+                let mut command = Command::new("open");
+                command.args(["-a", "Argon"]);
+                command.arg("--args");
+                command.args(&launch_args);
+                command
+            },
+            &target.selected_worktree_root,
+            &envs,
         )
         .is_ok()
         {
@@ -2820,27 +2913,16 @@ fn try_launch_desktop_app(
 fn spawn_desktop_command(
     mut command: Command,
     launch_cwd: &Path,
-    reviewed_repo_root: &Path,
-    session_id: &str,
-    inject_cli_args: bool,
+    envs: &[(&str, String)],
 ) -> Result<()> {
-    if inject_cli_args {
-        let reviewed_repo = reviewed_repo_root.to_string_lossy().to_string();
-        command
-            .arg("--session-id")
-            .arg(session_id)
-            .arg("--repo-root")
-            .arg(&reviewed_repo);
-    }
-
     command
         .current_dir(launch_cwd)
-        .env("ARGON_SESSION_ID", session_id)
-        .env("ARGON_REPO_ROOT", reviewed_repo_root)
-        .env("ARGON_CLI_CMD", argon_cli_command())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    for (key, value) in envs {
+        command.env(key, value);
+    }
     #[cfg(unix)]
     unsafe {
         // Start the desktop launcher in its own session so it survives after
@@ -2879,12 +2961,45 @@ fn open_store_for_current_repo(runtime: &RuntimeOptions) -> Result<SessionStore>
     Ok(SessionStore::for_repo_root(repo_root))
 }
 
+fn resolved_review_repo_root(args: &ReviewArgs, runtime: &RuntimeOptions) -> Result<PathBuf> {
+    if let Some(path) = &args.path {
+        if runtime.repo_root_override.is_some() {
+            bail!("`argon review <dir>` cannot be combined with --repo");
+        }
+        return git_repo_root_from(path);
+    }
+
+    resolved_repo_root(runtime)
+}
+
 fn resolved_repo_root(runtime: &RuntimeOptions) -> Result<PathBuf> {
     if let Some(path) = &runtime.repo_root_override {
         return git_repo_root_from(path);
     }
 
     git_repo_root()
+}
+
+fn resolve_workspace_launch_target(path: &Path) -> Result<WorkspaceLaunchTarget> {
+    let selected_worktree_root = git_repo_root_from(path)?;
+    let repo_common_dir = git_common_dir_from(path)?;
+    let repo_root = if repo_common_dir
+        .file_name()
+        .is_some_and(|name| name == ".git")
+    {
+        repo_common_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| selected_worktree_root.clone())
+    } else {
+        selected_worktree_root.clone()
+    };
+
+    Ok(WorkspaceLaunchTarget {
+        repo_root,
+        repo_common_dir,
+        selected_worktree_root,
+    })
 }
 
 fn git_repo_root() -> Result<PathBuf> {
@@ -2902,6 +3017,22 @@ fn git_repo_root_from(path: &Path) -> Result<PathBuf> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         bail!("git rev-parse --show-toplevel failed: {stderr}");
+    }
+
+    let stdout = String::from_utf8(output.stdout).context("git output was not valid UTF-8")?;
+    Ok(PathBuf::from(stdout.trim()))
+}
+
+fn git_common_dir_from(path: &Path) -> Result<PathBuf> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .output()
+        .context("failed to execute git rev-parse")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        bail!("git rev-parse --git-common-dir failed: {stderr}");
     }
 
     let stdout = String::from_utf8(output.stdout).context("git output was not valid UTF-8")?;

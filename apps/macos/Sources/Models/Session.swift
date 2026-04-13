@@ -1,41 +1,41 @@
 import Foundation
 
-enum SessionStatus: String, Codable {
+enum SessionStatus: String, Codable, Sendable {
   case awaitingReviewer = "awaiting_reviewer"
   case awaitingAgent = "awaiting_agent"
   case approved
   case closed
 }
 
-enum ReviewMode: String, Codable {
+enum ReviewMode: String, Codable, Sendable {
   case branch
   case commit
   case uncommitted
 }
 
-enum ThreadState: String, Codable {
+enum ThreadState: String, Codable, Sendable {
   case open
   case addressed
   case resolved
 }
 
-enum CommentAuthor: String, Codable {
+enum CommentAuthor: String, Codable, Sendable {
   case reviewer
   case agent
 }
 
-enum CommentKind: String, Codable {
+enum CommentKind: String, Codable, Sendable {
   case line
   case global
 }
 
-enum ReviewOutcome: String, Codable {
+enum ReviewOutcome: String, Codable, Sendable {
   case approved
   case changesRequested = "changes_requested"
   case commented
 }
 
-struct CommentAnchor: Codable {
+struct CommentAnchor: Codable, Sendable {
   let filePath: String?
   let lineNew: UInt32?
   let lineOld: UInt32?
@@ -47,7 +47,7 @@ struct CommentAnchor: Codable {
   }
 }
 
-struct ReviewComment: Codable, Identifiable {
+struct ReviewComment: Codable, Identifiable, Sendable {
   let id: UUID
   let threadId: UUID
   let author: CommentAuthor
@@ -67,7 +67,7 @@ struct ReviewComment: Codable, Identifiable {
   }
 }
 
-struct ReviewThread: Codable, Identifiable {
+struct ReviewThread: Codable, Identifiable, Sendable {
   let id: UUID
   let state: ThreadState
   let agentAcknowledgedAt: Date?
@@ -80,7 +80,7 @@ struct ReviewThread: Codable, Identifiable {
   }
 }
 
-struct ReviewDecision: Codable {
+struct ReviewDecision: Codable, Sendable {
   let outcome: ReviewOutcome
   let summary: String?
   let createdAt: Date
@@ -91,7 +91,7 @@ struct ReviewDecision: Codable {
   }
 }
 
-struct ReviewSession: Codable, Identifiable {
+struct ReviewSession: Codable, Identifiable, Sendable {
   let id: UUID
   let repoRoot: String
   let mode: ReviewMode
