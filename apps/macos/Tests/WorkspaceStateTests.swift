@@ -175,6 +175,49 @@ struct WorkspaceStateTests {
     #expect(state.hasConflicts(for: "/tmp/repo/feature") == true)
   }
 
+  @Test("preparing a new selection clears stale details and marks the inspector as loading")
+  @MainActor
+  func preparingNewSelectionClearsStaleDetailsAndMarksInspectorLoading() {
+    let state = makeState()
+    state.selectedSummary = WorktreeDiffSummary(
+      fileCount: 2,
+      addedLineCount: 5,
+      removedLineCount: 1
+    )
+    state.selectedFiles = [
+      FileDiff(
+        oldPath: "README.md",
+        newPath: "README.md",
+        hunks: [],
+        addedCount: 1,
+        removedCount: 0
+      )
+    ]
+    state.selectedDiffStat = "2 files changed"
+    state.selectedPullRequestURL = "https://example.com/pr"
+    state.selectedReviewTarget = ResolvedTarget(
+      mode: .branch,
+      baseRef: "origin/main",
+      headRef: "main",
+      mergeBaseSha: "abc123"
+    )
+    state.worktreeSummaries["/tmp/repo/feature"] = WorktreeDiffSummary(
+      fileCount: 1,
+      addedLineCount: 3,
+      removedLineCount: 2
+    )
+
+    state.prepareSelectionLoading(for: "/tmp/repo/feature")
+
+    #expect(state.selectedWorktreePath == "/tmp/repo/feature")
+    #expect(state.selectedSummary.fileCount == 1)
+    #expect(state.selectedFiles.isEmpty)
+    #expect(state.selectedDiffStat.isEmpty)
+    #expect(state.selectedPullRequestURL == nil)
+    #expect(state.selectedReviewTarget == nil)
+    #expect(state.isLoadingSelectionDetails == true)
+  }
+
   @Test("refreshing an unselected worktree keeps the current detail view intact")
   @MainActor
   func refreshingUnselectedWorktreeDoesNotReplaceCurrentDetailView() {

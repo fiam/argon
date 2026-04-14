@@ -16,6 +16,7 @@ final class WorkspaceState {
   var selectedUpdatedAt: Date?
   var errorMessage: String?
   var launchWarningMessage: String?
+  var isLoadingSelectionDetails = false
   var isLoading = false
   var isLaunchingReview = false
   var isCreatingWorktree = false
@@ -31,6 +32,7 @@ final class WorkspaceState {
   private var worktreeWatchersByPath: [String: FileWatcher] = [:]
   private var workspaceReloadTask: Task<Void, Never>?
   private var worktreeRefreshTasksByPath: [String: Task<Void, Never>] = [:]
+  private var selectionLoadRequestID: UUID?
 
   init(target: WorkspaceTarget) {
     self.target = target
@@ -108,6 +110,8 @@ final class WorkspaceState {
       case .failure(let error):
         errorMessage = error.localizedDescription
       }
+      selectionLoadRequestID = nil
+      isLoadingSelectionDetails = false
       isLoading = false
     }
   }
@@ -141,7 +145,7 @@ final class WorkspaceState {
 
   func selectWorktree(path: String) {
     let normalizedPath = normalizedPath(path)
-    selectedWorktreePath = normalizedPath
+    prepareSelectionLoading(for: normalizedPath)
     loadSelectedWorktreeDetails(for: normalizedPath)
   }
 
@@ -362,7 +366,8 @@ final class WorkspaceState {
   }
 
   private func loadSelectedWorktreeDetails(for path: String) {
-    isLoading = true
+    let requestID = UUID()
+    selectionLoadRequestID = requestID
 
     Task {
       let result = await Task.detached {
@@ -371,7 +376,7 @@ final class WorkspaceState {
 
       switch result {
       case .success(let details):
-        if normalizedSelectedWorktreePath == path {
+        if selectionLoadRequestID == requestID, normalizedSelectedWorktreePath == path {
           worktreeSummaries[path] = details.summary
           selectedSummary = details.summary
           selectedFiles = details.files
@@ -379,12 +384,15 @@ final class WorkspaceState {
           selectedPullRequestURL = details.pullRequestURL
           selectedReviewTarget = details.reviewTarget
           selectedUpdatedAt = Date()
+          isLoadingSelectionDetails = false
         }
         errorMessage = nil
       case .failure(let error):
-        errorMessage = error.localizedDescription
+        if selectionLoadRequestID == requestID {
+          errorMessage = error.localizedDescription
+          isLoadingSelectionDetails = false
+        }
       }
-      isLoading = false
     }
   }
 
@@ -508,6 +516,8 @@ final class WorkspaceState {
     selectedPullRequestURL = data.selectedPullRequestURL
     selectedReviewTarget = data.selectedReviewTarget
     selectedUpdatedAt = Date()
+    selectionLoadRequestID = nil
+    isLoadingSelectionDetails = false
     let validPaths = Set(data.worktrees.map { normalizedPath($0.path) })
     pruneTerminalState(validPaths: validPaths)
     configureWatchers(validPaths: validPaths)
@@ -525,6 +535,18 @@ final class WorkspaceState {
     selectedPullRequestURL = refreshedWorktree.pullRequestURL
     selectedReviewTarget = refreshedWorktree.reviewTarget
     selectedUpdatedAt = Date()
+  }
+
+  func prepareSelectionLoading(for path: String) {
+    let normalizedPath = normalizedPath(path)
+    selectedWorktreePath = normalizedPath
+    selectedSummary = worktreeSummaries[normalizedPath] ?? .empty
+    selectedFiles = []
+    selectedDiffStat = ""
+    selectedPullRequestURL = nil
+    selectedReviewTarget = nil
+    selectedUpdatedAt = nil
+    isLoadingSelectionDetails = true
   }
 
   private func insertTerminalTab(_ tab: WorkspaceTerminalTab, for worktreePath: String) {

@@ -364,22 +364,30 @@ private struct WorkspaceChangedFilesPane: View {
 
   var body: some View {
     WorkspaceSurface(fillColor: Color(nsColor: .textBackgroundColor).opacity(0.98)) {
-      FileTreePanel(
-        files: workspaceState.selectedFiles,
-        emptyTitle: "No Changed Files",
-        emptySystemImage: "checkmark.circle",
-        emptyDescription: "This worktree is clean.",
-        selectedFileID: selectedFileID,
-        focusFilterRequest: false,
-        onConsumeFocusFilterRequest: nil,
-        onSelectFile: { file in
-          selectedFileID = file.id
-        },
-        onOpenFile: { file in
-          openFileInPreferredEditor(file)
+      if workspaceState.isLoadingSelectionDetails {
+        VStack {
+          ProgressView()
+            .controlSize(.small)
         }
-      )
-      .id(workspaceState.normalizedSelectedWorktreePath ?? "workspace-file-tree")
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
+        FileTreePanel(
+          files: workspaceState.selectedFiles,
+          emptyTitle: "No Changed Files",
+          emptySystemImage: "checkmark.circle",
+          emptyDescription: "This worktree is clean.",
+          selectedFileID: selectedFileID,
+          focusFilterRequest: false,
+          onConsumeFocusFilterRequest: nil,
+          onSelectFile: { file in
+            selectedFileID = file.id
+          },
+          onOpenFile: { file in
+            openFileInPreferredEditor(file)
+          }
+        )
+        .id(workspaceState.normalizedSelectedWorktreePath ?? "workspace-file-tree")
+      }
     }
     .frame(maxHeight: .infinity, alignment: .topLeading)
     .onChange(of: workspaceState.selectedWorktreePath) { _, _ in
@@ -1528,22 +1536,30 @@ private struct WorkspaceCompactDiffSummary: View {
   let summary: WorktreeDiffSummary
 
   var body: some View {
-    HStack(spacing: 4) {
-      Text(fileCountLabel)
-        .font(.caption2)
-        .foregroundStyle(.secondary)
+    Group {
+      if summary.hasChanges {
+        HStack(spacing: 4) {
+          Text(fileCountLabel)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
 
-      Text("+\(formatted(summary.addedLineCount))")
-        .font(.caption2)
-        .fontWeight(.medium)
-        .foregroundStyle(Color(nsColor: .systemGreen))
+          Text("+\(formatted(summary.addedLineCount))")
+            .font(.caption2)
+            .fontWeight(.medium)
+            .foregroundStyle(Color(nsColor: .systemGreen))
 
-      Text("-\(formatted(summary.removedLineCount))")
-        .font(.caption2)
-        .fontWeight(.medium)
-        .foregroundStyle(Color(nsColor: .systemRed))
+          Text("-\(formatted(summary.removedLineCount))")
+            .font(.caption2)
+            .fontWeight(.medium)
+            .foregroundStyle(Color(nsColor: .systemRed))
 
-      DiffStatBar(added: summary.addedLineCount, removed: summary.removedLineCount)
+          DiffStatBar(added: summary.addedLineCount, removed: summary.removedLineCount)
+        }
+      } else {
+        Text("no changes")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+      }
     }
     .fixedSize()
   }

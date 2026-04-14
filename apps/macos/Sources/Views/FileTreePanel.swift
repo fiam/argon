@@ -15,6 +15,10 @@ struct FileTreePanel: View {
   @State private var showModeHelp = false
   @FocusState private var filterFocused: Bool
 
+  private var isFilterEnabled: Bool {
+    !files.isEmpty
+  }
+
   private var currentMode: FilterMode {
     detectFilterMode(filterText)
   }
@@ -108,11 +112,18 @@ struct FileTreePanel: View {
       }
       .background(Color(nsColor: .textBackgroundColor))
       .onChange(of: focusFilterRequest) { _, focused in
-        if focused {
+        if focused && isFilterEnabled {
           filterFocused = true
           onConsumeFocusFilterRequest?()
         }
       }
+      .onChange(of: files.isEmpty) { _, isEmpty in
+        if isEmpty {
+          filterFocused = false
+        }
+      }
+      .disabled(!isFilterEnabled)
+      .opacity(isFilterEnabled ? 1 : 0.45)
       .overlay(alignment: .bottom) {
         Rectangle()
           .fill(Color(nsColor: .separatorColor))
