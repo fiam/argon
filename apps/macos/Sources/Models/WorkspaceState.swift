@@ -27,6 +27,11 @@ final class WorkspaceState {
 
   let target: WorkspaceTarget
 
+  private var commonDirWatcher: FileWatcher?
+  private var worktreeWatchersByPath: [String: FileWatcher] = [:]
+  private var workspaceReloadTask: Task<Void, Never>?
+  private var worktreeRefreshTasksByPath: [String: Task<Void, Never>] = [:]
+
   init(target: WorkspaceTarget) {
     self.target = target
     self.selectedWorktreePath = target.selectedWorktreePath ?? target.repoRoot
@@ -460,6 +465,18 @@ final class WorkspaceState {
     )
   }
 
+  nonisolated private static func loadRefreshedWorktree(for path: String) -> RefreshedWorktree {
+    let details = loadSelectionDetails(for: path)
+    return RefreshedWorktree(
+      summary: details.summary,
+      files: details.files,
+      diffStat: details.diffStat,
+      pullRequestURL: details.pullRequestURL,
+      reviewTarget: details.reviewTarget,
+      hasConflicts: GitService.hasConflicts(repoRoot: path)
+    )
+  }
+
   nonisolated private static func normalizedPath(_ path: String) -> String {
     URL(fileURLWithPath: path).standardizedFileURL.path
   }
@@ -491,7 +508,23 @@ final class WorkspaceState {
     selectedPullRequestURL = data.selectedPullRequestURL
     selectedReviewTarget = data.selectedReviewTarget
     selectedUpdatedAt = Date()
-    pruneTerminalState(validPaths: Set(data.worktrees.map { normalizedPath($0.path) }))
+    let validPaths = Set(data.worktrees.map { normalizedPath($0.path) })
+    pruneTerminalState(validPaths: validPaths)
+    configureWatchers(validPaths: validPaths)
+  }
+
+  func applyRefreshedWorktree(_ refreshedWorktree: RefreshedWorktree, for path: String) {
+    worktreeSummaries[path] = refreshedWorktree.summary
+    conflictStatesByWorktreePath[path] = refreshedWorktree.hasConflicts
+
+    guard normalizedSelectedWorktreePath == path else { return }
+
+    selectedSummary = refreshedWorktree.summary
+    selectedFiles = refreshedWorktree.files
+    selectedDiffStat = refreshedWorktree.diffStat
+    selectedPullRequestURL = refreshedWorktree.pullRequestURL
+    selectedReviewTarget = refreshedWorktree.reviewTarget
+    selectedUpdatedAt = Date()
   }
 
   private func insertTerminalTab(_ tab: WorkspaceTerminalTab, for worktreePath: String) {
@@ -519,6 +552,68 @@ final class WorkspaceState {
       .filter { validPaths.contains($0.key) }
   }
 
+  private func configureWatchers(validPaths: Set<String>) {
+    if commonDirWatcher == nil {
+      commonDirWatcher = FileWatcher(path: target.repoCommonDir) { [weak self] in
+        Task { @MainActor [weak self] in
+          self?.scheduleWorkspaceReload()
+        }
+      }
+      commonDirWatcher?.start()
+    }
+
+    let stalePaths = Set(worktreeWatchersByPath.keys).subtracting(validPaths)
+    for stalePath in stalePaths {
+      worktreeWatchersByPath[stalePath]?.stop()
+      worktreeWatchersByPath.removeValue(forKey: stalePath)
+      worktreeRefreshTasksByPath[stalePath]?.cancel()
+      worktreeRefreshTasksByPath.removeValue(forKey: stalePath)
+    }
+
+    for path in validPaths where worktreeWatchersByPath[path] == nil {
+      let watcher = FileWatcher(path: path) { [weak self] in
+        Task { @MainActor [weak self] in
+          self?.scheduleWorktreeRefresh(for: path)
+        }
+      }
+      worktreeWatchersByPath[path] = watcher
+      watcher.start()
+    }
+  }
+
+  private func scheduleWorkspaceReload() {
+    workspaceReloadTask?.cancel()
+    workspaceReloadTask = Task { @MainActor [weak self] in
+      try? await Task.sleep(for: .milliseconds(300))
+      guard let self, !Task.isCancelled else { return }
+      self.load()
+    }
+  }
+
+  private func scheduleWorktreeRefresh(for path: String) {
+    let normalizedPath = normalizedPath(path)
+    worktreeRefreshTasksByPath[normalizedPath]?.cancel()
+    worktreeRefreshTasksByPath[normalizedPath] = Task { @MainActor [weak self] in
+      try? await Task.sleep(for: .milliseconds(300))
+      guard let self, !Task.isCancelled else { return }
+      await self.refreshWorktree(path: normalizedPath)
+    }
+  }
+
+  private func refreshWorktree(path: String) async {
+    let result = await Task.detached {
+      Self.loadRefreshedWorktree(for: path)
+    }.result
+
+    switch result {
+    case .success(let refreshedWorktree):
+      applyRefreshedWorktree(refreshedWorktree, for: path)
+      errorMessage = nil
+    case .failure(let error):
+      errorMessage = error.localizedDescription
+    }
+  }
+
   private func terminalTab(for tabID: UUID) -> WorkspaceTerminalTab? {
     terminalTabsByWorktreePath.values
       .joined()
@@ -540,6 +635,15 @@ final class WorkspaceState {
   private func requestTerminalFocus(in worktreePath: String) {
     terminalFocusRequestIDsByWorktreePath[worktreePath] = UUID()
   }
+}
+
+struct RefreshedWorktree: Sendable {
+  let summary: WorktreeDiffSummary
+  let files: [FileDiff]
+  let diffStat: String
+  let pullRequestURL: String?
+  let reviewTarget: ResolvedTarget?
+  let hasConflicts: Bool
 }
 
 private struct LoadedWorkspace: Sendable {

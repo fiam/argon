@@ -136,6 +136,84 @@ struct WorkspaceStateTests {
     #expect(tab?.launch.processSpec.args.contains("/tmp/repo") == true)
   }
 
+  @Test("refreshing the selected worktree updates the visible diff state")
+  @MainActor
+  func refreshingSelectedWorktreeUpdatesVisibleDiffState() {
+    let state = makeState()
+    state.selectedWorktreePath = "/tmp/repo/feature"
+
+    let refreshed = RefreshedWorktree(
+      summary: WorktreeDiffSummary(fileCount: 1, addedLineCount: 3, removedLineCount: 2),
+      files: [
+        FileDiff(
+          oldPath: "Sources/App.swift",
+          newPath: "Sources/App.swift",
+          hunks: [],
+          addedCount: 3,
+          removedCount: 2
+        )
+      ],
+      diffStat: "1 file changed, 3 insertions(+), 2 deletions(-)",
+      pullRequestURL: "https://example.com/pr",
+      reviewTarget: ResolvedTarget(
+        mode: .branch,
+        baseRef: "origin/main",
+        headRef: "feature/window",
+        mergeBaseSha: "abc123"
+      ),
+      hasConflicts: true
+    )
+
+    state.applyRefreshedWorktree(refreshed, for: "/tmp/repo/feature")
+
+    #expect(state.summary(for: "/tmp/repo/feature").fileCount == 1)
+    #expect(state.selectedSummary.fileCount == 1)
+    #expect(state.selectedFiles.count == 1)
+    #expect(state.selectedDiffStat == refreshed.diffStat)
+    #expect(state.selectedPullRequestURL == refreshed.pullRequestURL)
+    #expect(state.selectedReviewTarget?.headRef == "feature/window")
+    #expect(state.hasConflicts(for: "/tmp/repo/feature") == true)
+  }
+
+  @Test("refreshing an unselected worktree keeps the current detail view intact")
+  @MainActor
+  func refreshingUnselectedWorktreeDoesNotReplaceCurrentDetailView() {
+    let state = makeState()
+    state.selectedSummary = WorktreeDiffSummary(
+      fileCount: 2,
+      addedLineCount: 4,
+      removedLineCount: 1
+    )
+    state.selectedFiles = [
+      FileDiff(
+        oldPath: "README.md",
+        newPath: "README.md",
+        hunks: [],
+        addedCount: 1,
+        removedCount: 0
+      )
+    ]
+    state.selectedDiffStat = "2 files changed"
+
+    let refreshed = RefreshedWorktree(
+      summary: WorktreeDiffSummary(fileCount: 1, addedLineCount: 1, removedLineCount: 0),
+      files: [
+        FileDiff(oldPath: "b.txt", newPath: "b.txt", hunks: [], addedCount: 1, removedCount: 0)
+      ],
+      diffStat: "1 file changed",
+      pullRequestURL: nil,
+      reviewTarget: nil,
+      hasConflicts: false
+    )
+
+    state.applyRefreshedWorktree(refreshed, for: "/tmp/repo/feature")
+
+    #expect(state.summary(for: "/tmp/repo/feature").fileCount == 1)
+    #expect(state.selectedSummary.fileCount == 2)
+    #expect(state.selectedFiles.first?.displayPath == "README.md")
+    #expect(state.selectedDiffStat == "2 files changed")
+  }
+
   @MainActor
   private func makeState() -> WorkspaceState {
     let target = WorkspaceTarget(
