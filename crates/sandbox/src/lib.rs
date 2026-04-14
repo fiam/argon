@@ -702,10 +702,17 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn built_in_defaults_include_dev_null_and_state_roots() {
+        let _guard = env_lock().lock().expect("lock env");
         let policy = SandboxPolicy::built_in_defaults();
         assert!(
             policy
@@ -833,6 +840,7 @@ mod tests {
 
     #[test]
     fn config_expands_home_shorthand() {
+        let _guard = env_lock().lock().expect("lock env");
         let temp = tempdir().expect("tempdir");
         let repo_root = temp.path().join("repo");
         let fake_home = temp.path().join("home");
