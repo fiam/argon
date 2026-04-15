@@ -38,8 +38,8 @@ struct SettingsView: View {
   @AppStorage("defaultDiffViewMode") private var defaultDiffViewMode = "unified"
   @AppStorage("diffFontSize") private var diffFontSize = 13.0
   @AppStorage("terminalFontSize") private var terminalFontSize = 12.0
-  @AppStorage(WorkspaceShellExitBehavior.storageKey) private var workspaceShellExitBehavior =
-    WorkspaceShellExitBehavior.closeTab.rawValue
+  @AppStorage(WorkspaceFinishedTerminalBehavior.storageKey)
+  private var finishedTerminalBehavior = WorkspaceFinishedTerminalBehavior.autoClose.rawValue
   @State private var selectedAgentId: String?
   @State private var editingNewAgent = false
 
@@ -63,6 +63,14 @@ struct SettingsView: View {
           Text("Side by Side").tag("sideBySide")
         }
         .pickerStyle(.segmented)
+      }
+
+      Section("Workspace") {
+        Toggle("Close finished terminals automatically", isOn: autoCloseFinishedTerminalsBinding)
+
+        Text(selectedFinishedTerminalBehavior.helpText)
+          .font(.caption)
+          .foregroundStyle(.secondary)
       }
     }
     .formStyle(.grouped)
@@ -141,7 +149,8 @@ struct SettingsView: View {
           name: "",
           command: "",
           icon: "terminal",
-          yoloFlag: ""
+          yoloFlag: "",
+          promptArgumentTemplate: ""
         )
       ) { newProfile in
         savedAgents.add(newProfile)
@@ -171,26 +180,26 @@ struct SettingsView: View {
         Text("$ argon review --mode uncommitted")
           .font(.system(size: terminalFontSize, design: .monospaced))
           .foregroundStyle(.secondary)
-
-        Picker("Shell exit", selection: $workspaceShellExitBehavior) {
-          ForEach(WorkspaceShellExitBehavior.allCases) { behavior in
-            Text(behavior.title)
-              .tag(behavior.rawValue)
-          }
-        }
-        .pickerStyle(.segmented)
-
-        Text(selectedShellExitBehavior.helpText)
-          .font(.caption)
-          .foregroundStyle(.secondary)
       }
     }
     .formStyle(.grouped)
     .padding()
   }
 
-  private var selectedShellExitBehavior: WorkspaceShellExitBehavior {
-    WorkspaceShellExitBehavior(rawValue: workspaceShellExitBehavior) ?? .closeTab
+  private var selectedFinishedTerminalBehavior: WorkspaceFinishedTerminalBehavior {
+    WorkspaceFinishedTerminalBehavior(rawValue: finishedTerminalBehavior) ?? .autoClose
+  }
+
+  private var autoCloseFinishedTerminalsBinding: Binding<Bool> {
+    Binding(
+      get: { selectedFinishedTerminalBehavior == .autoClose },
+      set: { isEnabled in
+        finishedTerminalBehavior =
+          isEnabled
+          ? WorkspaceFinishedTerminalBehavior.autoClose.rawValue
+          : WorkspaceFinishedTerminalBehavior.keepOpen.rawValue
+      }
+    )
   }
 }
 
@@ -220,6 +229,12 @@ private struct AgentProfileRow: View {
           }
         }
         .lineLimit(1)
+        if !profile.promptArgumentTemplate.isEmpty {
+          Text(profile.promptArgumentTemplate)
+            .font(.caption2.monospaced())
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
       }
       Spacer()
       Text(statusLabel)
@@ -273,6 +288,7 @@ private struct AgentEditorSheet: View {
   @State private var editName: String
   @State private var editCommand: String
   @State private var editYoloFlag: String
+  @State private var editPromptArgumentTemplate: String
 
   init(profile: SavedAgentProfile, onSave: @escaping (SavedAgentProfile) -> Void) {
     self.profile = profile
@@ -280,6 +296,7 @@ private struct AgentEditorSheet: View {
     self._editName = State(initialValue: profile.name)
     self._editCommand = State(initialValue: profile.command)
     self._editYoloFlag = State(initialValue: profile.yoloFlag)
+    self._editPromptArgumentTemplate = State(initialValue: profile.promptArgumentTemplate)
   }
 
   var body: some View {
@@ -296,6 +313,13 @@ private struct AgentEditorSheet: View {
         Text("Leave empty if the agent doesn't support an auto-approve mode.")
           .font(.caption)
           .foregroundStyle(.secondary)
+        TextField("Prompt argument template", text: $editPromptArgumentTemplate)
+          .font(.system(.body, design: .monospaced))
+        Text(
+          "Use {{prompt}} where the quoted prompt should be inserted. Leave empty to append the prompt as the final argument."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
       }
       .formStyle(.grouped)
 
@@ -311,6 +335,9 @@ private struct AgentEditorSheet: View {
           updated.name = editName.trimmingCharacters(in: .whitespacesAndNewlines)
           updated.command = editCommand.trimmingCharacters(in: .whitespacesAndNewlines)
           updated.yoloFlag = editYoloFlag.trimmingCharacters(in: .whitespacesAndNewlines)
+          updated.promptArgumentTemplate = editPromptArgumentTemplate.trimmingCharacters(
+            in: .whitespacesAndNewlines
+          )
           if !updated.name.isEmpty && !updated.command.isEmpty {
             onSave(updated)
           }

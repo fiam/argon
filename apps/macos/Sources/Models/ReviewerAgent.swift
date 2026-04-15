@@ -8,6 +8,23 @@ struct AgentProfile: Identifiable, Hashable {
   let command: String
   let icon: String
   let isDetected: Bool
+  let promptArgumentTemplate: String
+
+  init(
+    id: String,
+    name: String,
+    command: String,
+    icon: String,
+    isDetected: Bool,
+    promptArgumentTemplate: String = ""
+  ) {
+    self.id = id
+    self.name = name
+    self.command = command
+    self.icon = icon
+    self.isDetected = isDetected
+    self.promptArgumentTemplate = promptArgumentTemplate
+  }
 
   static func == (lhs: AgentProfile, rhs: AgentProfile) -> Bool {
     lhs.id == rhs.id
@@ -15,6 +32,14 @@ struct AgentProfile: Identifiable, Hashable {
 
   func hash(into hasher: inout Hasher) {
     hasher.combine(id)
+  }
+
+  func fullCommand(prompt: String? = nil) -> String {
+    renderAgentCommand(
+      baseCommand: command,
+      promptArgumentTemplate: promptArgumentTemplate,
+      prompt: prompt
+    )
   }
 }
 
@@ -31,7 +56,8 @@ enum AgentDetector {
           name: "Claude Code",
           command: "claude",
           icon: "brain",
-          isDetected: true
+          isDetected: true,
+          promptArgumentTemplate: ""
         ))
       agents.append(
         AgentProfile(
@@ -39,7 +65,8 @@ enum AgentDetector {
           name: "Claude Code (YOLO)",
           command: "claude --dangerously-skip-permissions",
           icon: "brain.head.profile",
-          isDetected: true
+          isDetected: true,
+          promptArgumentTemplate: ""
         ))
     }
 
@@ -50,7 +77,8 @@ enum AgentDetector {
           name: "Codex",
           command: "codex",
           icon: "terminal",
-          isDetected: true
+          isDetected: true,
+          promptArgumentTemplate: ""
         ))
       agents.append(
         AgentProfile(
@@ -58,7 +86,8 @@ enum AgentDetector {
           name: "Codex (YOLO)",
           command: "codex --yolo",
           icon: "terminal.fill",
-          isDetected: true
+          isDetected: true,
+          promptArgumentTemplate: ""
         ))
     }
 
@@ -69,7 +98,8 @@ enum AgentDetector {
           name: "Gemini CLI",
           command: "gemini",
           icon: "sparkles",
-          isDetected: true
+          isDetected: true,
+          promptArgumentTemplate: ""
         ))
     }
 
@@ -145,18 +175,12 @@ final class ReviewerAgentInstance: Identifiable {
       nickname: nickname, focusPrompt: focusPrompt, cli: cli
     )
 
-    let baseCommand = profile.command
-    // Append the prompt as an argument
-    return "\(baseCommand) \(shellQuote(prompt))"
+    return profile.fullCommand(prompt: prompt)
   }
 
   func stop() {
     process?.terminate()
     isRunning = false
     DetectiveNames.release(nickname)
-  }
-
-  private func shellQuote(_ s: String) -> String {
-    "'\(s.replacingOccurrences(of: "'", with: "'\\''"))'"
   }
 }

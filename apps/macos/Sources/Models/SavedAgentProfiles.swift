@@ -1,6 +1,6 @@
 import Foundation
 
-struct SavedAgentProfile: Codable, Identifiable, Hashable {
+struct SavedAgentProfile: Codable, Identifiable, Hashable, Sendable {
   var id: String
   var name: String
   var command: String
@@ -8,19 +8,70 @@ struct SavedAgentProfile: Codable, Identifiable, Hashable {
   /// Flags appended to the command to enable auto-approve mode.
   /// Empty string means the agent doesn't support a yolo mode.
   var yoloFlag: String
+  /// Optional command-line template used to pass a quoted prompt.
+  /// Use `{{prompt}}` where the shell-quoted prompt should be inserted.
+  /// Leave empty to append the quoted prompt as a trailing argument.
+  var promptArgumentTemplate: String
+
+  private enum CodingKeys: String, CodingKey {
+    case id
+    case name
+    case command
+    case icon
+    case yoloFlag
+    case promptArgumentTemplate
+  }
+
+  init(
+    id: String,
+    name: String,
+    command: String,
+    icon: String,
+    yoloFlag: String,
+    promptArgumentTemplate: String = ""
+  ) {
+    self.id = id
+    self.name = name
+    self.command = command
+    self.icon = icon
+    self.yoloFlag = yoloFlag
+    self.promptArgumentTemplate = promptArgumentTemplate
+  }
+
+  init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    name = try container.decode(String.self, forKey: .name)
+    command = try container.decode(String.self, forKey: .command)
+    icon = try container.decode(String.self, forKey: .icon)
+    yoloFlag = try container.decode(String.self, forKey: .yoloFlag)
+    promptArgumentTemplate =
+      try container.decodeIfPresent(String.self, forKey: .promptArgumentTemplate) ?? ""
+  }
 
   /// Build the full command, optionally with yolo flags.
-  func fullCommand(yolo: Bool, sandboxed: Bool = false) -> String {
+  func fullCommand(yolo: Bool, sandboxed: Bool = false, prompt: String? = nil) -> String {
     var components = [command]
     if yolo && !yoloFlag.isEmpty {
       components.append(yoloFlag)
     }
-    return components.joined(separator: " ")
+    return renderAgentCommand(
+      baseCommand: components.joined(separator: " "),
+      promptArgumentTemplate: promptArgumentTemplate,
+      prompt: prompt
+    )
   }
 
   /// Convert to the AgentProfile used by the launch sheet.
   func toAgentProfile(isDetected: Bool) -> AgentProfile {
-    AgentProfile(id: id, name: name, command: command, icon: icon, isDetected: isDetected)
+    AgentProfile(
+      id: id,
+      name: name,
+      command: command,
+      icon: icon,
+      isDetected: isDetected,
+      promptArgumentTemplate: promptArgumentTemplate
+    )
   }
 
   var baseCommand: String {
@@ -102,4 +153,31 @@ final class SavedAgentProfiles {
       UserDefaults.standard.set(data, forKey: Self.key)
     }
   }
+}
+
+func renderAgentCommand(
+  baseCommand: String,
+  promptArgumentTemplate: String,
+  prompt: String?
+) -> String {
+  guard let prompt, !prompt.isEmpty else { return baseCommand }
+
+  let trimmedTemplate = promptArgumentTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
+  let quotedPrompt = shellQuote(prompt)
+
+  guard !trimmedTemplate.isEmpty else {
+    return "\(baseCommand) \(quotedPrompt)"
+  }
+
+  let renderedTemplate = trimmedTemplate.replacingOccurrences(of: "{{prompt}}", with: quotedPrompt)
+  if trimmedTemplate.contains("{{prompt}}") {
+    return "\(baseCommand) \(renderedTemplate)"
+  }
+
+  return "\(baseCommand) \(renderedTemplate) \(quotedPrompt)"
+}
+
+private func shellQuote(_ value: String) -> String {
+  let escaped = value.replacingOccurrences(of: "'", with: "'\\''")
+  return "'\(escaped)'"
 }

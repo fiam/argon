@@ -66,14 +66,99 @@ struct WorkspaceStateTests {
     #expect(state.activeAgentCount(for: "/tmp/repo") == 0)
   }
 
-  @Test("shell exit behavior can auto-close shell tabs without closing agent tabs")
+  @Test("review handoff auto-selects a single running agent tab")
   @MainActor
-  func shellExitBehaviorCanAutoCloseShellTabsWithoutClosingAgentTabs() async throws {
+  func reviewHandoffAutoSelectsSingleRunningAgentTab() throws {
+    let state = makeState()
+    let tab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          sandboxEnabled: false
+        ))
+    )
+
+    state.beginReviewLaunchFlow()
+
+    #expect(state.pendingReviewAgentTabID == tab.id)
+    #expect(state.isPresentingReviewAgentPicker == false)
+    #expect(state.isPresentingAgentLaunchSheet == false)
+  }
+
+  @Test("review handoff asks when multiple running agent tabs exist")
+  @MainActor
+  func reviewHandoffAsksWhenMultipleRunningAgentTabsExist() throws {
+    let state = makeState()
+    _ = state.openAgentTab(
+      WorkspaceAgentLaunchRequest(
+        displayName: "Codex",
+        command: "codex",
+        icon: "codex",
+        sandboxEnabled: false
+      )
+    )
+    let second = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Claude Code",
+          command: "claude",
+          icon: "claude",
+          sandboxEnabled: false
+        ))
+    )
+
+    state.beginReviewLaunchFlow()
+
+    #expect(state.pendingReviewAgentTabID == nil)
+    #expect(state.isPresentingReviewAgentPicker == true)
+    #expect(state.reviewAgentCandidates.count == 2)
+
+    state.chooseReviewAgentTab(second.id)
+
+    #expect(state.pendingReviewAgentTabID == second.id)
+    #expect(state.isPresentingReviewAgentPicker == false)
+    #expect(state.reviewAgentCandidates.isEmpty)
+  }
+
+  @Test("review handoff falls back to launching a new agent when none are attached")
+  @MainActor
+  func reviewHandoffFallsBackToLaunchingNewAgentWhenNoneAreAttached() {
+    let state = makeState()
+    state.openShellTab()
+
+    state.beginReviewLaunchFlow()
+
+    #expect(state.pendingReviewAgentTabID == nil)
+    #expect(state.isPresentingAgentLaunchSheet == true)
+  }
+
+  @Test("staged review launches activate after the agent sheet dismisses")
+  @MainActor
+  func stagedReviewLaunchesActivateAfterTheAgentSheetDismisses() {
+    let state = makeState()
+    let tabID = UUID()
+    let target = ReviewTarget(sessionId: "session-123", repoRoot: "/tmp/repo")
+
+    state.stageReviewLaunch(target: target, agentTabID: tabID)
+    #expect(state.pendingReviewAgentTabID == nil)
+
+    state.activateStagedReviewLaunch()
+
+    #expect(state.pendingReviewAgentTabID == tabID)
+    #expect(state.consumePreparedReviewTarget(for: tabID) == target)
+    #expect(state.consumePreparedReviewTarget(for: tabID) == nil)
+  }
+
+  @Test("auto-close finished terminals removes shell and agent tabs")
+  @MainActor
+  func autoCloseFinishedTerminalsRemovesShellAndAgentTabs() async throws {
     let state = makeState()
     state.openShellTab()
     let shellID = try #require(state.selectedTerminalTab?.id)
 
-    state.handleTerminalExit(shellID, shellExitBehavior: .closeTab)
+    state.handleTerminalExit(shellID, exitBehavior: .autoClose)
     await Task.yield()
 
     #expect(state.selectedTerminalTabs.isEmpty)
@@ -88,7 +173,27 @@ struct WorkspaceStateTests {
     )
     let agentID = try #require(state.selectedTerminalTab?.id)
 
-    state.handleTerminalExit(agentID, shellExitBehavior: .closeTab)
+    state.handleTerminalExit(agentID, exitBehavior: .autoClose)
+    await Task.yield()
+
+    #expect(state.selectedTerminalTabs.isEmpty)
+  }
+
+  @Test("keep-open finished terminals preserves exited tabs")
+  @MainActor
+  func keepOpenFinishedTerminalsPreservesExitedTabs() async throws {
+    let state = makeState()
+    state.openAgentTab(
+      WorkspaceAgentLaunchRequest(
+        displayName: "Codex",
+        command: "codex",
+        icon: "codex",
+        sandboxEnabled: false
+      )
+    )
+    let agentID = try #require(state.selectedTerminalTab?.id)
+
+    state.handleTerminalExit(agentID, exitBehavior: .keepOpen)
     await Task.yield()
 
     #expect(state.selectedTerminalTabs.count == 1)

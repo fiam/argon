@@ -446,20 +446,46 @@ private struct WorkspaceTerminalDeck: View {
     }
     .background(Color(nsColor: .textBackgroundColor))
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .sheet(isPresented: $workspaceState.isPresentingTabCreationSheet) {
-      WorkspaceTabCreationSheet(isPresented: $workspaceState.isPresentingTabCreationSheet) {
-        workspaceState.presentAgentLaunchSheet()
-      } onNewShell: {
-        workspaceState.openShellTab()
-      } onNewSandboxedShell: {
-        workspaceState.openShellTab(sandboxed: true)
+    .sheet(
+      isPresented: $workspaceState.isPresentingTabCreationSheet,
+      content: {
+        WorkspaceTabCreationSheet(
+          isPresented: $workspaceState.isPresentingTabCreationSheet,
+          onNewAgent: {
+            workspaceState.presentAgentLaunchSheet()
+          },
+          onNewShell: {
+            workspaceState.openShellTab()
+          },
+          onNewSandboxedShell: {
+            workspaceState.openShellTab(sandboxed: true)
+          }
+        )
       }
-    }
-    .sheet(isPresented: $workspaceState.isPresentingAgentLaunchSheet) {
-      WorkspaceAgentTabSheet(isPresented: $workspaceState.isPresentingAgentLaunchSheet) { request in
-        workspaceState.openAgentTab(request)
+    )
+    .sheet(
+      isPresented: $workspaceState.isPresentingAgentLaunchSheet,
+      onDismiss: {
+        workspaceState.dismissAgentLaunchSheet()
+      },
+      content: {
+        WorkspaceAgentTabSheet(
+          isPresented: $workspaceState.isPresentingAgentLaunchSheet,
+          onLaunch: { options in
+            do {
+              try await workspaceState.launchAgent(using: options)
+              return true
+            } catch {
+              workspaceState.errorMessage = error.localizedDescription
+              return false
+            }
+          },
+          onDidLaunch: {
+            workspaceState.activateStagedReviewLaunch()
+          }
+        )
       }
-    }
+    )
   }
 }
 
@@ -638,8 +664,8 @@ private struct WorkspaceDecisionPill: View {
 private struct WorkspaceTerminalStage: View {
   @Environment(WorkspaceState.self) private var workspaceState
   @AppStorage("terminalFontSize") private var terminalFontSize = 12.0
-  @AppStorage(WorkspaceShellExitBehavior.storageKey) private var shellExitBehavior =
-    WorkspaceShellExitBehavior.closeTab.rawValue
+  @AppStorage(WorkspaceFinishedTerminalBehavior.storageKey) private var finishedTerminalBehavior =
+    WorkspaceFinishedTerminalBehavior.autoClose.rawValue
 
   var body: some View {
     ZStack {
@@ -648,10 +674,14 @@ private struct WorkspaceTerminalStage: View {
         GhosttyTerminalView(
           controller: tab,
           launch: tab.launch,
+          terminalID: tab.id,
           terminalFontSize: terminalFontSize,
           waitAfterCommand: waitAfterCommand(for: tab),
           onProcessExit: {
-            workspaceState.handleTerminalExit(tab.id, shellExitBehavior: selectedShellExitBehavior)
+            workspaceState.handleTerminalExit(
+              tab.id,
+              exitBehavior: selectedFinishedTerminalBehavior
+            )
           },
           focusRequestID: isSelected ? workspaceState.selectedTerminalFocusRequestID : nil
         )
@@ -678,8 +708,8 @@ private struct WorkspaceTerminalStage: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
   }
 
-  private var selectedShellExitBehavior: WorkspaceShellExitBehavior {
-    WorkspaceShellExitBehavior(rawValue: shellExitBehavior) ?? .closeTab
+  private var selectedFinishedTerminalBehavior: WorkspaceFinishedTerminalBehavior {
+    WorkspaceFinishedTerminalBehavior(rawValue: finishedTerminalBehavior) ?? .autoClose
   }
 
   private var selectedTerminalTab: WorkspaceTerminalTab? {
@@ -687,17 +717,12 @@ private struct WorkspaceTerminalStage: View {
   }
 
   private func waitAfterCommand(for tab: WorkspaceTerminalTab) -> Bool {
-    switch tab.kind {
-    case .agent:
-      true
-    case .shell:
-      selectedShellExitBehavior == .keepTabOpen
-    }
+    selectedFinishedTerminalBehavior == .keepOpen
   }
 
   private func shouldShowExitedShellOverlay(for tab: WorkspaceTerminalTab) -> Bool {
     guard case .shell = tab.kind else { return false }
-    return !tab.isRunning && selectedShellExitBehavior == .keepTabOpen
+    return !tab.isRunning && selectedFinishedTerminalBehavior == .keepOpen
   }
 }
 
@@ -935,7 +960,8 @@ private struct WorkspaceAgentTabSheet: View {
   @Environment(SavedAgentProfiles.self) private var savedAgents
   @Environment(AgentAvailability.self) private var agentAvailability
   @Binding var isPresented: Bool
-  let onLaunch: (WorkspaceAgentLaunchRequest) -> Void
+  let onLaunch: @MainActor (WorkspaceAgentLaunchOptions) async -> Bool
+  let onDidLaunch: @MainActor () -> Void
 
   @State private var selectedAgentId: String?
   @State private var yoloMode = false
@@ -943,6 +969,7 @@ private struct WorkspaceAgentTabSheet: View {
   @State private var customCommand = ""
   @State private var customName = ""
   @State private var useCustom = false
+  @State private var isLaunching = false
 
   private var selectedSavedAgent: SavedAgentProfile? {
     guard let selectedAgentId else { return nil }
@@ -1065,6 +1092,7 @@ private struct WorkspaceAgentTabSheet: View {
           isPresented = false
         }
         .keyboardShortcut(.cancelAction)
+        .disabled(isLaunching)
 
         Button("Launch") {
           launch()
@@ -1089,6 +1117,7 @@ private struct WorkspaceAgentTabSheet: View {
   }
 
   private var canLaunch: Bool {
+    guard !isLaunching else { return false }
     if useCustom {
       return !customCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -1097,29 +1126,40 @@ private struct WorkspaceAgentTabSheet: View {
   }
 
   private func launch() {
-    let request: WorkspaceAgentLaunchRequest
+    guard let launchOptions else { return }
+
+    isLaunching = true
+    Task { @MainActor in
+      let didLaunch = await onLaunch(launchOptions)
+      isLaunching = false
+      guard didLaunch else { return }
+      isPresented = false
+      DispatchQueue.main.async {
+        onDidLaunch()
+      }
+    }
+  }
+
+  private var launchOptions: WorkspaceAgentLaunchOptions? {
     if useCustom {
       let command = customCommand.trimmingCharacters(in: .whitespacesAndNewlines)
       let displayName = customName.trimmingCharacters(in: .whitespacesAndNewlines)
-      request = WorkspaceAgentLaunchRequest(
-        displayName: displayName.isEmpty ? defaultDisplayName(for: command) : displayName,
-        command: command,
-        icon: "terminal",
+      guard !command.isEmpty else { return nil }
+      return WorkspaceAgentLaunchOptions(
+        source: .custom(
+          displayName: displayName.isEmpty ? defaultDisplayName(for: command) : displayName,
+          command: command,
+          icon: "terminal"
+        ),
         sandboxEnabled: sandboxEnabled
       )
-    } else if let selectedSavedAgent {
-      request = WorkspaceAgentLaunchRequest(
-        displayName: selectedSavedAgent.name,
-        command: selectedSavedAgent.fullCommand(yolo: yoloMode, sandboxed: sandboxEnabled),
-        icon: selectedSavedAgent.icon,
-        sandboxEnabled: sandboxEnabled
-      )
-    } else {
-      return
     }
 
-    onLaunch(request)
-    isPresented = false
+    guard let selectedSavedAgent else { return nil }
+    return WorkspaceAgentLaunchOptions(
+      source: .savedProfile(selectedSavedAgent, yoloMode: yoloMode),
+      sandboxEnabled: sandboxEnabled
+    )
   }
 
   private func syncSelectedAgent() {
@@ -1272,6 +1312,8 @@ private struct WorkspaceInspectorPane: View {
   @Environment(\.openWindow) private var openWindow
 
   var body: some View {
+    @Bindable var workspaceState = workspaceState
+
     GeometryReader { proxy in
       Group {
         if let worktree = workspaceState.selectedWorktree {
@@ -1293,7 +1335,7 @@ private struct WorkspaceInspectorPane: View {
                   showsProgress: isPreparingReview(for: worktree.path),
                   isDisabled: reviewButtonDisabled(for: worktree.path)
                 ) {
-                  launchReview()
+                  workspaceState.beginReviewLaunchFlow()
                 }
 
                 HStack(spacing: 8) {
@@ -1340,12 +1382,51 @@ private struct WorkspaceInspectorPane: View {
         .fill(Color(nsColor: .separatorColor))
         .frame(width: 0.5)
     }
+    .sheet(
+      isPresented: $workspaceState.isPresentingReviewAgentPicker,
+      onDismiss: {
+        workspaceState.dismissReviewAgentPicker()
+      }
+    ) {
+      WorkspaceReviewAgentPickerSheet(
+        candidates: workspaceState.reviewAgentCandidates,
+        onSelect: { tabID in
+          workspaceState.chooseReviewAgentTab(tabID)
+        },
+        onCancel: {
+          workspaceState.dismissReviewAgentPicker()
+        }
+      )
+    }
+    .onChange(of: workspaceState.pendingReviewAgentTabID) { _, tabID in
+      guard let tabID else { return }
+      workspaceState.pendingReviewAgentTabID = nil
+      launchReview(using: tabID)
+    }
   }
 
-  private func launchReview() {
+  private func launchReview(using agentTabID: UUID) {
     Task {
       do {
-        let target = try await workspaceState.createReviewTarget()
+        let target: ReviewTarget
+        if let preparedTarget = workspaceState.consumePreparedReviewTarget(for: agentTabID) {
+          target = preparedTarget
+        } else {
+          target = try await workspaceState.createReviewTarget()
+          do {
+            let prompt = try await Task.detached {
+              try ArgonCLI.agentPrompt(sessionId: target.sessionId, repoRoot: target.repoRoot)
+            }.value
+            let injected = await GhosttyTerminalView.injectPrompt(prompt, into: agentTabID)
+            if !injected {
+              workspaceState.errorMessage =
+                "Opened the review, but Argon could not hand off the session prompt to the selected agent tab."
+            }
+          } catch {
+            workspaceState.errorMessage =
+              "Opened the review, but Argon could not build the agent handoff prompt: \(error.localizedDescription)"
+          }
+        }
         reviewWindowRegistry.markOpening(repoRoot: target.repoRoot)
         openWindow(value: target)
       } catch {
@@ -1357,7 +1438,9 @@ private struct WorkspaceInspectorPane: View {
   private func reviewButtonDisabled(for worktreePath: String) -> Bool {
     switch reviewWindowRegistry.state(for: worktreePath) {
     case .idle:
-      return workspaceState.isLaunchingReview
+      return
+        workspaceState.isLaunchingReview
+        || workspaceState.isPresentingReviewAgentPicker
     case .opening, .open:
       return true
     }
@@ -1374,6 +1457,71 @@ private struct WorkspaceInspectorPane: View {
   private func openPullRequest(urlString: String) {
     guard let url = URL(string: urlString) else { return }
     NSWorkspace.shared.open(url)
+  }
+}
+
+private struct WorkspaceReviewAgentPickerSheet: View {
+  let candidates: [WorkspaceTerminalTab]
+  let onSelect: (UUID) -> Void
+  let onCancel: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 20) {
+      HStack(spacing: 10) {
+        Image(systemName: "person.crop.circle.badge.questionmark")
+          .font(.title2)
+          .foregroundStyle(.blue)
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Choose Agent")
+            .font(.title2.weight(.semibold))
+          Text("Select the live agent tab that should receive the review handoff.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      VStack(alignment: .leading, spacing: 10) {
+        ForEach(candidates) { tab in
+          Button {
+            onSelect(tab.id)
+          } label: {
+            HStack(spacing: 12) {
+              AgentIconView(icon: tab.kind.iconName, size: 18)
+                .frame(width: 22, height: 22)
+              VStack(alignment: .leading, spacing: 3) {
+                Text(tab.title)
+                  .font(.headline)
+                Text(tab.commandDescription)
+                  .font(.callout.monospaced())
+                  .foregroundStyle(.secondary)
+                  .lineLimit(1)
+              }
+              Spacer()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+              RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.8))
+            )
+            .overlay(
+              RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+            )
+          }
+          .buttonStyle(.plain)
+        }
+      }
+
+      HStack {
+        Spacer()
+
+        Button("Cancel", action: onCancel)
+          .keyboardShortcut(.cancelAction)
+      }
+    }
+    .padding(24)
+    .frame(width: 520)
   }
 }
 

@@ -26,6 +26,43 @@ struct WorkspaceAgentLaunchRequest: Sendable {
   let sandboxEnabled: Bool
 }
 
+enum WorkspaceAgentLaunchSource: Sendable {
+  case savedProfile(SavedAgentProfile, yoloMode: Bool)
+  case custom(displayName: String, command: String, icon: String)
+}
+
+struct WorkspaceAgentLaunchOptions: Sendable {
+  let source: WorkspaceAgentLaunchSource
+  let sandboxEnabled: Bool
+
+  func buildRequest(prompt: String? = nil) -> WorkspaceAgentLaunchRequest {
+    switch source {
+    case .savedProfile(let profile, let yoloMode):
+      return WorkspaceAgentLaunchRequest(
+        displayName: profile.name,
+        command: profile.fullCommand(
+          yolo: yoloMode,
+          sandboxed: sandboxEnabled,
+          prompt: prompt
+        ),
+        icon: profile.icon,
+        sandboxEnabled: sandboxEnabled
+      )
+    case .custom(let displayName, let command, let icon):
+      return WorkspaceAgentLaunchRequest(
+        displayName: displayName,
+        command: renderAgentCommand(
+          baseCommand: command,
+          promptArgumentTemplate: "",
+          prompt: prompt
+        ),
+        icon: icon,
+        sandboxEnabled: sandboxEnabled
+      )
+    }
+  }
+}
+
 @MainActor
 @Observable
 final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {

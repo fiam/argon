@@ -234,7 +234,8 @@ struct AgentLaunchSheet: View {
         name: "Custom",
         command: cmd,
         icon: "terminal",
-        isDetected: false
+        isDetected: false,
+        promptArgumentTemplate: ""
       )
     } else if let saved = selectedSavedAgent {
       let cmd = saved.fullCommand(yolo: yoloMode, sandboxed: sandboxEnabled)
@@ -243,7 +244,8 @@ struct AgentLaunchSheet: View {
         name: yoloMode ? "\(saved.name) (YOLO)" : saved.name,
         command: cmd,
         icon: saved.icon,
-        isDetected: true
+        isDetected: true,
+        promptArgumentTemplate: saved.promptArgumentTemplate
       )
     } else {
       return

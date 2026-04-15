@@ -1,28 +1,28 @@
 import Foundation
 
-enum WorkspaceShellExitBehavior: String, CaseIterable, Identifiable, Sendable {
+enum WorkspaceFinishedTerminalBehavior: String, CaseIterable, Identifiable, Sendable {
   static let storageKey = "workspaceShellExitBehavior"
 
-  case closeTab
-  case keepTabOpen
+  case autoClose
+  case keepOpen
 
   var id: String { rawValue }
 
   var title: String {
     switch self {
-    case .closeTab:
-      "Close Tab"
-    case .keepTabOpen:
-      "Keep Tab Open"
+    case .autoClose:
+      "On"
+    case .keepOpen:
+      "Off"
     }
   }
 
   var helpText: String {
     switch self {
-    case .closeTab:
-      "Shell tabs close as soon as the process exits."
-    case .keepTabOpen:
-      "Keep the transcript visible and show inline actions after the shell exits."
+    case .autoClose:
+      "Close finished agent and shell tabs as soon as their process exits."
+    case .keepOpen:
+      "Keep finished tabs visible. Shell tabs show inline actions after exit."
     }
   }
 }

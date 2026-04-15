@@ -18,14 +18,21 @@ private enum GhosttyHostRegistry {
   private static let lock = NSLock()
   nonisolated(unsafe) private static var nextIdentifier: UInt = 1
   nonisolated(unsafe) private static var hosts: [UInt: WeakGhosttyHostBox] = [:]
+  nonisolated(unsafe) private static var hostsByTerminalID: [UUID: WeakGhosttyHostBox] = [:]
 
-  static func register(_ host: GhosttyTerminalHostView) -> UnsafeMutableRawPointer {
+  static func register(
+    _ host: GhosttyTerminalHostView,
+    terminalID: UUID?
+  ) -> UnsafeMutableRawPointer {
     lock.lock()
     defer { lock.unlock() }
 
     let identifier = nextIdentifier
     nextIdentifier &+= 1
     hosts[identifier] = WeakGhosttyHostBox(host: host)
+    if let terminalID {
+      hostsByTerminalID[terminalID] = WeakGhosttyHostBox(host: host)
+    }
     return UnsafeMutableRawPointer(bitPattern: identifier)!
   }
 
@@ -52,6 +59,31 @@ private enum GhosttyHostRegistry {
     lock.lock()
     hosts.removeValue(forKey: identifier)
     lock.unlock()
+  }
+
+  static func unregister(_ userdata: UnsafeMutableRawPointer?, terminalID: UUID?) {
+    guard let userdata else { return }
+    let identifier = UInt(bitPattern: userdata)
+
+    lock.lock()
+    hosts.removeValue(forKey: identifier)
+    if let terminalID {
+      hostsByTerminalID.removeValue(forKey: terminalID)
+    }
+    lock.unlock()
+  }
+
+  static func host(for terminalID: UUID) -> GhosttyTerminalHostView? {
+    lock.lock()
+    defer { lock.unlock() }
+
+    guard let box = hostsByTerminalID[terminalID] else { return nil }
+    if let host = box.host {
+      return host
+    }
+
+    hostsByTerminalID.removeValue(forKey: terminalID)
+    return nil
   }
 }
 
@@ -110,6 +142,7 @@ private func ghosttyCloseSurfaceCallback(
 struct GhosttyTerminalView: NSViewRepresentable {
   let controller: any TerminalProcessControlling
   let launch: TerminalLaunchConfiguration
+  let terminalID: UUID?
   var terminalFontSize: CGFloat = 12
   var waitAfterCommand = true
   var onProcessExit: (() -> Void)?
@@ -119,12 +152,14 @@ struct GhosttyTerminalView: NSViewRepresentable {
   init(agent: ReviewerAgentInstance, terminalFontSize: CGFloat = 12) {
     self.controller = agent
     self.launch = .forReviewerAgent(agent)
+    self.terminalID = nil
     self.terminalFontSize = terminalFontSize
   }
 
   init(
     controller: any TerminalProcessControlling,
     launch: TerminalLaunchConfiguration,
+    terminalID: UUID? = nil,
     terminalFontSize: CGFloat = 12,
     waitAfterCommand: Bool = true,
     onProcessExit: (() -> Void)? = nil,
@@ -132,6 +167,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
   ) {
     self.controller = controller
     self.launch = launch
+    self.terminalID = terminalID
     self.terminalFontSize = terminalFontSize
     self.waitAfterCommand = waitAfterCommand
     self.onProcessExit = onProcessExit
@@ -146,6 +182,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
     return GhosttyTerminalHostView(
       controller: controller,
       launch: launch,
+      terminalID: terminalID,
       terminalFontSize: terminalFontSize,
       waitAfterCommand: waitAfterCommand,
       onProcessExit: onProcessExit,
@@ -162,11 +199,55 @@ struct GhosttyTerminalView: NSViewRepresentable {
   static func dismantleNSView(_ nsView: GhosttyTerminalHostView, coordinator: ()) {
     nsView.shutdown()
   }
+
+  @MainActor
+  static func injectText(
+    _ text: String,
+    into terminalID: UUID,
+    timeout: Duration = .seconds(2)
+  ) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now + timeout
+
+    while clock.now < deadline {
+      if let host = GhosttyHostRegistry.host(for: terminalID) {
+        host.injectText(text)
+        return true
+      }
+
+      try? await Task.sleep(for: .milliseconds(50))
+    }
+
+    return false
+  }
+
+  @MainActor
+  static func injectPrompt(
+    _ prompt: String,
+    into terminalID: UUID,
+    timeout: Duration = .seconds(2)
+  ) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now + timeout
+
+    while clock.now < deadline {
+      if let host = GhosttyHostRegistry.host(for: terminalID) {
+        host.injectText(prompt)
+        host.submitReturn()
+        return true
+      }
+
+      try? await Task.sleep(for: .milliseconds(50))
+    }
+
+    return false
+  }
 }
 
 final class GhosttyTerminalHostView: NSView {
   private let controller: any TerminalProcessControlling
   private let launch: TerminalLaunchConfiguration
+  private let terminalID: UUID?
   private var terminalFontSize: CGFloat
   private let waitAfterCommand: Bool
   private var onProcessExit: (() -> Void)?
@@ -198,6 +279,7 @@ final class GhosttyTerminalHostView: NSView {
   init(
     controller: any TerminalProcessControlling,
     launch: TerminalLaunchConfiguration,
+    terminalID: UUID?,
     terminalFontSize: CGFloat,
     waitAfterCommand: Bool,
     onProcessExit: (() -> Void)?,
@@ -205,12 +287,13 @@ final class GhosttyTerminalHostView: NSView {
   ) {
     self.controller = controller
     self.launch = launch
+    self.terminalID = terminalID
     self.terminalFontSize = terminalFontSize
     self.waitAfterCommand = waitAfterCommand
     self.onProcessExit = onProcessExit
     self.pendingFocusRequestID = focusRequestID
     super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
-    self.callbackUserdata = GhosttyHostRegistry.register(self)
+    self.callbackUserdata = GhosttyHostRegistry.register(self, terminalID: terminalID)
     initializeTerminal()
   }
 
@@ -220,7 +303,7 @@ final class GhosttyTerminalHostView: NSView {
   }
 
   func shutdown() {
-    GhosttyHostRegistry.unregister(callbackUserdata)
+    GhosttyHostRegistry.unregister(callbackUserdata, terminalID: terminalID)
     callbackUserdata = nil
 
     processPollTimer?.invalidate()
@@ -256,6 +339,22 @@ final class GhosttyTerminalHostView: NSView {
   func updateFocusRequestID(_ focusRequestID: UUID?) {
     pendingFocusRequestID = focusRequestID
     applyPendingFocusRequestIfNeeded()
+  }
+
+  func injectText(_ characters: String) {
+    guard let surface else { return }
+    if markedText.length > 0 {
+      markedText.mutableString.setString("")
+      syncPreedit()
+    }
+
+    characters.withCString { pointer in
+      ghostty_surface_text(surface, pointer, UInt(characters.lengthOfBytes(using: .utf8)))
+    }
+  }
+
+  func submitReturn() {
+    insertText("\r", replacementRange: NSRange(location: NSNotFound, length: 0))
   }
 
   override func layout() {

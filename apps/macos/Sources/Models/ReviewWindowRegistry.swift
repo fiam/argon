@@ -1,8 +1,17 @@
+import AppKit
 import Foundation
 
 @MainActor
 @Observable
 final class ReviewWindowRegistry {
+  private final class Registration {
+    weak var window: NSWindow?
+
+    init(window: NSWindow) {
+      self.window = window
+    }
+  }
+
   enum WindowState: Equatable {
     case idle
     case opening
@@ -10,14 +19,15 @@ final class ReviewWindowRegistry {
   }
 
   private var openingRepoRoots = Set<String>()
-  private var openWindowCountsByRepoRoot: [String: Int] = [:]
+  private var registrationsByRepoRoot: [String: [Registration]] = [:]
 
   func state(for repoRoot: String) -> WindowState {
     let normalized = normalizedPath(repoRoot)
     if openingRepoRoots.contains(normalized) {
       return .opening
     }
-    if (openWindowCountsByRepoRoot[normalized] ?? 0) > 0 {
+    pruneDeadRegistrations(for: normalized)
+    if !(registrationsByRepoRoot[normalized] ?? []).isEmpty {
       return .open
     }
     return .idle
@@ -27,25 +37,45 @@ final class ReviewWindowRegistry {
     openingRepoRoots.insert(normalizedPath(repoRoot))
   }
 
-  func markOpened(repoRoot: String) {
+  func register(window: NSWindow, repoRoot: String) {
     let normalized = normalizedPath(repoRoot)
     openingRepoRoots.remove(normalized)
-    openWindowCountsByRepoRoot[normalized, default: 0] += 1
+    pruneDeadRegistrations(for: normalized)
+
+    if registrationsByRepoRoot[normalized]?.contains(where: { $0.window === window }) == true {
+      return
+    }
+
+    registrationsByRepoRoot[normalized, default: []].append(Registration(window: window))
   }
 
-  func markClosed(repoRoot: String) {
+  func unregister(window: NSWindow, repoRoot: String) {
     let normalized = normalizedPath(repoRoot)
     openingRepoRoots.remove(normalized)
+    guard var registrations = registrationsByRepoRoot[normalized] else { return }
 
-    guard let count = openWindowCountsByRepoRoot[normalized] else { return }
-    if count <= 1 {
-      openWindowCountsByRepoRoot.removeValue(forKey: normalized)
+    registrations.removeAll { registration in
+      registration.window == nil || registration.window === window
+    }
+
+    if registrations.isEmpty {
+      registrationsByRepoRoot.removeValue(forKey: normalized)
     } else {
-      openWindowCountsByRepoRoot[normalized] = count - 1
+      registrationsByRepoRoot[normalized] = registrations
     }
   }
 
   private func normalizedPath(_ path: String) -> String {
     URL(fileURLWithPath: path).standardizedFileURL.path
+  }
+
+  private func pruneDeadRegistrations(for repoRoot: String) {
+    guard var registrations = registrationsByRepoRoot[repoRoot] else { return }
+    registrations.removeAll { $0.window == nil }
+    if registrations.isEmpty {
+      registrationsByRepoRoot.removeValue(forKey: repoRoot)
+    } else {
+      registrationsByRepoRoot[repoRoot] = registrations
+    }
   }
 }

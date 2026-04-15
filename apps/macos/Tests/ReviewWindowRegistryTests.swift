@@ -1,3 +1,4 @@
+import AppKit
 import Testing
 
 @testable import Argon
@@ -10,16 +11,17 @@ struct ReviewWindowRegistryTests {
   func windowStateMovesFromOpeningToOpenToIdle() {
     let registry = ReviewWindowRegistry()
     let repoRoot = "/tmp/repo"
+    let window = NSWindow()
 
     #expect(registry.state(for: repoRoot) == .idle)
 
     registry.markOpening(repoRoot: repoRoot)
     #expect(registry.state(for: repoRoot) == .opening)
 
-    registry.markOpened(repoRoot: repoRoot)
+    registry.register(window: window, repoRoot: repoRoot)
     #expect(registry.state(for: repoRoot) == .open)
 
-    registry.markClosed(repoRoot: repoRoot)
+    registry.unregister(window: window, repoRoot: repoRoot)
     #expect(registry.state(for: repoRoot) == .idle)
   }
 
@@ -37,15 +39,32 @@ struct ReviewWindowRegistryTests {
   func openStatePersistsUntilLastWindowCloses() {
     let registry = ReviewWindowRegistry()
     let repoRoot = "/tmp/repo"
+    let firstWindow = NSWindow()
+    let secondWindow = NSWindow()
 
-    registry.markOpened(repoRoot: repoRoot)
-    registry.markOpened(repoRoot: repoRoot)
+    registry.register(window: firstWindow, repoRoot: repoRoot)
+    registry.register(window: secondWindow, repoRoot: repoRoot)
     #expect(registry.state(for: repoRoot) == .open)
 
-    registry.markClosed(repoRoot: repoRoot)
+    registry.unregister(window: firstWindow, repoRoot: repoRoot)
     #expect(registry.state(for: repoRoot) == .open)
 
-    registry.markClosed(repoRoot: repoRoot)
+    registry.unregister(window: secondWindow, repoRoot: repoRoot)
+    #expect(registry.state(for: repoRoot) == .idle)
+  }
+
+  @Test("registering the same window twice does not require double close")
+  @MainActor
+  func registeringTheSameWindowTwiceDoesNotRequireDoubleClose() {
+    let registry = ReviewWindowRegistry()
+    let repoRoot = "/tmp/repo"
+    let window = NSWindow()
+
+    registry.register(window: window, repoRoot: repoRoot)
+    registry.register(window: window, repoRoot: repoRoot)
+    #expect(registry.state(for: repoRoot) == .open)
+
+    registry.unregister(window: window, repoRoot: repoRoot)
     #expect(registry.state(for: repoRoot) == .idle)
   }
 }

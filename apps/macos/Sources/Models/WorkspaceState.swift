@@ -22,6 +22,9 @@ final class WorkspaceState {
   var isCreatingWorktree = false
   var isPresentingTabCreationSheet = false
   var isPresentingAgentLaunchSheet = false
+  var isPresentingReviewAgentPicker = false
+  var reviewAgentCandidates: [WorkspaceTerminalTab] = []
+  var pendingReviewAgentTabID: UUID?
   var terminalTabsByWorktreePath: [String: [WorkspaceTerminalTab]] = [:]
   var selectedTerminalTabIDsByWorktreePath: [String: UUID] = [:]
   var terminalFocusRequestIDsByWorktreePath: [String: UUID] = [:]
@@ -33,6 +36,9 @@ final class WorkspaceState {
   private var workspaceReloadTask: Task<Void, Never>?
   private var worktreeRefreshTasksByPath: [String: Task<Void, Never>] = [:]
   private var selectionLoadRequestID: UUID?
+  private var shouldLaunchReviewAfterNextAgentTab = false
+  private var stagedReviewLaunch: StagedReviewLaunch?
+  private var preparedReviewTargetsByAgentTabID: [UUID: ReviewTarget] = [:]
 
   init(target: WorkspaceTarget) {
     self.target = target
@@ -242,8 +248,9 @@ final class WorkspaceState {
     return parentURL.appendingPathComponent("\(repoName)-\(suffix)").path
   }
 
-  func presentAgentLaunchSheet() {
+  func presentAgentLaunchSheet(reviewAfterLaunch: Bool = false) {
     guard selectedWorktree != nil else { return }
+    shouldLaunchReviewAfterNextAgentTab = reviewAfterLaunch
     isPresentingAgentLaunchSheet = true
   }
 
@@ -258,6 +265,70 @@ final class WorkspaceState {
 
   func dismissAgentLaunchSheet() {
     isPresentingAgentLaunchSheet = false
+    shouldLaunchReviewAfterNextAgentTab = false
+  }
+
+  func beginReviewLaunchFlow() {
+    let candidates = eligibleReviewAgentTabs()
+
+    switch candidates.count {
+    case 0:
+      presentAgentLaunchSheet(reviewAfterLaunch: true)
+    case 1:
+      pendingReviewAgentTabID = candidates[0].id
+    default:
+      reviewAgentCandidates = candidates
+      isPresentingReviewAgentPicker = true
+    }
+  }
+
+  func chooseReviewAgentTab(_ tabID: UUID) {
+    pendingReviewAgentTabID = tabID
+    dismissReviewAgentPicker()
+  }
+
+  func dismissReviewAgentPicker() {
+    isPresentingReviewAgentPicker = false
+    reviewAgentCandidates = []
+  }
+
+  func launchAgent(using options: WorkspaceAgentLaunchOptions) async throws {
+    guard shouldLaunchReviewAfterNextAgentTab else {
+      _ = openAgentTab(options.buildRequest())
+      return
+    }
+
+    let target = try await createReviewTarget()
+
+    do {
+      let prompt = try await Task.detached {
+        try ArgonCLI.agentPrompt(sessionId: target.sessionId, repoRoot: target.repoRoot)
+      }.value
+
+      guard let tab = openAgentTab(options.buildRequest(prompt: prompt)) else {
+        throw GitService.GitError.commandFailed("Open a worktree before launching a review agent.")
+      }
+
+      stageReviewLaunch(target: target, agentTabID: tab.id)
+      shouldLaunchReviewAfterNextAgentTab = false
+    } catch {
+      try? await Task.detached {
+        try ArgonCLI.closeSession(sessionId: target.sessionId, repoRoot: target.repoRoot)
+      }.value
+      refreshReviewSnapshot(for: target.repoRoot)
+      throw error
+    }
+  }
+
+  func activateStagedReviewLaunch() {
+    guard let stagedReviewLaunch else { return }
+    preparedReviewTargetsByAgentTabID[stagedReviewLaunch.agentTabID] = stagedReviewLaunch.target
+    pendingReviewAgentTabID = stagedReviewLaunch.agentTabID
+    self.stagedReviewLaunch = nil
+  }
+
+  func consumePreparedReviewTarget(for agentTabID: UUID) -> ReviewTarget? {
+    preparedReviewTargetsByAgentTabID.removeValue(forKey: agentTabID)
   }
 
   func openShellTab(sandboxed: Bool = false) {
@@ -292,8 +363,9 @@ final class WorkspaceState {
     insertTerminalTab(tab, for: worktreePath)
   }
 
-  func openAgentTab(_ request: WorkspaceAgentLaunchRequest) {
-    guard let worktree = selectedWorktree else { return }
+  @discardableResult
+  func openAgentTab(_ request: WorkspaceAgentLaunchRequest) -> WorkspaceTerminalTab? {
+    guard let worktree = selectedWorktree else { return nil }
 
     let worktreePath = normalizedPath(worktree.path)
     let ordinal = nextOrdinal(in: worktreePath) { tab in
@@ -325,6 +397,7 @@ final class WorkspaceState {
     )
 
     insertTerminalTab(tab, for: worktreePath)
+    return tab
   }
 
   func selectTerminalTab(_ tabID: UUID) {
@@ -354,11 +427,11 @@ final class WorkspaceState {
     }
   }
 
-  func handleTerminalExit(_ tabID: UUID, shellExitBehavior: WorkspaceShellExitBehavior) {
+  func handleTerminalExit(_ tabID: UUID, exitBehavior: WorkspaceFinishedTerminalBehavior) {
     guard let tab = terminalTab(for: tabID) else { return }
     tab.isRunning = false
 
-    guard case .shell = tab.kind, shellExitBehavior == .closeTab else { return }
+    guard exitBehavior == .autoClose else { return }
 
     Task { @MainActor [weak self] in
       self?.closeTerminalTab(tabID)
@@ -642,6 +715,16 @@ final class WorkspaceState {
       .first { $0.id == tabID }
   }
 
+  private func eligibleReviewAgentTabs() -> [WorkspaceTerminalTab] {
+    selectedTerminalTabs.filter { tab in
+      guard tab.isRunning else { return false }
+      if case .agent = tab.kind {
+        return true
+      }
+      return false
+    }
+  }
+
   private func slugifiedBranchName(_ branchName: String) -> String {
     branchName
       .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -656,6 +739,20 @@ final class WorkspaceState {
 
   private func requestTerminalFocus(in worktreePath: String) {
     terminalFocusRequestIDsByWorktreePath[worktreePath] = UUID()
+  }
+
+  func stageReviewLaunch(target: ReviewTarget, agentTabID: UUID) {
+    stagedReviewLaunch = StagedReviewLaunch(target: target, agentTabID: agentTabID)
+  }
+
+  private func refreshReviewSnapshot(for worktreePath: String) {
+    let normalizedPath = normalizedPath(worktreePath)
+    let snapshots = SessionLoader.latestReviewSnapshots(forRepoRoots: [normalizedPath])
+    if let snapshot = snapshots[normalizedPath] {
+      reviewSnapshotsByWorktreePath[normalizedPath] = snapshot
+    } else {
+      reviewSnapshotsByWorktreePath.removeValue(forKey: normalizedPath)
+    }
   }
 }
 
@@ -687,4 +784,9 @@ private struct SelectionDetails: Sendable {
   let diffStat: String
   let pullRequestURL: String?
   let reviewTarget: ResolvedTarget?
+}
+
+private struct StagedReviewLaunch {
+  let target: ReviewTarget
+  let agentTabID: UUID
 }

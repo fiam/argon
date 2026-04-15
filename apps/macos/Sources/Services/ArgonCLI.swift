@@ -217,6 +217,17 @@ enum ArgonCLI {
       ])
   }
 
+  static func agentPrompt(sessionId: String, repoRoot: String) throws -> String {
+    try run(
+      repoRoot: repoRoot,
+      args: [
+        "agent", "prompt",
+        "--session", sessionId,
+      ]
+    )
+    .trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
   /// Get the reviewer prompt from the CLI (includes full context: mode, refs, commands).
   static func reviewerPrompt(
     sessionId: String, repoRoot: String, nickname: String
