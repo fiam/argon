@@ -73,6 +73,7 @@ final class AppState {
 
   var sessionId: String?
   var repoRoot: String?
+  var reviewLaunchContext: ReviewLaunchContext = .standalone
 
   private var fileWatcher: FileWatcher?
   private var sessionWatcher: FileWatcher?
@@ -91,6 +92,14 @@ final class AppState {
     applyDefaultDiffMode()
     self.sessionId = sessionId
     self.repoRoot = repoRoot
+  }
+
+  init(sessionId: String, repoRoot: String, reviewLaunchContext: ReviewLaunchContext) {
+    uiTestAutomationConfig = .current()
+    applyDefaultDiffMode()
+    self.sessionId = sessionId
+    self.repoRoot = repoRoot
+    self.reviewLaunchContext = reviewLaunchContext
   }
 
   private func applyDefaultDiffMode() {
@@ -630,6 +639,7 @@ final class AppState {
     guard let sessionId, let repoRoot else { return }
     do {
       try ArgonCLI.closeSession(sessionId: sessionId, repoRoot: repoRoot)
+      ReviewSessionLifecycle.postSessionClosed(repoRoot: repoRoot)
       refreshSession()
     } catch {}
     stopPolling()
@@ -731,12 +741,21 @@ final class AppState {
     guard let session else { return false }
     return session.status != .approved && session.status != .closed
       && coderConnectionState == .awaitingConnection
+      && reviewLaunchContext == .standalone
+  }
+
+  var coderHandoffPendingFromWorkspace: Bool {
+    reviewLaunchContext == .coderHandoff && coderConnectionState == .awaitingConnection
+  }
+
+  var showsCoderSetupActions: Bool {
+    reviewLaunchContext == .standalone
   }
 
   var coderConnectionLabel: String {
     switch coderConnectionState {
     case .awaitingConnection:
-      "No coder yet"
+      reviewLaunchContext == .coderHandoff ? "Connecting coder" : "No coder yet"
     case .connected:
       "Coder connected"
     }
@@ -745,9 +764,14 @@ final class AppState {
   var coderConnectionHelpText: String {
     switch coderConnectionState {
     case .awaitingConnection:
-      "No coder agent heartbeat yet. Copy Agent Prompt to hand off this session."
+      if reviewLaunchContext == .coderHandoff {
+        return
+          "Argon handed this session to the selected coder tab and is waiting for the first heartbeat."
+      }
+      return "No coder agent heartbeat yet. Copy Agent Prompt to hand off this session."
     case .connected(let lastSeenAt):
-      "A coder agent has connected to this session. Last heartbeat \(relativeTimeDescription(since: lastSeenAt))."
+      return
+        "A coder agent has connected to this session. Last heartbeat \(relativeTimeDescription(since: lastSeenAt))."
     }
   }
 

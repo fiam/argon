@@ -139,6 +139,34 @@ final class ArgonUITests: XCTestCase {
     )
   }
 
+  @MainActor
+  func testCoderHandoffLaunchHidesPromptSetupActions() throws {
+    let target = try Self.createSession()
+    let app = XCUIApplication()
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.argonHome)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--session-id", target.sessionId,
+      "--repo-root", target.repoRoot,
+      "--review-launch-context", "coderHandoff",
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+
+    let connectionBadge = app.otherElements["CoderConnectionBadge"]
+    XCTAssertTrue(connectionBadge.waitForExistence(timeout: 10))
+    XCTAssertTrue(app.staticTexts["Connecting coder"].exists)
+    XCTAssertFalse(app.buttons["CoderHandoffButton"].exists)
+    XCTAssertTrue(app.buttons["launch-reviewer-button"].exists)
+  }
+
   private struct ReviewTarget {
     let sessionId: String
     let repoRoot: String

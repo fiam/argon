@@ -40,8 +40,10 @@ struct SessionHeader: View {
 
       if session.status != .approved && session.status != .closed {
         AgentLaunchButton()
-        HandoffButton {
-          showAgentPromptToast()
+        if appState.showsCoderSetupActions {
+          HandoffButton {
+            showAgentPromptToast()
+          }
         }
         CoderConnectionBadge()
         Divider().frame(height: 16)
@@ -568,7 +570,7 @@ private struct CoderConnectionBadge: View {
   private var color: Color {
     switch appState.coderConnectionState {
     case .awaitingConnection:
-      .orange
+      appState.coderHandoffPendingFromWorkspace ? .blue : .orange
     case .connected:
       .green
     }
@@ -641,7 +643,9 @@ struct StatusBadge: View {
     case .awaitingReviewer:
       "Waiting for reviewer feedback."
     case .awaitingAgent:
-      if appState.coderNeedsPromptHandoff {
+      if appState.coderHandoffPendingFromWorkspace {
+        "Waiting for the selected coder tab to connect to this review session."
+      } else if appState.coderNeedsPromptHandoff {
         "Waiting for a coder agent to connect. Use Copy Agent Prompt to hand off the session."
       } else {
         "Waiting for the coder agent to respond to the current review feedback. \(appState.coderConnectionHelpText)"

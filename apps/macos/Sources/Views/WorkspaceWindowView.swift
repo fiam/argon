@@ -472,6 +472,7 @@ private struct WorkspaceTerminalDeck: View {
         WorkspaceAgentTabSheet(
           isPresented: $workspaceState.isPresentingAgentLaunchSheet,
           allowsCustomCommand: workspaceState.isPreparingReviewAgentLaunch,
+          isReviewHandoffRequest: workspaceState.isPreparingReviewAgentLaunch,
           onLaunch: { options in
             do {
               try await workspaceState.launchAgent(using: options)
@@ -963,6 +964,7 @@ private struct WorkspaceAgentTabSheet: View {
   @Environment(AgentAvailability.self) private var agentAvailability
   @Binding var isPresented: Bool
   let allowsCustomCommand: Bool
+  let isReviewHandoffRequest: Bool
   let onLaunch: @MainActor (WorkspaceAgentLaunchOptions) async -> Bool
   let onDidLaunch: @MainActor () -> Void
 
@@ -990,15 +992,11 @@ private struct WorkspaceAgentTabSheet: View {
           .font(.title2)
           .foregroundStyle(.blue)
         VStack(alignment: .leading, spacing: 2) {
-          Text("New Agent Tab")
+          Text(sheetTitle)
             .font(.title2.weight(.semibold))
-          Text(
-            allowsCustomCommand
-              ? "Launch a saved agent or custom command in the selected worktree."
-              : "Launch a saved agent in the selected worktree."
-          )
-          .font(.callout)
-          .foregroundStyle(.secondary)
+          Text(sheetSubtitle)
+            .font(.callout)
+            .foregroundStyle(.secondary)
         }
       }
 
@@ -1117,6 +1115,20 @@ private struct WorkspaceAgentTabSheet: View {
     }
     guard let selectedSavedAgent else { return false }
     return agentAvailability.status(for: selectedSavedAgent) == .available
+  }
+
+  private var sheetTitle: String {
+    isReviewHandoffRequest ? "Launch Review Agent" : "New Agent Tab"
+  }
+
+  private var sheetSubtitle: String {
+    if isReviewHandoffRequest {
+      return "Launch an agent to handle review comments for this worktree."
+    }
+
+    return allowsCustomCommand
+      ? "Launch a saved agent or custom command in the selected worktree."
+      : "Launch a saved agent in the selected worktree."
   }
 
   private func launch() {
@@ -1384,9 +1396,9 @@ private struct WorkspaceInspectorPane: View {
                   title: "Review",
                   systemImage: "arrow.trianglehead.branch",
                   showsProgress: isPreparingReview(for: worktree.path),
-                  isDisabled: reviewButtonDisabled(for: worktree.path)
+                  isDisabled: workspaceState.isPresentingReviewAgentPicker
                 ) {
-                  workspaceState.beginReviewLaunchFlow()
+                  handleReviewButton(for: worktree.path)
                 }
 
                 HStack(spacing: 8) {
@@ -1463,7 +1475,7 @@ private struct WorkspaceInspectorPane: View {
         if let preparedTarget = workspaceState.consumePreparedReviewTarget(for: agentTabID) {
           target = preparedTarget
         } else {
-          target = try await workspaceState.createReviewTarget()
+          target = try await workspaceState.createReviewTarget(launchContext: .coderHandoff)
           do {
             let prompt = try await Task.detached {
               try ArgonCLI.agentPrompt(sessionId: target.sessionId, repoRoot: target.repoRoot)
@@ -1478,23 +1490,22 @@ private struct WorkspaceInspectorPane: View {
               "Opened the review, but Argon could not build the agent handoff prompt: \(error.localizedDescription)"
           }
         }
-        reviewWindowRegistry.markOpening(repoRoot: target.repoRoot)
-        openWindow(value: target)
+        reviewWindowRegistry.open(target: target) { target in
+          openWindow(value: target)
+        }
       } catch {
         workspaceState.errorMessage = error.localizedDescription
       }
     }
   }
 
-  private func reviewButtonDisabled(for worktreePath: String) -> Bool {
-    switch reviewWindowRegistry.state(for: worktreePath) {
-    case .idle:
+  private func handleReviewButton(for worktreePath: String) {
+    if reviewWindowRegistry.bringToFront(repoRoot: worktreePath) {
       return
-        workspaceState.isLaunchingReview
-        || workspaceState.isPresentingReviewAgentPicker
-    case .opening, .open:
-      return true
     }
+
+    guard reviewWindowRegistry.state(for: worktreePath) != .opening else { return }
+    workspaceState.beginReviewLaunchFlow()
   }
 
   private func isPreparingReview(for worktreePath: String) -> Bool {

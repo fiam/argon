@@ -354,7 +354,44 @@ final class GhosttyTerminalHostView: NSView {
   }
 
   func submitReturn() {
-    insertText("\r", replacementRange: NSRange(location: NSNotFound, length: 0))
+    window?.makeFirstResponder(self)
+
+    let timestamp = ProcessInfo.processInfo.systemUptime
+    let windowNumber = window?.windowNumber ?? 0
+    let keyCode: UInt16 = 36
+
+    guard
+      let keyDown = NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [],
+        timestamp: timestamp,
+        windowNumber: windowNumber,
+        context: nil,
+        characters: "\r",
+        charactersIgnoringModifiers: "\r",
+        isARepeat: false,
+        keyCode: keyCode
+      ),
+      let keyUp = NSEvent.keyEvent(
+        with: .keyUp,
+        location: .zero,
+        modifierFlags: [],
+        timestamp: timestamp,
+        windowNumber: windowNumber,
+        context: nil,
+        characters: "\r",
+        charactersIgnoringModifiers: "\r",
+        isARepeat: false,
+        keyCode: keyCode
+      )
+    else {
+      insertText("\n", replacementRange: NSRange(location: NSNotFound, length: 0))
+      return
+    }
+
+    _ = sendKeyAction(GHOSTTY_ACTION_PRESS, event: keyDown)
+    _ = sendKeyAction(GHOSTTY_ACTION_RELEASE, event: keyUp)
   }
 
   override func layout() {

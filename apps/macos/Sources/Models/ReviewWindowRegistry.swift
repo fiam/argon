@@ -6,9 +6,15 @@ import Foundation
 final class ReviewWindowRegistry {
   private final class Registration {
     weak var window: NSWindow?
+    private let closeObserver: NSObjectProtocol
 
-    init(window: NSWindow) {
+    init(window: NSWindow, closeObserver: NSObjectProtocol) {
       self.window = window
+      self.closeObserver = closeObserver
+    }
+
+    deinit {
+      NotificationCenter.default.removeObserver(closeObserver)
     }
   }
 
@@ -20,6 +26,17 @@ final class ReviewWindowRegistry {
 
   private var openingRepoRoots = Set<String>()
   private var registrationsByRepoRoot: [String: [Registration]] = [:]
+
+  func open(target: ReviewTarget, openWindow: (ReviewTarget) -> Void) {
+    let normalized = normalizedPath(target.repoRoot)
+    if bringToFront(repoRoot: normalized) {
+      return
+    }
+
+    guard !openingRepoRoots.contains(normalized) else { return }
+    openingRepoRoots.insert(normalized)
+    openWindow(target)
+  }
 
   func state(for repoRoot: String) -> WindowState {
     let normalized = normalizedPath(repoRoot)
@@ -46,7 +63,18 @@ final class ReviewWindowRegistry {
       return
     }
 
-    registrationsByRepoRoot[normalized, default: []].append(Registration(window: window))
+    let closeObserver = NotificationCenter.default.addObserver(
+      forName: NSWindow.willCloseNotification,
+      object: window,
+      queue: .main
+    ) { [weak self, weak window] _ in
+      guard let self, let window else { return }
+      self.unregister(window: window, repoRoot: normalized)
+    }
+
+    registrationsByRepoRoot[normalized, default: []].append(
+      Registration(window: window, closeObserver: closeObserver)
+    )
   }
 
   func unregister(window: NSWindow, repoRoot: String) {
@@ -65,8 +93,20 @@ final class ReviewWindowRegistry {
     }
   }
 
-  private func normalizedPath(_ path: String) -> String {
-    URL(fileURLWithPath: path).standardizedFileURL.path
+  @discardableResult
+  func bringToFront(repoRoot: String) -> Bool {
+    let normalized = normalizedPath(repoRoot)
+    pruneDeadRegistrations(for: normalized)
+    guard
+      let window = registrationsByRepoRoot[normalized]?
+        .compactMap(\.window)
+        .last
+    else {
+      return false
+    }
+
+    bringWindowToFront(window)
+    return true
   }
 
   private func pruneDeadRegistrations(for repoRoot: String) {
@@ -77,5 +117,17 @@ final class ReviewWindowRegistry {
     } else {
       registrationsByRepoRoot[repoRoot] = registrations
     }
+  }
+
+  private func bringWindowToFront(_ window: NSWindow) {
+    NSApp.activate(ignoringOtherApps: true)
+    if window.isMiniaturized {
+      window.deminiaturize(nil)
+    }
+    window.makeKeyAndOrderFront(nil)
+  }
+
+  private func normalizedPath(_ path: String) -> String {
+    URL(fileURLWithPath: path).standardizedFileURL.path
   }
 }

@@ -40,6 +40,7 @@ final class WorkspaceState {
   private var shouldLaunchReviewAfterNextAgentTab = false
   private var stagedReviewLaunch: StagedReviewLaunch?
   private var preparedReviewTargetsByAgentTabID: [UUID: ReviewTarget] = [:]
+  nonisolated(unsafe) private var reviewSessionCloseObserver: NSObjectProtocol?
 
   init(
     target: WorkspaceTarget,
@@ -49,6 +50,22 @@ final class WorkspaceState {
     self.worktreeRootPathProvider = worktreeRootPathProvider
     self.selectedWorktreePath = target.selectedWorktreePath ?? target.repoRoot
     self.launchWarningMessage = Self.launchWarningMessage(for: target)
+    reviewSessionCloseObserver = NotificationCenter.default.addObserver(
+      forName: .reviewSessionDidClose,
+      object: nil,
+      queue: .main
+    ) { [weak self] notification in
+      guard let repoRoot = ReviewSessionLifecycle.repoRoot(from: notification) else { return }
+      Task { @MainActor [weak self] in
+        self?.refreshReviewSnapshot(for: repoRoot)
+      }
+    }
+  }
+
+  deinit {
+    if let reviewSessionCloseObserver {
+      NotificationCenter.default.removeObserver(reviewSessionCloseObserver)
+    }
   }
 
   var repoName: String {
@@ -164,7 +181,9 @@ final class WorkspaceState {
     loadSelectedWorktreeDetails(for: normalizedPath)
   }
 
-  func createReviewTarget() async throws -> ReviewTarget {
+  func createReviewTarget(launchContext: ReviewLaunchContext = .standalone) async throws
+    -> ReviewTarget
+  {
     guard let selectedWorktree else {
       throw GitService.GitError.commandFailed("Select a worktree before starting review.")
     }
@@ -172,9 +191,14 @@ final class WorkspaceState {
     isLaunchingReview = true
     defer { isLaunchingReview = false }
     let worktreePath = normalizedPath(selectedWorktree.path)
-    let reviewTarget = try await Task.detached {
+    var reviewTarget = try await Task.detached {
       try ArgonCLI.createSession(repoRoot: selectedWorktree.path)
     }.value
+    reviewTarget = ReviewTarget(
+      sessionId: reviewTarget.sessionId,
+      repoRoot: reviewTarget.repoRoot,
+      launchContext: launchContext
+    )
 
     if let session = try? SessionLoader.loadSession(
       sessionId: reviewTarget.sessionId,
@@ -309,7 +333,7 @@ final class WorkspaceState {
       return
     }
 
-    let target = try await createReviewTarget()
+    let target = try await createReviewTarget(launchContext: .coderHandoff)
 
     do {
       let prompt = try await Task.detached {
@@ -756,7 +780,7 @@ final class WorkspaceState {
     stagedReviewLaunch = StagedReviewLaunch(target: target, agentTabID: agentTabID)
   }
 
-  private func refreshReviewSnapshot(for worktreePath: String) {
+  func refreshReviewSnapshot(for worktreePath: String) {
     let normalizedPath = normalizedPath(worktreePath)
     let snapshots = SessionLoader.latestReviewSnapshots(forRepoRoots: [normalizedPath])
     if let snapshot = snapshots[normalizedPath] {

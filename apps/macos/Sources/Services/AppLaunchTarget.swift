@@ -9,6 +9,7 @@ enum AppLaunchTarget {
   static func current(arguments: [String] = ProcessInfo.processInfo.arguments) -> LaunchRequest? {
     var sessionId: String?
     var repoRoot: String?
+    var reviewLaunchContext: ReviewLaunchContext = .standalone
     var workspaceRepoRoot: String?
     var workspaceCommonDir: String?
     var selectedWorktreePath: String?
@@ -21,6 +22,10 @@ enum AppLaunchTarget {
         index += 2
       case "--repo-root" where index + 1 < arguments.count:
         repoRoot = arguments[index + 1]
+        index += 2
+      case "--review-launch-context" where index + 1 < arguments.count:
+        reviewLaunchContext =
+          ReviewLaunchContext(rawValue: arguments[index + 1]) ?? .standalone
         index += 2
       case "--workspace-repo-root" where index + 1 < arguments.count:
         workspaceRepoRoot = arguments[index + 1]
@@ -37,7 +42,12 @@ enum AppLaunchTarget {
     }
 
     if let sessionId, let repoRoot {
-      return .review(ReviewTarget(sessionId: sessionId, repoRoot: repoRoot))
+      return .review(
+        ReviewTarget(
+          sessionId: sessionId,
+          repoRoot: repoRoot,
+          launchContext: reviewLaunchContext
+        ))
     }
 
     guard let workspaceRepoRoot, let workspaceCommonDir else { return nil }

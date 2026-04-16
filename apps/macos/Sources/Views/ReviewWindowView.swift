@@ -13,7 +13,8 @@ struct ReviewWindowView: View {
     self._appState = State(
       initialValue: AppState(
         sessionId: target.sessionId,
-        repoRoot: target.repoRoot
+        repoRoot: target.repoRoot,
+        reviewLaunchContext: target.launchContext
       ))
   }
 

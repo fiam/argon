@@ -387,6 +387,60 @@ struct WorkspaceStateTests {
     #expect(state.selectedDiffStat == "2 files changed")
   }
 
+  @Test("review session close notifications refresh workspace review snapshots")
+  @MainActor
+  func reviewSessionCloseNotificationsRefreshWorkspaceReviewSnapshots() async throws {
+    let storageRoot = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: storageRoot, withIntermediateDirectories: true)
+    let originalArgonHome = ProcessInfo.processInfo.environment["ARGON_HOME"]
+    defer {
+      if let originalArgonHome {
+        setenv("ARGON_HOME", originalArgonHome, 1)
+      } else {
+        unsetenv("ARGON_HOME")
+      }
+      try? FileManager.default.removeItem(at: storageRoot)
+    }
+
+    setenv("ARGON_HOME", storageRoot.path, 1)
+
+    let state = makeState()
+    let sessionsDirectory =
+      storageRoot
+      .appendingPathComponent("sessions")
+      .appendingPathComponent("fixture-repo")
+    try FileManager.default.createDirectory(
+      at: sessionsDirectory,
+      withIntermediateDirectories: true
+    )
+
+    let sessionURL = sessionsDirectory.appendingPathComponent("session.json")
+    try write(
+      session: makeReviewSession(
+        repoRoot: "/tmp/repo",
+        status: .awaitingAgent,
+        updatedAt: Date(timeIntervalSince1970: 10)
+      ),
+      to: sessionURL
+    )
+    state.refreshReviewSnapshot(for: "/tmp/repo")
+    #expect(state.reviewSnapshot(for: "/tmp/repo")?.status == .awaitingAgent)
+
+    try write(
+      session: makeReviewSession(
+        repoRoot: "/tmp/repo",
+        status: .closed,
+        updatedAt: Date(timeIntervalSince1970: 20)
+      ),
+      to: sessionURL
+    )
+    ReviewSessionLifecycle.postSessionClosed(repoRoot: "/tmp/repo")
+    await Task.yield()
+
+    #expect(state.reviewSnapshot(for: "/tmp/repo")?.status == .closed)
+  }
+
   @MainActor
   private func makeState(worktreeRootPath: String = "/tmp/default-worktrees") -> WorkspaceState {
     let target = WorkspaceTarget(
@@ -413,5 +467,35 @@ struct WorkspaceStateTests {
     ]
     state.selectedWorktreePath = "/tmp/repo"
     return state
+  }
+
+  private func makeReviewSession(
+    repoRoot: String,
+    status: SessionStatus,
+    updatedAt: Date
+  ) -> ReviewSession {
+    ReviewSession(
+      id: UUID(),
+      repoRoot: repoRoot,
+      mode: .branch,
+      baseRef: "origin/main",
+      headRef: "feature/workspace",
+      mergeBaseSha: "abc123",
+      changeSummary: "Add workspace tabs",
+      status: status,
+      threads: [],
+      decision: nil,
+      agentLastSeenAt: nil,
+      createdAt: updatedAt,
+      updatedAt: updatedAt
+    )
+  }
+
+  private func write(session: ReviewSession, to url: URL) throws {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    encoder.dateEncodingStrategy = .iso8601
+    let data = try encoder.encode(session)
+    try data.write(to: url)
   }
 }

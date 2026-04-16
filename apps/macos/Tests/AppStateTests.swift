@@ -108,6 +108,23 @@ struct AppStateTests {
     #expect(state.coderConnectionHelpText.contains("Last heartbeat"))
   }
 
+  @Test("workspace handoff reviews hide coder setup actions while waiting to connect")
+  func workspaceHandoffReviewsHideCoderSetupActionsWhileWaitingToConnect() {
+    let state = AppState(
+      sessionId: UUID().uuidString.lowercased(),
+      repoRoot: "/tmp/repo",
+      reviewLaunchContext: .coderHandoff
+    )
+    state.session = makeSessionWithThread()
+
+    #expect(!state.coderHasConnected)
+    #expect(!state.coderNeedsPromptHandoff)
+    #expect(state.coderHandoffPendingFromWorkspace)
+    #expect(!state.showsCoderSetupActions)
+    #expect(state.coderConnectionLabel == "Connecting coder")
+    #expect(state.coderConnectionHelpText.contains("selected coder tab"))
+  }
+
   @Test("expanding omitted context reveals lines from the requested edge")
   func expandingOmittedContextTracksPerBlockState() {
     let state = AppState()
