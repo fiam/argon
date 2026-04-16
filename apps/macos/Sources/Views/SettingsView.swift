@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Displays an agent icon from the asset catalog, falling back to an SF Symbol.
@@ -38,6 +39,8 @@ struct SettingsView: View {
   @AppStorage("defaultDiffViewMode") private var defaultDiffViewMode = "unified"
   @AppStorage("diffFontSize") private var diffFontSize = 13.0
   @AppStorage("terminalFontSize") private var terminalFontSize = 12.0
+  @AppStorage(WorktreeRootSettings.storageKey)
+  private var worktreeRootPath = WorktreeRootSettings.defaultRootPath()
   @AppStorage(WorkspaceFinishedTerminalBehavior.storageKey)
   private var finishedTerminalBehavior = WorkspaceFinishedTerminalBehavior.autoClose.rawValue
   @State private var selectedAgentId: String?
@@ -67,10 +70,33 @@ struct SettingsView: View {
 
       Section("Workspace") {
         Toggle("Close finished terminals automatically", isOn: autoCloseFinishedTerminalsBinding)
+          .help(selectedFinishedTerminalBehavior.helpText)
+      }
 
-        Text(selectedFinishedTerminalBehavior.helpText)
-          .font(.caption)
-          .foregroundStyle(.secondary)
+      Section("Worktrees") {
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Root directory")
+            .foregroundStyle(.secondary)
+
+          Text(currentWorktreeRootPathDisplay)
+            .font(.system(.body, design: .monospaced))
+            .textSelection(.enabled)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help(worktreeRootPath)
+
+          HStack(spacing: 8) {
+            Button("Choose…") {
+              chooseWorktreeRootDirectory()
+            }
+            .controlSize(.small)
+
+            Button("Use Default") {
+              worktreeRootPath = WorktreeRootSettings.defaultRootPath()
+            }
+            .controlSize(.small)
+          }
+        }
       }
     }
     .formStyle(.grouped)
@@ -200,6 +226,25 @@ struct SettingsView: View {
           : WorkspaceFinishedTerminalBehavior.keepOpen.rawValue
       }
     )
+  }
+
+  private var currentWorktreeRootPathDisplay: String {
+    WorktreeRootSettings.abbreviatedPath(worktreeRootPath)
+  }
+
+  private func chooseWorktreeRootDirectory() {
+    let panel = NSOpenPanel()
+    panel.title = "Choose Worktree Root"
+    panel.message = "Select the directory Argon should use for new worktrees."
+    panel.prompt = "Choose"
+    panel.canChooseFiles = false
+    panel.canChooseDirectories = true
+    panel.canCreateDirectories = true
+    panel.allowsMultipleSelection = false
+    panel.directoryURL = URL(fileURLWithPath: worktreeRootPath, isDirectory: true)
+
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    worktreeRootPath = url.standardizedFileURL.path
   }
 }
 

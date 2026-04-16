@@ -30,6 +30,7 @@ final class WorkspaceState {
   var terminalFocusRequestIDsByWorktreePath: [String: UUID] = [:]
 
   let target: WorkspaceTarget
+  private let worktreeRootPathProvider: () -> String
 
   private var commonDirWatcher: FileWatcher?
   private var worktreeWatchersByPath: [String: FileWatcher] = [:]
@@ -40,8 +41,12 @@ final class WorkspaceState {
   private var stagedReviewLaunch: StagedReviewLaunch?
   private var preparedReviewTargetsByAgentTabID: [UUID: ReviewTarget] = [:]
 
-  init(target: WorkspaceTarget) {
+  init(
+    target: WorkspaceTarget,
+    worktreeRootPathProvider: @escaping () -> String = { WorktreeRootSettings.configuredRootPath() }
+  ) {
     self.target = target
+    self.worktreeRootPathProvider = worktreeRootPathProvider
     self.selectedWorktreePath = target.selectedWorktreePath ?? target.repoRoot
     self.launchWarningMessage = Self.launchWarningMessage(for: target)
   }
@@ -245,11 +250,13 @@ final class WorkspaceState {
   }
 
   func suggestedWorktreePath(branchName: String) -> String {
-    let repoRootURL = URL(fileURLWithPath: target.repoRoot).standardizedFileURL
-    let parentURL = repoRootURL.deletingLastPathComponent()
-    let suffix =
+    let worktreeName =
       slugifiedBranchName(branchName).isEmpty ? "worktree" : slugifiedBranchName(branchName)
-    return parentURL.appendingPathComponent("\(repoName)-\(suffix)").path
+    return WorktreeRootSettings.suggestedPath(
+      rootPath: worktreeRootPathProvider(),
+      repoRoot: target.repoRoot,
+      worktreeName: worktreeName
+    )
   }
 
   func presentAgentLaunchSheet(reviewAfterLaunch: Bool = false) {

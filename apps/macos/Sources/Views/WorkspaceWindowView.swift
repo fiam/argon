@@ -1273,7 +1273,7 @@ private struct WorkspaceNewWorktreeSheet: View {
             .textFieldStyle(.roundedBorder)
             .font(.system(.body, design: .monospaced))
 
-          Text("Suggested next to the repo root, but fully editable.")
+          Text("Suggested under the configured worktree root, but fully editable.")
             .font(.caption)
             .foregroundStyle(.secondary)
         }

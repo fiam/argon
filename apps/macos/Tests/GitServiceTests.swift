@@ -213,6 +213,40 @@ struct GitServiceTests {
     #expect(discovered.contains { $0.path == worktree.path && $0.branchName == branchName })
   }
 
+  @Test("createWorktree creates missing parent directories")
+  func createWorktreeCreatesMissingParentDirectories() throws {
+    let fixture = try makeFixtureDirectory()
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let repo = fixture.appendingPathComponent("repo")
+    try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+
+    try git(repo, ["init"])
+    try git(repo, ["config", "user.name", "Argon Test"])
+    try git(repo, ["config", "user.email", "argon-test@example.com"])
+
+    try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    try git(repo, ["add", "a.txt"])
+    try git(repo, ["commit", "-m", "init"])
+    try git(repo, ["branch", "-M", "main"])
+
+    let worktree =
+      fixture
+      .appendingPathComponent("central-root")
+      .appendingPathComponent("tmp")
+      .appendingPathComponent("repo")
+      .appendingPathComponent("feature-worktree")
+
+    try GitService.createWorktree(
+      repoRoot: repo.path,
+      branchName: "feature/nested-worktree",
+      path: worktree.path,
+      startPoint: "HEAD"
+    )
+
+    #expect(FileManager.default.fileExists(atPath: worktree.path))
+    #expect(FileManager.default.fileExists(atPath: worktree.deletingLastPathComponent().path))
+  }
+
   @Test("formatDiffStat renders file rows and totals")
   func formatDiffStatRendersFileRowsAndTotals() {
     let files = [

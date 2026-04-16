@@ -101,11 +101,25 @@ enum GitService {
       throw GitError.commandFailed("Worktree path is required.")
     }
 
+    let normalizedWorktreePath = normalizePath(trimmedPath)
+    let parentDirectoryURL = URL(fileURLWithPath: normalizedWorktreePath)
+      .deletingLastPathComponent()
+    do {
+      try FileManager.default.createDirectory(
+        at: parentDirectoryURL,
+        withIntermediateDirectories: true
+      )
+    } catch {
+      throw GitError.commandFailed(
+        "Could not create the worktree parent directory: \(error.localizedDescription)"
+      )
+    }
+
     _ = try requireGit([
       "-C", repoRoot,
       "worktree", "add",
       "-b", trimmedBranchName,
-      normalizePath(trimmedPath),
+      normalizedWorktreePath,
       trimmedStartPoint.isEmpty ? "HEAD" : trimmedStartPoint,
     ])
   }

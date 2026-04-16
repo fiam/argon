@@ -256,6 +256,16 @@ struct WorkspaceStateTests {
     #expect(tab?.launch.processSpec.executable == UserShell.resolvedPath())
   }
 
+  @Test("suggested worktree path uses configured root and repo subtree")
+  @MainActor
+  func suggestedWorktreePathUsesConfiguredRootAndRepoSubtree() {
+    let state = makeState(worktreeRootPath: "/tmp/worktrees")
+
+    let suggestedPath = state.suggestedWorktreePath(branchName: "feature/window polish")
+
+    #expect(suggestedPath == "/tmp/worktrees/tmp/repo/feature-window-polish")
+  }
+
   @Test("refreshing the selected worktree updates the visible diff state")
   @MainActor
   func refreshingSelectedWorktreeUpdatesVisibleDiffState() {
@@ -378,13 +388,13 @@ struct WorkspaceStateTests {
   }
 
   @MainActor
-  private func makeState() -> WorkspaceState {
+  private func makeState(worktreeRootPath: String = "/tmp/default-worktrees") -> WorkspaceState {
     let target = WorkspaceTarget(
       repoRoot: "/tmp/repo",
       repoCommonDir: "/tmp/repo/.git",
       selectedWorktreePath: "/tmp/repo"
     )
-    let state = WorkspaceState(target: target)
+    let state = WorkspaceState(target: target) { worktreeRootPath }
     state.worktrees = [
       DiscoveredWorktree(
         path: "/tmp/repo",
