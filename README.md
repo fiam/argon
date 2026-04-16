@@ -86,17 +86,55 @@ Requirements:
 
 - Rust toolchain with Cargo
 - Xcode
+- Homebrew `zig@0.15` for vendored Ghostty:
+  `brew install zig@0.15`
+- Xcode Metal Toolchain component for Ghostty:
+  `xcodebuild -downloadComponent MetalToolchain`
 - XcodeGen
 - `swift-format`
+- vendored Ghostty still pins Zig `0.15.2`. The supported local setup is
+  the Homebrew `zig@0.15` formula, which installs a patched `0.15.2` build
+  at `/opt/homebrew/opt/zig@0.15/bin/zig`
+
+Recommended first-time macOS setup:
+
+```bash
+brew install zig@0.15 xcodegen swift-format
+xcodebuild -downloadComponent MetalToolchain
+git submodule update --init --recursive third_party/ghostty
+```
+
+Before the first macOS app build:
+
+```bash
+bash scripts/build-libghostty.sh
+```
+
+`scripts/build-libghostty.sh` auto-discovers the vendored Ghostty Zig
+requirement from `third_party/ghostty/build.zig.zon` and prefers the
+Homebrew `zig@0.15` install when it is available. You can still override
+that with `ZIG=/abs/path/to/zig`.
 
 Common commands:
 
 ```bash
+make build-libghostty
 make fmt
 make test
 make check
 bash scripts/dev-argon.sh .
 ```
+
+Typical macOS build flow:
+
+- `make build-libghostty` or `bash scripts/build-libghostty.sh`
+  builds `target/libghostty/native/macos/GhosttyKit.xcframework` and
+  `target/libghostty/native/share/ghostty`
+- `bash scripts/dev-argon.sh .`
+  builds the Rust CLI, regenerates `apps/macos/Argon.xcodeproj`, builds
+  `Argon.app`, and launches the current repo workspace
+- `make build-release`
+  builds the release app and refreshes vendored Ghostty as part of that flow
 
 Project rules worth keeping in mind:
 
@@ -109,5 +147,7 @@ The macOS project is generated from `apps/macos/project.yml`. Regenerate it
 with XcodeGen instead of editing `.xcodeproj` by hand.
 
 The planned Ghostty terminal migration is documented in
-[docs/ghostty-integration.md](docs/ghostty-integration.md). Build the
-vendored Ghostty xcframework with `make build-libghostty`.
+[docs/ghostty-integration.md](docs/ghostty-integration.md). The dev and
+release build scripts call `scripts/build-libghostty.sh` automatically, and
+`make build-libghostty` is the direct way to refresh the vendored
+`GhosttyKit.xcframework`.

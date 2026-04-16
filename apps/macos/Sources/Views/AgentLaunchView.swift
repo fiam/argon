@@ -1,5 +1,9 @@
 import SwiftUI
 
+enum AgentPickerLayout {
+  static let gridMinimumWidth: CGFloat = 140
+}
+
 struct AgentLaunchButton: View {
   @Environment(AppState.self) private var appState
   @State private var showLaunchSheet = false
@@ -73,7 +77,9 @@ struct AgentLaunchSheet: View {
           }
         }
 
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140))], spacing: 6) {
+        LazyVGrid(
+          columns: [GridItem(.adaptive(minimum: AgentPickerLayout.gridMinimumWidth))], spacing: 6
+        ) {
           ForEach(savedAgents.profiles) { profile in
             let status = agentAvailability.status(for: profile)
             AgentPickerCard(
@@ -105,7 +111,7 @@ struct AgentLaunchSheet: View {
             .font(.callout)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(
               useCustom ? Color.purple.opacity(0.12) : Color(nsColor: .controlBackgroundColor)
             )
@@ -518,21 +524,14 @@ struct AgentPickerCard: View {
       HStack(spacing: 6) {
         AgentIconView(icon: profile.icon)
           .foregroundStyle(isSelected ? .blue : .secondary)
-        VStack(alignment: .leading, spacing: 1) {
-          Text(profile.name)
-            .fontWeight(isSelected ? .medium : .regular)
-            .lineLimit(1)
-          if status != .available {
-            Text(statusLabel)
-              .font(.system(size: 9))
-              .foregroundStyle(statusColor)
-          }
-        }
+        Text(profile.name)
+          .fontWeight(isSelected ? .medium : .regular)
+          .lineLimit(1)
       }
       .font(.callout)
       .padding(.horizontal, 12)
       .padding(.vertical, 8)
-      .frame(maxWidth: .infinity)
+      .frame(maxWidth: .infinity, alignment: .leading)
       .background(isSelected ? Color.blue.opacity(0.12) : Color(nsColor: .controlBackgroundColor))
       .foregroundStyle(isSelected ? .blue : status == .available ? .primary : .secondary)
       .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -543,28 +542,19 @@ struct AgentPickerCard: View {
       )
     }
     .buttonStyle(.plain)
+    .disabled(status == .unavailable)
     .opacity(status == .unavailable ? 0.55 : 1)
+    .help(helpText)
   }
 
-  private var statusLabel: String {
+  private var helpText: String {
     switch status {
     case .checking:
-      "checking..."
+      "Checking for command '\(profile.baseCommand)'"
     case .available:
       ""
     case .unavailable:
-      "not installed"
-    }
-  }
-
-  private var statusColor: Color {
-    switch status {
-    case .checking:
-      .secondary
-    case .available:
-      .primary
-    case .unavailable:
-      .orange
+      "Command '\(profile.baseCommand)' not found"
     }
   }
 }

@@ -12,6 +12,13 @@ fi
 echo "==> Building argon CLI..."
 cargo build --manifest-path "$REPO_ROOT/Cargo.toml" --bin argon --release 2>&1
 
+GHOSTTY_XCFRAMEWORK="$REPO_ROOT/target/libghostty/native/macos/GhosttyKit.xcframework"
+GHOSTTY_RESOURCES="$REPO_ROOT/target/libghostty/native/share/ghostty"
+if [[ ! -d "$GHOSTTY_XCFRAMEWORK" || ! -d "$GHOSTTY_RESOURCES" ]]; then
+    echo "==> Building vendored libghostty..."
+    bash "$REPO_ROOT/scripts/build-libghostty.sh"
+fi
+
 echo "==> Generating Xcode project..."
 (cd "$REPO_ROOT/apps/macos" && xcodegen generate 2>&1)
 

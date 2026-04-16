@@ -57,8 +57,22 @@ argon-native/
 
 ## Development Workflow
 
+- Initialize the Ghostty submodule once:
+  `git submodule update --init --recursive third_party/ghostty`
+- Install the recommended Zig toolchain for vendored Ghostty:
+  `brew install zig@0.15`
+- Install the Xcode Metal Toolchain component for Ghostty:
+  `xcodebuild -downloadComponent MetalToolchain`
+- Ghostty currently pins Zig `0.15.2`. In practice the supported local
+  setup is Homebrew `zig@0.15`, which installs a patched `0.15.2` build at
+  `/opt/homebrew/opt/zig@0.15/bin/zig`. `scripts/build-libghostty.sh`
+  prefers that path automatically, or you can set `ZIG=/abs/path/to/zig`.
+- Build or refresh vendored Ghostty with:
+  `bash scripts/build-libghostty.sh`
 - Use XcodeGen: `project.yml` is checked in, `.xcodeproj` is gitignored.
 - Rebuild and launch for testing: `bash scripts/dev-argon.sh .`
+- `scripts/dev-argon.sh` builds the Rust CLI, regenerates the Xcode
+  project, builds `Argon.app`, and launches the requested workspace.
 - Install dev skill: `make install-dev-skill`
 - Run all checks: `make check`
 - Format code: `make fmt`

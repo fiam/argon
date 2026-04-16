@@ -41,6 +41,7 @@ test-ui: build-swift
 
 # Build Swift app
 build-swift:
+	test -d target/libghostty/native/macos/GhosttyKit.xcframework && test -d target/libghostty/native/share/ghostty || bash scripts/build-libghostty.sh
 	cd apps/macos && xcodegen generate 2>&1 | tail -1
 	xcodebuild build \
 		-project apps/macos/Argon.xcodeproj \

@@ -19,11 +19,15 @@ echo "==> Building Argon $VERSION (release)"
 echo "==> Building argon CLI..."
 cargo build --manifest-path "$REPO_ROOT/Cargo.toml" --bin argon --release 2>&1
 
-# 2. Generate Xcode project
+# 2. Build vendored Ghostty in release mode
+echo "==> Building vendored libghostty..."
+bash "$REPO_ROOT/scripts/build-libghostty.sh" --release
+
+# 3. Generate Xcode project
 echo "==> Generating Xcode project..."
 (cd "$REPO_ROOT/apps/macos" && xcodegen generate 2>&1)
 
-# 3. Build the app in Release
+# 4. Build the app in Release
 echo "==> Building Argon.app (Release)..."
 xcodebuild \
     -project "$REPO_ROOT/apps/macos/Argon.xcodeproj" \
@@ -31,25 +35,25 @@ xcodebuild \
     -configuration Release \
     build 2>&1 | tail -1
 
-# 4. Find the built app
+# 5. Find the built app
 APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData/Argon-*/Build/Products/Release -name "Argon.app" -type d 2>/dev/null | head -1)
 if [[ -z "$APP_PATH" ]]; then
     echo "error: Argon.app not found in DerivedData" >&2
     exit 1
 fi
 
-# 5. Bundle the CLI binary inside the app
+# 6. Bundle the CLI binary inside the app
 echo "==> Bundling CLI into app..."
 mkdir -p "$APP_PATH/Contents/Resources/bin"
 cp "$REPO_ROOT/target/release/argon" "$APP_PATH/Contents/Resources/bin/argon"
 
-# 6. Copy to build output
+# 7. Copy to build output
 mkdir -p "$BUILD_DIR"
 rm -rf "$BUILD_DIR/Argon.app"
 cp -R "$APP_PATH" "$BUILD_DIR/Argon.app"
 echo "==> Built: $BUILD_DIR/Argon.app"
 
-# 7. Optionally create DMG
+# 8. Optionally create DMG
 if $CREATE_DMG; then
     DMG_NAME="Argon-${VERSION}.dmg"
     DMG_PATH="$BUILD_DIR/$DMG_NAME"

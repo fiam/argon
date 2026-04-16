@@ -82,9 +82,30 @@ The helper script is:
 bash scripts/build-libghostty.sh
 ```
 
+Build requirements:
+
+- initialize the submodule with
+  `git submodule update --init --recursive third_party/ghostty`
+- install the recommended Zig toolchain with
+  `brew install zig@0.15`
+- upstream Ghostty currently pins Zig `0.15.2`. The helper script reads the
+  required version from `third_party/ghostty/build.zig.zon`, prefers the
+  Homebrew `zig@0.15` install at `/opt/homebrew/opt/zig@0.15/bin/zig`,
+  auto-discovers matching installs from common local paths, and also accepts
+  `ZIG=/abs/path/to/zig`
+- install Xcode's Metal Toolchain component because Ghostty's renderer build
+  shells out to `metal` and `metallib`:
+  `xcodebuild -downloadComponent MetalToolchain`
+- use a host-native Zig toolchain. On Apple Silicon that means an `arm64`
+  Zig `0.15.2` install, not an `x86_64` Zig binary under Rosetta
+
 Default behavior:
 
 - builds a native macOS debug `GhosttyKit.xcframework`
+- validates that the required Zig version is available before starting the
+  build
+- fails early with the Metal Toolchain install command when `metal` or
+  `metallib` are unavailable
 - uses Ghostty's own `third_party/ghostty/zig-out` staging layout because
   the upstream macOS project expects resources there during the build
 - installs into `target/libghostty/native`
@@ -100,6 +121,19 @@ bash scripts/build-libghostty.sh --target universal --release
 bash scripts/build-libghostty.sh --print-path
 bash scripts/build-libghostty.sh --print-resources-path
 ```
+
+Typical local build flow:
+
+```bash
+brew install zig@0.15 xcodegen swift-format
+xcodebuild -downloadComponent MetalToolchain
+git submodule update --init --recursive third_party/ghostty
+bash scripts/build-libghostty.sh
+bash scripts/dev-argon.sh .
+```
+
+That final command builds the Rust CLI, regenerates the Xcode project,
+builds `Argon.app`, and launches the requested workspace.
 
 Expected outputs:
 

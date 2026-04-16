@@ -1002,7 +1002,9 @@ private struct WorkspaceAgentTabSheet: View {
           }
         }
 
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140))], spacing: 8) {
+        LazyVGrid(
+          columns: [GridItem(.adaptive(minimum: AgentPickerLayout.gridMinimumWidth))], spacing: 8
+        ) {
           ForEach(savedAgents.profiles) { profile in
             let status = agentAvailability.status(for: profile)
             AgentPickerCard(
@@ -1032,7 +1034,7 @@ private struct WorkspaceAgentTabSheet: View {
             .font(.callout)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(
               useCustom
                 ? Color.accentColor.opacity(0.12)
@@ -1165,7 +1167,8 @@ private struct WorkspaceAgentTabSheet: View {
   private func syncSelectedAgent() {
     guard !useCustom else { return }
     if let selectedAgentId,
-      savedAgents.profiles.contains(where: { $0.id == selectedAgentId })
+      let selected = savedAgents.profiles.first(where: { $0.id == selectedAgentId }),
+      agentAvailability.status(for: selected) != .unavailable
     {
       return
     }
