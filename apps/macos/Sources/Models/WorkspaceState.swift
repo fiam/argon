@@ -20,6 +20,7 @@ final class WorkspaceState {
   var isLoading = false
   var isLaunchingReview = false
   var isCreatingWorktree = false
+  var isRemovingWorktree = false
   var isPresentingTabCreationSheet = false
   var isPresentingAgentLaunchSheet = false
   var isPresentingReviewAgentPicker = false
@@ -243,6 +244,104 @@ final class WorkspaceState {
     }.value
 
     applyLoadedWorkspace(loadedWorkspace)
+    errorMessage = nil
+  }
+
+  func prepareWorktreeRemoval(for worktree: DiscoveredWorktree) async throws
+    -> WorktreeRemovalRequest
+  {
+    guard !worktree.isBaseWorktree else {
+      throw GitService.GitError.commandFailed("The base worktree cannot be removed.")
+    }
+
+    let normalizedWorktreePath = normalizedPath(worktree.path)
+    let target = self.target
+    let branchDetails = await Task.detached {
+      let normalizedBranchName = worktree.branchName?.trimmingCharacters(
+        in: .whitespacesAndNewlines)
+      let currentBranch = GitService.currentBranchName(repoRoot: target.repoRoot)
+      let canDeleteBranch =
+        if let normalizedBranchName, !normalizedBranchName.isEmpty {
+          normalizedBranchName != currentBranch
+        } else {
+          false
+        }
+      let baseRef =
+        canDeleteBranch
+        ? GitService.preferredBranchDeletionBaseRef(
+          repoRoot: target.repoRoot,
+          branchName: normalizedBranchName
+        )
+        : nil
+
+      return WorktreeRemovalBranchDetails(
+        hasUncommittedChanges: GitService.hasUncommittedChanges(repoRoot: normalizedWorktreePath),
+        branchName: normalizedBranchName,
+        canDeleteBranch: canDeleteBranch,
+        branchComparisonBaseRef: baseRef,
+        branchHasUniqueCommits:
+          canDeleteBranch
+          && GitService.branchHasUniqueCommits(
+            repoRoot: target.repoRoot,
+            branchName: normalizedBranchName ?? "",
+            baseRef: baseRef
+          )
+      )
+    }.value
+
+    return WorktreeRemovalRequest(
+      worktreePath: normalizedWorktreePath,
+      displayName: worktree.branchName
+        ?? URL(fileURLWithPath: normalizedWorktreePath).lastPathComponent,
+      branchName: branchDetails.branchName,
+      hasUncommittedChanges: branchDetails.hasUncommittedChanges,
+      canDeleteBranch: branchDetails.canDeleteBranch,
+      branchComparisonBaseRef: branchDetails.branchComparisonBaseRef,
+      branchHasUniqueCommits: branchDetails.branchHasUniqueCommits
+    )
+  }
+
+  func removeWorktree(_ request: WorktreeRemovalRequest, deleteBranch: Bool) async throws {
+    guard request.worktreePath != normalizedPath(target.repoRoot) else {
+      throw GitService.GitError.commandFailed("The base worktree cannot be removed.")
+    }
+
+    isRemovingWorktree = true
+    defer { isRemovingWorktree = false }
+
+    let target = self.target
+    try await Task.detached {
+      try GitService.removeWorktree(
+        repoRoot: target.repoRoot,
+        path: request.worktreePath,
+        force: request.hasUncommittedChanges
+      )
+    }.value
+
+    var branchRemovalError: String?
+    if deleteBranch, request.canDeleteBranch, let branchName = request.branchName {
+      do {
+        try await Task.detached {
+          try GitService.deleteBranch(
+            repoRoot: target.repoRoot,
+            branchName: branchName,
+            force: request.branchHasUniqueCommits
+          )
+        }.value
+      } catch {
+        branchRemovalError =
+          "Removed the worktree, but could not delete branch \(branchName): \(error.localizedDescription)"
+      }
+    }
+
+    let discoveredWorktrees = try await Task.detached {
+      try Self.loadDiscoveredWorktrees(target: target)
+    }.value
+
+    applyDiscoveredWorktreeInventory(discoveredWorktrees)
+    if let branchRemovalError {
+      throw GitService.GitError.commandFailed(branchRemovalError)
+    }
     errorMessage = nil
   }
 
@@ -508,10 +607,7 @@ final class WorkspaceState {
     target: WorkspaceTarget,
     requestedSelection: String
   ) throws -> LoadedWorkspace {
-    let worktrees = try GitService.discoverWorktrees(
-      repoRoot: target.repoRoot,
-      repoCommonDir: target.repoCommonDir
-    )
+    let worktrees = try loadDiscoveredWorktrees(target: target)
     let normalizedPaths = Set(worktrees.map { normalizedPath($0.path) })
     let worktreeSummaries = Dictionary(
       uniqueKeysWithValues: worktrees.map { worktree in
@@ -548,6 +644,23 @@ final class WorkspaceState {
       selectedPullRequestURL: details.pullRequestURL,
       selectedReviewTarget: details.reviewTarget
     )
+  }
+
+  nonisolated private static func loadDiscoveredWorktrees(target: WorkspaceTarget) throws
+    -> [DiscoveredWorktree]
+  {
+    try GitService.discoverWorktrees(
+      repoRoot: target.repoRoot,
+      repoCommonDir: target.repoCommonDir
+    )
+  }
+
+  nonisolated static func shouldReloadWorktreeInventory(
+    currentWorktrees: [DiscoveredWorktree],
+    discoveredWorktrees: [DiscoveredWorktree]
+  ) -> Bool {
+    currentWorktrees.map { normalizedPath($0.path) }
+      != discoveredWorktrees.map { normalizedPath($0.path) }
   }
 
   nonisolated private static func loadSelectionDetails(
@@ -627,8 +740,51 @@ final class WorkspaceState {
     selectionLoadRequestID = nil
     isLoadingSelectionDetails = false
     let validPaths = Set(data.worktrees.map { normalizedPath($0.path) })
-    pruneTerminalState(validPaths: validPaths)
+    pruneWorktreeState(validPaths: validPaths)
     configureWatchers(validPaths: validPaths)
+  }
+
+  func applyDiscoveredWorktreeInventory(_ discoveredWorktrees: [DiscoveredWorktree]) {
+    guard
+      Self.shouldReloadWorktreeInventory(
+        currentWorktrees: worktrees,
+        discoveredWorktrees: discoveredWorktrees
+      )
+    else {
+      return
+    }
+
+    let currentPaths = Set(worktrees.map { normalizedPath($0.path) })
+    let validPaths = Set(discoveredWorktrees.map { normalizedPath($0.path) })
+    let addedPaths = validPaths.subtracting(currentPaths)
+    let preservedSelection = normalizedSelectedWorktreePath
+    let preferredSelection =
+      preservedSelection ?? normalizedPath(target.selectedWorktreePath ?? target.repoRoot)
+
+    worktrees = discoveredWorktrees
+    pruneWorktreeState(validPaths: validPaths)
+    configureWatchers(validPaths: validPaths)
+
+    if let nextSelection = resolvedInventorySelectionPath(
+      preferredSelection: preferredSelection,
+      validPaths: validPaths
+    ) {
+      if nextSelection == preservedSelection {
+        selectedWorktreePath = nextSelection
+      } else {
+        prepareSelectionLoading(for: nextSelection)
+        loadSelectedWorktreeDetails(for: nextSelection)
+      }
+    } else {
+      clearSelectedWorktreeDetails()
+    }
+
+    for addedPath in addedPaths {
+      worktreeSummaries[addedPath] = .empty
+      conflictStatesByWorktreePath[addedPath] = false
+      refreshReviewSnapshot(for: addedPath)
+      scheduleWorktreeRefresh(for: addedPath)
+    }
   }
 
   func applyRefreshedWorktree(_ refreshedWorktree: RefreshedWorktree, for path: String) {
@@ -682,6 +838,19 @@ final class WorkspaceState {
       .filter { validPaths.contains($0.key) }
   }
 
+  private func pruneWorktreeState(validPaths: Set<String>) {
+    worktreeSummaries =
+      worktreeSummaries
+      .filter { validPaths.contains($0.key) }
+    reviewSnapshotsByWorktreePath =
+      reviewSnapshotsByWorktreePath
+      .filter { validPaths.contains($0.key) }
+    conflictStatesByWorktreePath =
+      conflictStatesByWorktreePath
+      .filter { validPaths.contains($0.key) }
+    pruneTerminalState(validPaths: validPaths)
+  }
+
   private func configureWatchers(validPaths: Set<String>) {
     if commonDirWatcher == nil {
       commonDirWatcher = FileWatcher(path: target.repoCommonDir) { [weak self] in
@@ -713,10 +882,24 @@ final class WorkspaceState {
 
   private func scheduleWorkspaceReload() {
     workspaceReloadTask?.cancel()
+    let target = self.target
     workspaceReloadTask = Task { @MainActor [weak self] in
       try? await Task.sleep(for: .milliseconds(300))
       guard let self, !Task.isCancelled else { return }
-      self.load()
+
+      let result = await Task.detached {
+        try Self.loadDiscoveredWorktrees(target: target)
+      }.result
+
+      guard !Task.isCancelled else { return }
+
+      switch result {
+      case .success(let discoveredWorktrees):
+        self.applyDiscoveredWorktreeInventory(discoveredWorktrees)
+        self.errorMessage = nil
+      case .failure(let error):
+        self.errorMessage = error.localizedDescription
+      }
     }
   }
 
@@ -776,6 +959,34 @@ final class WorkspaceState {
     terminalFocusRequestIDsByWorktreePath[worktreePath] = UUID()
   }
 
+  private func resolvedInventorySelectionPath(
+    preferredSelection: String,
+    validPaths: Set<String>
+  ) -> String? {
+    if validPaths.contains(preferredSelection) {
+      return preferredSelection
+    }
+
+    let normalizedRepoRoot = normalizedPath(target.repoRoot)
+    if validPaths.contains(normalizedRepoRoot) {
+      return normalizedRepoRoot
+    }
+
+    return worktrees.first.map { normalizedPath($0.path) }
+  }
+
+  private func clearSelectedWorktreeDetails() {
+    selectedWorktreePath = nil
+    selectedSummary = .empty
+    selectedFiles = []
+    selectedDiffStat = ""
+    selectedPullRequestURL = nil
+    selectedReviewTarget = nil
+    selectedUpdatedAt = nil
+    selectionLoadRequestID = nil
+    isLoadingSelectionDetails = false
+  }
+
   func stageReviewLaunch(target: ReviewTarget, agentTabID: UUID) {
     stagedReviewLaunch = StagedReviewLaunch(target: target, agentTabID: agentTabID)
   }
@@ -824,4 +1035,32 @@ private struct SelectionDetails: Sendable {
 private struct StagedReviewLaunch {
   let target: ReviewTarget
   let agentTabID: UUID
+}
+
+struct WorktreeRemovalRequest: Identifiable, Sendable {
+  var id: String { worktreePath }
+
+  let worktreePath: String
+  let displayName: String
+  let branchName: String?
+  let hasUncommittedChanges: Bool
+  let canDeleteBranch: Bool
+  let branchComparisonBaseRef: String?
+  let branchHasUniqueCommits: Bool
+
+  var shouldSkipConfirmation: Bool {
+    !hasUncommittedChanges && (!canDeleteBranch || !branchHasUniqueCommits)
+  }
+
+  var defaultDeletesBranch: Bool {
+    canDeleteBranch
+  }
+}
+
+private struct WorktreeRemovalBranchDetails: Sendable {
+  let hasUncommittedChanges: Bool
+  let branchName: String?
+  let canDeleteBranch: Bool
+  let branchComparisonBaseRef: String?
+  let branchHasUniqueCommits: Bool
 }

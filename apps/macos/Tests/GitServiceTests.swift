@@ -247,6 +247,225 @@ struct GitServiceTests {
     #expect(FileManager.default.fileExists(atPath: worktree.deletingLastPathComponent().path))
   }
 
+  @Test("hasUncommittedChanges reports clean and dirty worktrees")
+  func hasUncommittedChangesReportsCleanAndDirtyWorktrees() throws {
+    let repo = try makeRepo()
+    defer { try? FileManager.default.removeItem(at: repo) }
+
+    try git(repo, ["init"])
+    try git(repo, ["config", "user.name", "Argon Test"])
+    try git(repo, ["config", "user.email", "argon-test@example.com"])
+
+    try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    try git(repo, ["add", "a.txt"])
+    try git(repo, ["commit", "-m", "init"])
+
+    #expect(GitService.hasUncommittedChanges(repoRoot: repo.path) == false)
+
+    try "one\ntwo\n".write(
+      to: repo.appendingPathComponent("a.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    #expect(GitService.hasUncommittedChanges(repoRoot: repo.path) == true)
+  }
+
+  @Test("removeWorktree removes a clean linked worktree")
+  func removeWorktreeRemovesACleanLinkedWorktree() throws {
+    let fixture = try makeFixtureDirectory()
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let repo = fixture.appendingPathComponent("repo")
+    try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+
+    try git(repo, ["init"])
+    try git(repo, ["config", "user.name", "Argon Test"])
+    try git(repo, ["config", "user.email", "argon-test@example.com"])
+
+    try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    try git(repo, ["add", "a.txt"])
+    try git(repo, ["commit", "-m", "init"])
+    try git(repo, ["branch", "-M", "main"])
+
+    let worktree = fixture.appendingPathComponent("feature-worktree")
+    try git(repo, ["worktree", "add", "-b", "feature/remove-clean", worktree.path, "HEAD"])
+
+    try GitService.removeWorktree(repoRoot: repo.path, path: worktree.path)
+
+    let discovered = try GitService.discoverWorktrees(
+      repoRoot: repo.path,
+      repoCommonDir: repo.appendingPathComponent(".git").path
+    )
+
+    #expect(FileManager.default.fileExists(atPath: worktree.path) == false)
+    #expect(discovered.count == 1)
+    #expect(discovered.first?.path == repo.path)
+  }
+
+  @Test("removeWorktree requires force for dirty linked worktrees")
+  func removeWorktreeRequiresForceForDirtyLinkedWorktrees() throws {
+    let fixture = try makeFixtureDirectory()
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let repo = fixture.appendingPathComponent("repo")
+    try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+
+    try git(repo, ["init"])
+    try git(repo, ["config", "user.name", "Argon Test"])
+    try git(repo, ["config", "user.email", "argon-test@example.com"])
+
+    try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    try git(repo, ["add", "a.txt"])
+    try git(repo, ["commit", "-m", "init"])
+    try git(repo, ["branch", "-M", "main"])
+
+    let worktree = fixture.appendingPathComponent("feature-dirty-worktree")
+    try git(repo, ["worktree", "add", "-b", "feature/remove-dirty", worktree.path, "HEAD"])
+    try "one\ndirty\n".write(
+      to: worktree.appendingPathComponent("a.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+
+    #expect(GitService.hasUncommittedChanges(repoRoot: worktree.path) == true)
+    #expect(throws: GitService.GitError.self) {
+      try GitService.removeWorktree(repoRoot: repo.path, path: worktree.path)
+    }
+
+    try GitService.removeWorktree(repoRoot: repo.path, path: worktree.path, force: true)
+
+    #expect(FileManager.default.fileExists(atPath: worktree.path) == false)
+  }
+
+  @Test("branchHasUniqueCommits distinguishes empty and non-empty branches")
+  func branchHasUniqueCommitsDistinguishesEmptyAndNonEmptyBranches() throws {
+    let fixture = try makeFixtureDirectory()
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let repo = fixture.appendingPathComponent("repo")
+    try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+
+    try git(repo, ["init"])
+    try git(repo, ["config", "user.name", "Argon Test"])
+    try git(repo, ["config", "user.email", "argon-test@example.com"])
+
+    try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    try git(repo, ["add", "a.txt"])
+    try git(repo, ["commit", "-m", "init"])
+    try git(repo, ["branch", "-M", "main"])
+
+    try git(repo, ["branch", "feature/empty"])
+    #expect(
+      GitService.branchHasUniqueCommits(
+        repoRoot: repo.path,
+        branchName: "feature/empty",
+        baseRef: "main"
+      ) == false
+    )
+
+    try git(repo, ["checkout", "-b", "feature/non-empty"])
+    try "one\ntwo\n".write(
+      to: repo.appendingPathComponent("a.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repo, ["commit", "-am", "feature"])
+    try git(repo, ["checkout", "main"])
+
+    #expect(
+      GitService.branchHasUniqueCommits(
+        repoRoot: repo.path,
+        branchName: "feature/non-empty",
+        baseRef: "main"
+      ) == true
+    )
+  }
+
+  @Test("preferredBranchDeletionBaseRef prefers the current local branch over origin")
+  func preferredBranchDeletionBaseRefPrefersCurrentLocalBranchOverOrigin() throws {
+    let fixture = try makeFixtureDirectory()
+    defer { try? FileManager.default.removeItem(at: fixture) }
+
+    let remote = fixture.appendingPathComponent("remote.git")
+    try FileManager.default.createDirectory(at: remote, withIntermediateDirectories: true)
+    try git(remote, ["init", "--bare"])
+
+    let repo = fixture.appendingPathComponent("repo")
+    try git(fixture, ["clone", remote.path, repo.path])
+    try git(repo, ["config", "user.name", "Argon Test"])
+    try git(repo, ["config", "user.email", "argon-test@example.com"])
+
+    try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    try git(repo, ["add", "a.txt"])
+    try git(repo, ["commit", "-m", "init"])
+    try git(repo, ["branch", "-M", "main"])
+    try git(repo, ["push", "-u", "origin", "main"])
+    try git(repo, ["fetch", "origin"])
+
+    try "one\ntwo\n".write(
+      to: repo.appendingPathComponent("a.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repo, ["commit", "-am", "local-only"])
+    try git(repo, ["branch", "feature/same-tip"])
+
+    #expect(GitService.inferBaseRef(repoRoot: repo.path) != "main")
+    #expect(
+      GitService.preferredBranchDeletionBaseRef(
+        repoRoot: repo.path,
+        branchName: "feature/same-tip"
+      ) == "main"
+    )
+    #expect(
+      GitService.branchHasUniqueCommits(
+        repoRoot: repo.path,
+        branchName: "feature/same-tip",
+        baseRef: GitService.preferredBranchDeletionBaseRef(
+          repoRoot: repo.path,
+          branchName: "feature/same-tip"
+        )
+      ) == false
+    )
+  }
+
+  @Test("deleteBranch deletes merged branches and force deletes unmerged branches")
+  func deleteBranchDeletesMergedBranchesAndForceDeletesUnmergedBranches() throws {
+    let fixture = try makeFixtureDirectory()
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let repo = fixture.appendingPathComponent("repo")
+    try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+
+    try git(repo, ["init"])
+    try git(repo, ["config", "user.name", "Argon Test"])
+    try git(repo, ["config", "user.email", "argon-test@example.com"])
+
+    try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    try git(repo, ["add", "a.txt"])
+    try git(repo, ["commit", "-m", "init"])
+    try git(repo, ["branch", "-M", "main"])
+
+    try git(repo, ["branch", "feature/merged"])
+    try GitService.deleteBranch(repoRoot: repo.path, branchName: "feature/merged")
+
+    let mergedBranchRef = GitService.resolveRef(repoRoot: repo.path, ref: "feature/merged")
+    #expect(mergedBranchRef == nil)
+
+    try git(repo, ["checkout", "-b", "feature/unmerged"])
+    try "one\nthree\n".write(
+      to: repo.appendingPathComponent("a.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repo, ["commit", "-am", "unmerged"])
+    try git(repo, ["checkout", "main"])
+
+    #expect(throws: GitService.GitError.self) {
+      try GitService.deleteBranch(repoRoot: repo.path, branchName: "feature/unmerged")
+    }
+
+    try GitService.deleteBranch(repoRoot: repo.path, branchName: "feature/unmerged", force: true)
+    let unmergedBranchRef = GitService.resolveRef(repoRoot: repo.path, ref: "feature/unmerged")
+    #expect(unmergedBranchRef == nil)
+  }
+
   @Test("formatDiffStat renders file rows and totals")
   func formatDiffStatRendersFileRowsAndTotals() {
     let files = [

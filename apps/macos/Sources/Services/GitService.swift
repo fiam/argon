@@ -124,6 +124,79 @@ enum GitService {
     ])
   }
 
+  static func hasUncommittedChanges(repoRoot: String) -> Bool {
+    let output = runGit([
+      "-C", repoRoot,
+      "status", "--porcelain=1", "--untracked-files=all",
+    ]).trimmingCharacters(in: .whitespacesAndNewlines)
+    return !output.isEmpty
+  }
+
+  static func removeWorktree(
+    repoRoot: String,
+    path: String,
+    force: Bool = false
+  ) throws {
+    let normalizedWorktreePath = normalizePath(path)
+    var arguments = [
+      "-C", repoRoot,
+      "worktree", "remove",
+    ]
+    if force {
+      arguments.append("--force")
+    }
+    arguments.append(normalizedWorktreePath)
+    _ = try requireGit(arguments)
+  }
+
+  static func branchHasUniqueCommits(
+    repoRoot: String,
+    branchName: String,
+    baseRef: String?
+  ) -> Bool {
+    guard let baseRef, !baseRef.isEmpty else { return true }
+
+    let output = runGit([
+      "-C", repoRoot,
+      "rev-list", "--count", "\(baseRef)..\(branchName)",
+    ]).trimmingCharacters(in: .whitespacesAndNewlines)
+
+    guard let count = Int(output) else { return true }
+    return count > 0
+  }
+
+  static func preferredBranchDeletionBaseRef(
+    repoRoot: String,
+    branchName: String?
+  ) -> String? {
+    let trimmedBranchName = branchName?.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let currentBranch = currentBranchName(repoRoot: repoRoot),
+      !currentBranch.isEmpty,
+      currentBranch != trimmedBranchName
+    {
+      return currentBranch
+    }
+
+    return inferBaseRef(repoRoot: repoRoot)
+  }
+
+  static func deleteBranch(
+    repoRoot: String,
+    branchName: String,
+    force: Bool = false
+  ) throws {
+    let trimmedBranchName = branchName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedBranchName.isEmpty else {
+      throw GitError.commandFailed("Branch name is required.")
+    }
+
+    _ = try requireGit([
+      "-C", repoRoot,
+      "branch", force ? "-D" : "-d",
+      trimmedBranchName,
+    ])
+  }
+
   static func diffSummary(repoRoot: String) -> WorktreeDiffSummary {
     let files = diffFiles(repoRoot: repoRoot)
     guard !files.isEmpty else {

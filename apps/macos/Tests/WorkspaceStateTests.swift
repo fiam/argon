@@ -266,6 +266,144 @@ struct WorkspaceStateTests {
     #expect(suggestedPath == "/tmp/worktrees/tmp/repo/feature-window-polish")
   }
 
+  @Test("unchanged worktree paths do not trigger an inventory reload")
+  func unchangedWorktreePathsDoNotTriggerAnInventoryReload() {
+    let currentWorktrees = [
+      DiscoveredWorktree(
+        path: "/tmp/repo",
+        branchName: "main",
+        headSHA: "abc123",
+        isBaseWorktree: true,
+        isDetached: false
+      ),
+      DiscoveredWorktree(
+        path: "/tmp/repo/feature",
+        branchName: "feature/original",
+        headSHA: "def456",
+        isBaseWorktree: false,
+        isDetached: false
+      ),
+    ]
+    let discoveredWorktrees = [
+      DiscoveredWorktree(
+        path: "/tmp/repo",
+        branchName: "main",
+        headSHA: "999999",
+        isBaseWorktree: true,
+        isDetached: false
+      ),
+      DiscoveredWorktree(
+        path: "/tmp/repo/feature",
+        branchName: "feature/renamed",
+        headSHA: "000000",
+        isBaseWorktree: false,
+        isDetached: false
+      ),
+    ]
+
+    #expect(
+      WorkspaceState.shouldReloadWorktreeInventory(
+        currentWorktrees: currentWorktrees,
+        discoveredWorktrees: discoveredWorktrees
+      ) == false
+    )
+  }
+
+  @Test("inventory updates keep the selected worktree when its path still exists")
+  @MainActor
+  func inventoryUpdatesKeepTheSelectedWorktreeWhenItsPathStillExists() throws {
+    let state = makeState()
+    state.openShellTab()
+    state.selectedWorktreePath = "/tmp/repo/feature"
+    let selectedTab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          sandboxEnabled: true
+        ))
+    )
+
+    state.applyDiscoveredWorktreeInventory([
+      DiscoveredWorktree(
+        path: "/tmp/repo",
+        branchName: "main",
+        headSHA: "abc123",
+        isBaseWorktree: true,
+        isDetached: false
+      ),
+      DiscoveredWorktree(
+        path: "/tmp/repo/feature",
+        branchName: "feature/window",
+        headSHA: "def456",
+        isBaseWorktree: false,
+        isDetached: false
+      ),
+      DiscoveredWorktree(
+        path: "/tmp/repo/review",
+        branchName: "review/comments",
+        headSHA: "ghi789",
+        isBaseWorktree: false,
+        isDetached: false
+      ),
+    ])
+
+    #expect(state.selectedWorktreePath == "/tmp/repo/feature")
+    #expect(state.selectedTerminalTab?.id == selectedTab.id)
+    #expect(state.allTerminalTabs.count == 2)
+    #expect(state.worktrees.map(\.path) == ["/tmp/repo", "/tmp/repo/feature", "/tmp/repo/review"])
+  }
+
+  @Test("inventory updates fall back when the selected worktree disappears")
+  @MainActor
+  func inventoryUpdatesFallBackWhenTheSelectedWorktreeDisappears() {
+    let state = makeState()
+    state.selectedWorktreePath = "/tmp/repo/feature"
+    state.openShellTab()
+
+    state.applyDiscoveredWorktreeInventory([
+      DiscoveredWorktree(
+        path: "/tmp/repo",
+        branchName: "main",
+        headSHA: "abc123",
+        isBaseWorktree: true,
+        isDetached: false
+      )
+    ])
+
+    #expect(state.selectedWorktreePath == "/tmp/repo")
+    #expect(state.allTerminalTabs.isEmpty)
+    #expect(state.worktrees.map(\.path) == ["/tmp/repo"])
+  }
+
+  @Test("prepareWorktreeRemoval rejects the base worktree")
+  @MainActor
+  func prepareWorktreeRemovalRejectsTheBaseWorktree() async throws {
+    let state = makeState()
+    let baseWorktree = try #require(state.worktrees.first { $0.isBaseWorktree })
+
+    await #expect(throws: GitService.GitError.self) {
+      try await state.prepareWorktreeRemoval(for: baseWorktree)
+    }
+  }
+
+  @Test("clean empty branches skip worktree removal confirmation")
+  func cleanEmptyBranchesSkipWorktreeRemovalConfirmation() {
+    let request = WorktreeRemovalRequest(
+      worktreePath: "/tmp/repo/feature",
+      displayName: "feature/empty",
+      branchName: "feature/empty",
+      hasUncommittedChanges: false,
+      canDeleteBranch: true,
+      branchComparisonBaseRef: "main",
+      branchHasUniqueCommits: false
+    )
+
+    #expect(request.shouldSkipConfirmation == true)
+    #expect(request.defaultDeletesBranch == true)
+  }
+
   @Test("refreshing the selected worktree updates the visible diff state")
   @MainActor
   func refreshingSelectedWorktreeUpdatesVisibleDiffState() {

@@ -129,7 +129,6 @@ private struct WorkspaceSidebar: View {
               ForEach(workspaceState.worktrees) { worktree in
                 WorkspaceSidebarRow(
                   worktree: worktree,
-                  repoRoot: workspaceState.target.repoRoot,
                   isSelected: workspaceState.selectedWorktree?.path == worktree.path
                 ) {
                   workspaceState.selectWorktree(path: worktree.path)
@@ -173,105 +172,82 @@ private struct WorkspaceSidebar: View {
 private struct WorkspaceSidebarRow: View {
   @Environment(WorkspaceState.self) private var workspaceState
   let worktree: DiscoveredWorktree
-  let repoRoot: String
   let isSelected: Bool
   let onSelect: () -> Void
   @State private var isHovering = false
 
   var body: some View {
-    Button(action: onSelect) {
-      VStack(alignment: .leading, spacing: 4) {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-          Text(worktree.branchName ?? "Detached HEAD")
-            .font(.body.weight(.semibold))
-            .lineLimit(1)
+    ZStack(alignment: .topTrailing) {
+      Button(action: onSelect) {
+        VStack(alignment: .leading, spacing: 4) {
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(worktree.branchName ?? "Detached HEAD")
+              .font(.body.weight(.semibold))
+              .lineLimit(1)
 
-          if worktree.isBaseWorktree {
-            WorkspaceBadge(label: "Base", tint: Color(nsColor: .controlAccentColor))
-          } else if worktree.isDetached {
-            WorkspaceBadge(label: "Detached", tint: .orange)
+            if worktree.isBaseWorktree {
+              WorkspaceBadge(label: "Base", tint: Color(nsColor: .controlAccentColor))
+            } else if worktree.isDetached {
+              WorkspaceBadge(label: "Detached", tint: .orange)
+            }
+
+            Spacer(minLength: 0)
           }
 
-          Spacer(minLength: 0)
+          HStack(spacing: 10) {
+            if let reviewSnapshot {
+              WorkspaceSidebarMetadataItem(
+                label: sidebarReviewLabel(for: reviewSnapshot.status),
+                symbolTint: sidebarReviewTint(for: reviewSnapshot.status)
+              )
+            }
+
+            if hasConflicts {
+              WorkspaceSidebarMetadataItem(
+                label: "Conflicts",
+                symbolTint: .orange
+              )
+            }
+
+            if activeAgentCount > 0 {
+              WorkspaceSidebarMetadataItem(
+                label: activeAgentCount == 1 ? "1 agent" : "\(activeAgentCount) agents"
+              )
+            }
+
+            WorkspaceCompactDiffSummary(summary: summary)
+
+            Spacer(minLength: 0)
+          }
         }
-
-        Text(pathLabel)
-          .font(.caption2)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-
-        HStack(spacing: 10) {
-          if let reviewSnapshot {
-            WorkspaceSidebarMetadataItem(
-              label: sidebarReviewLabel(for: reviewSnapshot.status),
-              symbolTint: sidebarReviewTint(for: reviewSnapshot.status)
-            )
-          }
-
-          if hasConflicts {
-            WorkspaceSidebarMetadataItem(
-              label: "Conflicts",
-              symbolTint: .orange
-            )
-          }
-
-          if activeAgentCount > 0 {
-            WorkspaceSidebarMetadataItem(
-              label: activeAgentCount == 1 ? "1 agent" : "\(activeAgentCount) agents"
-            )
-          }
-
-          if summary.hasChanges {
-            WorkspaceSidebarMetadataItem(
-              label: summary.fileCount == 1 ? "1 file" : "\(summary.fileCount) files"
-            )
-          } else {
-            WorkspaceSidebarMetadataItem(
-              label: "Clean"
-            )
-          }
-
-          Spacer(minLength: 0)
-        }
-      }
-      .padding(.horizontal, 10)
-      .padding(.vertical, 8)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-          .fill(rowBackground)
-      )
-      .overlay {
-        if isSelected {
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
           RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .stroke(Color.accentColor.opacity(0.18), lineWidth: 1)
+            .fill(rowBackground)
+        )
+        .overlay {
+          if isSelected {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+              .stroke(Color.accentColor.opacity(0.18), lineWidth: 1)
+          }
         }
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
       }
-      .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+      .buttonStyle(.plain)
+
+      if !worktree.isBaseWorktree {
+        WorkspaceRemoveWorktreeButton(
+          worktree: worktree,
+          isVisible: isHovering
+        )
+        .padding(8)
+      }
     }
-    .buttonStyle(.plain)
     .onHover { hovering in
       isHovering = hovering
     }
-  }
-
-  private var shortPath: String {
-    let normalizedRepoRoot = URL(fileURLWithPath: repoRoot).standardizedFileURL.path
-    let normalizedPath = URL(fileURLWithPath: worktree.path).standardizedFileURL.path
-
-    if normalizedPath == normalizedRepoRoot {
-      return "."
-    }
-
-    if normalizedPath.hasPrefix(normalizedRepoRoot + "/") {
-      return String(normalizedPath.dropFirst(normalizedRepoRoot.count + 1))
-    }
-
-    return normalizedPath
-  }
-
-  private var pathLabel: String {
-    shortPath == "." ? "Repository root" : shortPath
   }
 
   private var rowBackground: Color {
@@ -480,16 +456,22 @@ private struct WorkspaceTerminalDeck: View {
     @Bindable var workspaceState = workspaceState
 
     VStack(spacing: 0) {
-      if workspaceState.selectedTerminalTabs.isEmpty {
-        WorkspaceTerminalEmptyState(
-          onPresentTabCreator: { workspaceState.presentTabCreationSheet() }
-        )
-        .frame(maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
-      } else {
+      if !workspaceState.selectedTerminalTabs.isEmpty {
         WorkspaceTerminalChromeBar()
-        WorkspaceTerminalStage()
-          .frame(maxWidth: .infinity, minHeight: 360, maxHeight: .infinity)
       }
+
+      ZStack {
+        if !workspaceState.allTerminalTabs.isEmpty {
+          WorkspaceTerminalStage()
+        }
+
+        if workspaceState.selectedTerminalTabs.isEmpty {
+          WorkspaceTerminalEmptyState(
+            onPresentTabCreator: { workspaceState.presentTabCreationSheet() }
+          )
+        }
+      }
+      .frame(maxWidth: .infinity, minHeight: 360, maxHeight: .infinity)
     }
     .background(Color(nsColor: .textBackgroundColor))
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1328,13 +1310,27 @@ private struct WorkspaceNewWorktreeSheet: View {
         VStack(alignment: .leading, spacing: 6) {
           Text("Path")
             .font(.callout.weight(.medium))
-          TextField("/path/to/worktree", text: $path)
-            .textFieldStyle(.roundedBorder)
-            .font(.system(.body, design: .monospaced))
 
-          Text("Suggested under the configured worktree root, but fully editable.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+          Text(currentPathDisplay)
+            .font(.system(.body, design: .monospaced))
+            .textSelection(.enabled)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help(path)
+
+          HStack(spacing: 8) {
+            Button("Choose…") {
+              chooseWorktreeDirectory()
+            }
+            .controlSize(.small)
+
+            Button("Use Suggested") {
+              path = lastSuggestedPath
+              hasCustomizedPath = false
+            }
+            .controlSize(.small)
+            .disabled(path == lastSuggestedPath)
+          }
         }
 
         VStack(alignment: .leading, spacing: 6) {
@@ -1361,12 +1357,15 @@ private struct WorkspaceNewWorktreeSheet: View {
         Button {
           createWorktree()
         } label: {
-          if workspaceState.isCreatingWorktree {
-            ProgressView()
-              .frame(width: 90)
-          } else {
+          ZStack {
             Text("Create Worktree")
-              .frame(width: 90)
+              .frame(minWidth: 120)
+              .opacity(workspaceState.isCreatingWorktree ? 0 : 1)
+
+            if workspaceState.isCreatingWorktree {
+              ProgressView()
+                .controlSize(.small)
+            }
           }
         }
         .keyboardShortcut(.defaultAction)
@@ -1400,6 +1399,10 @@ private struct WorkspaceNewWorktreeSheet: View {
       && !workspaceState.isCreatingWorktree
   }
 
+  private var currentPathDisplay: String {
+    WorktreeRootSettings.abbreviatedPath(path)
+  }
+
   private func createWorktree() {
     Task {
       do {
@@ -1413,6 +1416,22 @@ private struct WorkspaceNewWorktreeSheet: View {
         workspaceState.errorMessage = error.localizedDescription
       }
     }
+  }
+
+  private func chooseWorktreeDirectory() {
+    let panel = NSOpenPanel()
+    panel.title = "Choose Worktree Destination"
+    panel.message = "Select or create the destination directory for the new worktree."
+    panel.prompt = "Choose"
+    panel.canChooseFiles = false
+    panel.canChooseDirectories = true
+    panel.canCreateDirectories = true
+    panel.allowsMultipleSelection = false
+    panel.directoryURL = URL(fileURLWithPath: path, isDirectory: true).deletingLastPathComponent()
+
+    guard panel.runModal() == .OK, let url = panel.url else { return }
+    path = url.standardizedFileURL.path
+    hasCustomizedPath = path != lastSuggestedPath
   }
 }
 
@@ -2019,5 +2038,198 @@ private struct WorkspaceFinderLauncher: View {
     }
 
     return NSWorkspace.shared.icon(for: .folder)
+  }
+}
+
+private struct WorkspaceRemoveWorktreeButton: View {
+  @Environment(WorkspaceState.self) private var workspaceState
+  let worktree: DiscoveredWorktree
+  let isVisible: Bool
+  @State private var pendingRemoval: WorktreeRemovalRequest?
+  @State private var deleteBranchOnConfirm = false
+  @State private var isPreparingRemoval = false
+  @State private var isRemoving = false
+
+  var body: some View {
+    Button(role: .destructive) {
+      prepareRemoval()
+    } label: {
+      ZStack {
+        Image(systemName: "trash")
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(Color.red)
+          .opacity(isShowingProgress ? 0 : 1)
+
+        if isShowingProgress {
+          ProgressView()
+            .controlSize(.small)
+        }
+      }
+      .frame(width: 20, height: 20)
+      .padding(4)
+      .background(
+        Circle()
+          .fill(Color.red.opacity(showButton ? 0.12 : 0))
+      )
+    }
+    .buttonStyle(.plain)
+    .disabled(isShowingProgress)
+    .opacity(showButton ? 1 : 0)
+    .allowsHitTesting(showButton)
+    .help("Delete worktree")
+    .sheet(isPresented: isPresentingRemovalSheet) {
+      if let pendingRemoval {
+        WorkspaceRemoveWorktreeConfirmationSheet(
+          request: pendingRemoval,
+          deleteBranch: $deleteBranchOnConfirm,
+          onCancel: { self.pendingRemoval = nil },
+          onConfirm: { confirmRemoval() }
+        )
+      }
+    }
+  }
+
+  private var isShowingProgress: Bool {
+    isPreparingRemoval || isRemoving
+  }
+
+  private var showButton: Bool {
+    isVisible || isShowingProgress
+  }
+
+  private var isPresentingRemovalSheet: Binding<Bool> {
+    Binding(
+      get: { pendingRemoval != nil },
+      set: { isPresented in
+        if !isPresented {
+          pendingRemoval = nil
+        }
+      }
+    )
+  }
+
+  private func prepareRemoval() {
+    guard !isShowingProgress else { return }
+    isPreparingRemoval = true
+
+    Task {
+      defer { isPreparingRemoval = false }
+      do {
+        let removalRequest = try await workspaceState.prepareWorktreeRemoval(for: worktree)
+        if removalRequest.shouldSkipConfirmation {
+          executeRemoval(removalRequest, deleteBranch: removalRequest.defaultDeletesBranch)
+        } else {
+          deleteBranchOnConfirm = removalRequest.defaultDeletesBranch
+          pendingRemoval = removalRequest
+        }
+      } catch {
+        workspaceState.errorMessage = error.localizedDescription
+      }
+    }
+  }
+
+  private func confirmRemoval() {
+    guard let pendingRemoval else { return }
+    self.pendingRemoval = nil
+    executeRemoval(pendingRemoval, deleteBranch: deleteBranchOnConfirm)
+  }
+
+  private func executeRemoval(_ pendingRemoval: WorktreeRemovalRequest, deleteBranch: Bool) {
+    isRemoving = true
+
+    Task {
+      defer { isRemoving = false }
+      do {
+        try await workspaceState.removeWorktree(pendingRemoval, deleteBranch: deleteBranch)
+      } catch {
+        workspaceState.errorMessage = error.localizedDescription
+      }
+    }
+  }
+}
+
+private struct WorkspaceRemoveWorktreeConfirmationSheet: View {
+  let request: WorktreeRemovalRequest
+  @Binding var deleteBranch: Bool
+  let onCancel: () -> Void
+  let onConfirm: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 18) {
+      Text("Delete \(request.displayName)?")
+        .font(.title3.weight(.semibold))
+
+      Text(removalMessage)
+        .font(.body)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      if request.canDeleteBranch, let branchName = request.branchName {
+        Toggle(isOn: $deleteBranch) {
+          VStack(alignment: .leading, spacing: 3) {
+            Text("Delete branch \(branchName)")
+              .font(.body.weight(.medium))
+            Text(branchSubtitle)
+              .font(.caption)
+              .foregroundStyle(branchSubtitleColor)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+        .toggleStyle(.checkbox)
+      }
+
+      HStack(spacing: 10) {
+        Spacer()
+
+        Button("Cancel", role: .cancel) {
+          onCancel()
+        }
+
+        Button(deleteButtonTitle, role: .destructive) {
+          onConfirm()
+        }
+        .keyboardShortcut(.defaultAction)
+      }
+    }
+    .padding(24)
+    .frame(width: 430)
+  }
+
+  private var removalMessage: String {
+    if request.hasUncommittedChanges {
+      return
+        "This worktree has uncommitted changes. Deleting it will remove the worktree directory and discard those changes."
+    }
+
+    return "This will remove the linked worktree directory from disk."
+  }
+
+  private var deleteButtonTitle: String {
+    if request.canDeleteBranch && deleteBranch {
+      return "Delete Worktree and Branch"
+    }
+
+    return "Delete Worktree"
+  }
+
+  private var branchSubtitle: String {
+    if request.branchHasUniqueCommits {
+      if let baseRef = request.branchComparisonBaseRef {
+        return "Contains commits not merged into \(baseRef)."
+      }
+      return "Contains commits that are not confirmed as merged."
+    }
+
+    if let baseRef = request.branchComparisonBaseRef {
+      return "Already merged into \(baseRef)."
+    }
+    return "No unmerged commits detected."
+  }
+
+  private var branchSubtitleColor: Color {
+    if request.branchHasUniqueCommits && deleteBranch {
+      return .red
+    }
+    return .secondary
   }
 }
