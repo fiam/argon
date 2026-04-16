@@ -471,6 +471,7 @@ private struct WorkspaceTerminalDeck: View {
       content: {
         WorkspaceAgentTabSheet(
           isPresented: $workspaceState.isPresentingAgentLaunchSheet,
+          allowsCustomCommand: workspaceState.isPreparingReviewAgentLaunch,
           onLaunch: { options in
             do {
               try await workspaceState.launchAgent(using: options)
@@ -960,6 +961,7 @@ private struct WorkspaceAgentTabSheet: View {
   @Environment(SavedAgentProfiles.self) private var savedAgents
   @Environment(AgentAvailability.self) private var agentAvailability
   @Binding var isPresented: Bool
+  let allowsCustomCommand: Bool
   let onLaunch: @MainActor (WorkspaceAgentLaunchOptions) async -> Bool
   let onDidLaunch: @MainActor () -> Void
 
@@ -985,9 +987,13 @@ private struct WorkspaceAgentTabSheet: View {
         VStack(alignment: .leading, spacing: 2) {
           Text("New Agent Tab")
             .font(.title2.weight(.semibold))
-          Text("Choose a saved agent command or launch a custom one in the selected worktree.")
-            .font(.callout)
-            .foregroundStyle(.secondary)
+          Text(
+            allowsCustomCommand
+              ? "Choose a saved agent command or launch a custom one in the selected worktree."
+              : "Choose a saved agent command to launch in the selected worktree."
+          )
+          .font(.callout)
+          .foregroundStyle(.secondary)
         }
       }
 
@@ -1020,41 +1026,43 @@ private struct WorkspaceAgentTabSheet: View {
             }
           }
 
-          Button {
-            useCustom = true
-            selectedAgentId = nil
-            yoloMode = false
-          } label: {
-            HStack(spacing: 6) {
-              Image(systemName: "terminal")
-                .foregroundStyle(useCustom ? Color.accentColor : .secondary)
-              Text("Custom")
-                .fontWeight(useCustom ? .medium : .regular)
+          if allowsCustomCommand {
+            Button {
+              useCustom = true
+              selectedAgentId = nil
+              yoloMode = false
+            } label: {
+              HStack(spacing: 6) {
+                Image(systemName: "terminal")
+                  .foregroundStyle(useCustom ? Color.accentColor : .secondary)
+                Text("Custom")
+                  .fontWeight(useCustom ? .medium : .regular)
+              }
+              .font(.callout)
+              .padding(.horizontal, 12)
+              .padding(.vertical, 8)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .background(
+                useCustom
+                  ? Color.accentColor.opacity(0.12)
+                  : Color(nsColor: .controlBackgroundColor)
+              )
+              .foregroundStyle(useCustom ? Color.accentColor : .primary)
+              .clipShape(RoundedRectangle(cornerRadius: 8))
+              .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                  .stroke(
+                    useCustom ? Color.accentColor.opacity(0.35) : Color(nsColor: .separatorColor),
+                    lineWidth: 1
+                  )
+              )
             }
-            .font(.callout)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-              useCustom
-                ? Color.accentColor.opacity(0.12)
-                : Color(nsColor: .controlBackgroundColor)
-            )
-            .foregroundStyle(useCustom ? Color.accentColor : .primary)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(
-              RoundedRectangle(cornerRadius: 8)
-                .stroke(
-                  useCustom ? Color.accentColor.opacity(0.35) : Color(nsColor: .separatorColor),
-                  lineWidth: 1
-                )
-            )
+            .buttonStyle(.plain)
           }
-          .buttonStyle(.plain)
         }
       }
 
-      if useCustom {
+      if allowsCustomCommand && useCustom {
         VStack(alignment: .leading, spacing: 8) {
           TextField("Tab name", text: $customName)
             .textFieldStyle(.roundedBorder)
@@ -1116,11 +1124,16 @@ private struct WorkspaceAgentTabSheet: View {
     .onChange(of: agentAvailability.revision) { _, _ in
       syncSelectedAgent()
     }
+    .onChange(of: allowsCustomCommand) { _, allowsCustomCommand in
+      if !allowsCustomCommand {
+        useCustom = false
+      }
+    }
   }
 
   private var canLaunch: Bool {
     guard !isLaunching else { return false }
-    if useCustom {
+    if allowsCustomCommand && useCustom {
       return !customCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     guard let selectedSavedAgent else { return false }
@@ -1143,7 +1156,7 @@ private struct WorkspaceAgentTabSheet: View {
   }
 
   private var launchOptions: WorkspaceAgentLaunchOptions? {
-    if useCustom {
+    if allowsCustomCommand && useCustom {
       let command = customCommand.trimmingCharacters(in: .whitespacesAndNewlines)
       let displayName = customName.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !command.isEmpty else { return nil }

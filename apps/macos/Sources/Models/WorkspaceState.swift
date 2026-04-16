@@ -75,6 +75,10 @@ final class WorkspaceState {
       .sorted { $0.createdAt < $1.createdAt }
   }
 
+  var isPreparingReviewAgentLaunch: Bool {
+    shouldLaunchReviewAfterNextAgentTab
+  }
+
   var selectedTerminalTab: WorkspaceTerminalTab? {
     guard let worktreePath = normalizedSelectedWorktreePath else { return nil }
     let tabs = terminalTabsByWorktreePath[worktreePath] ?? []
