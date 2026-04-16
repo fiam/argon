@@ -256,6 +256,18 @@ struct WorkspaceStateTests {
     #expect(tab?.launch.processSpec.executable == UserShell.resolvedPath())
   }
 
+  @Test("window title includes selected worktree label")
+  @MainActor
+  func windowTitleIncludesSelectedWorktreeLabel() {
+    let state = makeState()
+
+    #expect(state.windowTitle == "Argon — repo — main")
+
+    state.selectedWorktreePath = "/tmp/repo/feature"
+
+    #expect(state.windowTitle == "Argon — repo — feature/window")
+  }
+
   @Test("suggested worktree path uses configured root and repo subtree")
   @MainActor
   func suggestedWorktreePathUsesConfiguredRootAndRepoSubtree() {

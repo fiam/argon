@@ -43,7 +43,7 @@ struct WorkspaceWindowView: View {
           }
         )
       }
-      .navigationTitle("Argon \u{2014} \(workspaceState.repoName)")
+      .navigationTitle(workspaceState.windowTitle)
       .onAppear {
         if workspaceState.worktrees.isEmpty && !workspaceState.isLoading {
           workspaceState.load()

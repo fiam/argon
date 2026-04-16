@@ -73,6 +73,29 @@ final class WorkspaceState {
     URL(fileURLWithPath: target.repoRoot).lastPathComponent
   }
 
+  var selectedWorktreeLabel: String? {
+    guard let selectedWorktree else { return nil }
+
+    if let branchName = selectedWorktree.branchName?.trimmingCharacters(
+      in: .whitespacesAndNewlines),
+      !branchName.isEmpty
+    {
+      return branchName
+    }
+
+    return selectedWorktree.isDetached
+      ? "Detached HEAD"
+      : URL(fileURLWithPath: selectedWorktree.path).lastPathComponent
+  }
+
+  var windowTitle: String {
+    guard let selectedWorktreeLabel else {
+      return "Argon — \(repoName)"
+    }
+
+    return "Argon — \(repoName) — \(selectedWorktreeLabel)"
+  }
+
   var selectedWorktree: DiscoveredWorktree? {
     guard let selectedPath = normalizedSelectedWorktreePath else {
       return worktrees.first
