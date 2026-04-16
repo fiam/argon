@@ -186,9 +186,9 @@ private struct WorkspaceFileCommands: Commands {
       .disabled(commandContext.activeWorkspaceState?.selectedWorktree == nil)
 
       Button {
-        commandContext.activeWorkspaceState?.openShellTab(sandboxed: true)
+        commandContext.activeWorkspaceState?.openShellTab(sandboxed: false)
       } label: {
-        Label("New Sandboxed Shell Tab", systemImage: "lock.shield")
+        Label("New Privileged Shell Tab", systemImage: "lock.open")
       }
       .keyboardShortcut("t", modifiers: [.command, .shift, .option])
       .disabled(commandContext.activeWorkspaceState?.selectedWorktree == nil)

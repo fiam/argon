@@ -29,8 +29,8 @@ struct AgentLaunchSheet: View {
   @Environment(AgentAvailability.self) private var agentAvailability
   @Binding var isPresented: Bool
   @State private var selectedAgentId: String?
-  @State private var yoloMode = false
-  @State private var sandboxEnabled = false
+  @State private var yoloMode = true
+  @State private var sandboxEnabled = true
   @State private var showSandboxHelp = false
   @State private var sandboxHelp: SandboxHelpData?
   @State private var sandboxHelpError: String?
@@ -81,50 +81,15 @@ struct AgentLaunchSheet: View {
           columns: [GridItem(.adaptive(minimum: AgentPickerLayout.gridMinimumWidth))], spacing: 6
         ) {
           ForEach(savedAgents.profiles) { profile in
-            let status = agentAvailability.status(for: profile)
-            AgentPickerCard(
-              profile: profile,
-              status: status,
-              isSelected: !useCustom && selectedAgentId == profile.id
-            ) {
-              selectedAgentId = profile.id
-              useCustom = false
-              // Reset yolo if this agent doesn't support it
-              if profile.yoloFlag.isEmpty {
-                yoloMode = false
-              }
-            }
+            savedAgentCard(for: profile)
           }
 
           // Custom command card
-          Button {
+          CustomAgentPickerCard(isSelected: useCustom, accentColor: .purple) {
             useCustom = true
             selectedAgentId = nil
             yoloMode = false
-          } label: {
-            HStack(spacing: 6) {
-              Image(systemName: "terminal")
-                .foregroundStyle(useCustom ? .purple : .secondary)
-              Text("Custom")
-                .fontWeight(useCustom ? .medium : .regular)
-            }
-            .font(.callout)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-              useCustom ? Color.purple.opacity(0.12) : Color(nsColor: .controlBackgroundColor)
-            )
-            .foregroundStyle(useCustom ? .purple : .primary)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(
-              RoundedRectangle(cornerRadius: 8)
-                .stroke(
-                  useCustom ? Color.purple.opacity(0.4) : Color(nsColor: .separatorColor),
-                  lineWidth: 1)
-            )
           }
-          .buttonStyle(.plain)
           .accessibilityIdentifier("agent-launch-custom-button")
         }
 
@@ -134,20 +99,42 @@ struct AgentLaunchSheet: View {
             .font(.system(.body, design: .monospaced))
             .accessibilityIdentifier("agent-launch-custom-command-field")
         }
+      }
 
-        // YOLO toggle (only for agents that support it)
-        if let agent = selectedSavedAgent, !agent.yoloFlag.isEmpty {
-          Toggle(isOn: $yoloMode) {
-            VStack(alignment: .leading, spacing: 1) {
-              Text("Auto-approve mode")
-                .font(.callout)
-              Text("Appends \(agent.yoloFlag) to the command")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-          }
-          .toggleStyle(.checkbox)
+      VStack(alignment: .leading, spacing: 4) {
+        Toggle(isOn: $sandboxEnabled) {
+          Text("Sandboxed")
+            .font(.callout)
         }
+        .toggleStyle(.checkbox)
+
+        Button("Configuration") {
+          presentSandboxHelp()
+        }
+        .buttonStyle(.link)
+        .font(.caption)
+        .padding(.leading, 22)
+        .popover(isPresented: $showSandboxHelp, arrowEdge: .bottom) {
+          SandboxHelpPopover(
+            help: sandboxHelp,
+            errorMessage: sandboxHelpError,
+            isLoading: sandboxHelpLoading
+          )
+        }
+      }
+
+      // YOLO toggle (only for agents that support it)
+      if let agent = selectedSavedAgent, !agent.yoloFlag.isEmpty {
+        Toggle(isOn: $yoloMode) {
+          VStack(alignment: .leading, spacing: 1) {
+            Text("Auto-approve mode")
+              .font(.callout)
+            Text(yoloSubtitle(for: agent.yoloFlag))
+              .font(.caption)
+              .foregroundStyle(yoloSubtitleColor)
+          }
+        }
+        .toggleStyle(.checkbox)
       }
 
       // Focus prompt
@@ -161,33 +148,6 @@ struct AgentLaunchSheet: View {
           text: $focusPrompt
         )
         .textFieldStyle(.roundedBorder)
-      }
-
-      VStack(alignment: .leading, spacing: 4) {
-        Toggle(isOn: $sandboxEnabled) {
-          VStack(alignment: .leading, spacing: 2) {
-            Text("Sandboxed")
-              .font(.callout)
-            Text("Repo and Argon session storage stay writable.")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
-        }
-        .toggleStyle(.checkbox)
-
-        Button("Config syntax and current defaults") {
-          presentSandboxHelp()
-        }
-        .buttonStyle(.link)
-        .font(.caption)
-        .padding(.leading, 22)
-        .popover(isPresented: $showSandboxHelp, arrowEdge: .bottom) {
-          SandboxHelpPopover(
-            help: sandboxHelp,
-            errorMessage: sandboxHelpError,
-            isLoading: sandboxHelpLoading
-          )
-        }
       }
 
       // Actions
@@ -317,15 +277,39 @@ struct AgentLaunchSheet: View {
 
     selectedAgentId = savedAgents.profiles.first?.id
   }
+
+  @ViewBuilder
+  private func savedAgentCard(for profile: SavedAgentProfile) -> some View {
+    let status = agentAvailability.status(for: profile)
+    AgentPickerCard(
+      profile: profile,
+      status: status,
+      isSelected: !useCustom && selectedAgentId == profile.id
+    ) {
+      selectedAgentId = profile.id
+      useCustom = false
+      if profile.yoloFlag.isEmpty {
+        yoloMode = false
+      }
+    }
+  }
+
+  private func yoloSubtitle(for flag: String) -> String {
+    sandboxEnabled ? "Appends \(flag)." : "Dangerous without sandbox enabled."
+  }
+
+  private var yoloSubtitleColor: Color {
+    sandboxEnabled ? .secondary : .red
+  }
 }
 
-private struct SandboxHelpData: Sendable {
+struct SandboxHelpData: Sendable {
   let repoRoot: String?
   let defaults: ArgonCLI.SandboxDefaults
   let paths: ArgonCLI.SandboxConfigPaths
 }
 
-private struct SandboxHelpPopover: View {
+struct SandboxHelpPopover: View {
   let help: SandboxHelpData?
   let errorMessage: String?
   let isLoading: Bool
@@ -365,7 +349,7 @@ private struct SandboxHelpPopover: View {
           Text("Sandbox configuration")
             .font(.headline)
           Text(
-            "Sandboxed reviewer agents can write to the repo, the Argon session directory, the built-in defaults below, and any extra paths you add in sandbox config files."
+            "Sandboxed agents can write to the repo, the Argon session directory, the built-in defaults below, and any extra paths you add in sandbox config files."
           )
           .font(.caption)
           .foregroundStyle(.secondary)
@@ -556,5 +540,35 @@ struct AgentPickerCard: View {
     case .unavailable:
       "Command '\(profile.baseCommand)' not found"
     }
+  }
+}
+
+struct CustomAgentPickerCard: View {
+  let isSelected: Bool
+  let accentColor: Color
+  let onSelect: () -> Void
+
+  var body: some View {
+    Button(action: onSelect) {
+      HStack(spacing: 6) {
+        Image(systemName: "terminal")
+          .foregroundStyle(isSelected ? accentColor : .secondary)
+        Text("Custom")
+          .fontWeight(isSelected ? .medium : .regular)
+      }
+      .font(.callout)
+      .padding(.horizontal, 12)
+      .padding(.vertical, 8)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(isSelected ? accentColor.opacity(0.12) : Color(nsColor: .controlBackgroundColor))
+      .foregroundStyle(isSelected ? accentColor : .primary)
+      .clipShape(RoundedRectangle(cornerRadius: 8))
+      .overlay(
+        RoundedRectangle(cornerRadius: 8)
+          .stroke(
+            isSelected ? accentColor.opacity(0.4) : Color(nsColor: .separatorColor), lineWidth: 1)
+      )
+    }
+    .buttonStyle(.plain)
   }
 }

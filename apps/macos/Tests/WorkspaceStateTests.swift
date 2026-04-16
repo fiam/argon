@@ -14,6 +14,7 @@ struct WorkspaceStateTests {
 
     #expect(state.selectedTerminalTabs.count == 1)
     #expect(state.selectedTerminalTab?.title == "Shell 1")
+    #expect(state.selectedTerminalTab?.isSandboxed == true)
 
     state.selectedWorktreePath = "/tmp/repo/feature"
     state.openShellTab()
@@ -225,20 +226,34 @@ struct WorkspaceStateTests {
     #expect(state.selectedTerminalFocusRequestID != secondFocusRequest)
   }
 
-  @Test("sandboxed shell tabs use sandbox exec and expose sandbox identity")
+  @Test("default shell tabs use sandbox exec and expose sandbox identity")
   @MainActor
-  func sandboxedShellTabsUseSandboxExecAndExposeSandboxIdentity() {
+  func defaultShellTabsUseSandboxExecAndExposeSandboxIdentity() {
     let state = makeState()
 
-    state.openShellTab(sandboxed: true)
+    state.openShellTab()
 
     let tab = state.selectedTerminalTab
-    #expect(tab?.title == "Sandboxed Shell 1")
+    #expect(tab?.title == "Shell 1")
     #expect(tab?.isSandboxed == true)
     #expect(tab?.commandDescription.contains("Sandboxed") == true)
     #expect(tab?.launch.processSpec.executable == ArgonCLI.cliPath())
     #expect(tab?.launch.processSpec.args.starts(with: ["sandbox", "exec"]) == true)
     #expect(tab?.launch.processSpec.args.contains("/tmp/repo") == true)
+  }
+
+  @Test("privileged shell tabs bypass sandbox exec and use privileged naming")
+  @MainActor
+  func privilegedShellTabsBypassSandboxExecAndUsePrivilegedNaming() {
+    let state = makeState()
+
+    state.openShellTab(sandboxed: false)
+
+    let tab = state.selectedTerminalTab
+    #expect(tab?.title == "Privileged Shell 1")
+    #expect(tab?.isSandboxed == false)
+    #expect(tab?.commandDescription.contains("Sandboxed") == false)
+    #expect(tab?.launch.processSpec.executable == UserShell.resolvedPath())
   }
 
   @Test("refreshing the selected worktree updates the visible diff state")

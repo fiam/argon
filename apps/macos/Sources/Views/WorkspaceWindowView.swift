@@ -99,7 +99,7 @@ private struct WorkspaceContentView: View {
             onNewAgent: { workspaceState.presentAgentLaunchSheet() },
             onPresentTabCreator: { workspaceState.presentTabCreationSheet() },
             onNewShell: { workspaceState.openShellTab() },
-            onNewSandboxedShell: { workspaceState.openShellTab(sandboxed: true) }
+            onNewPrivilegedShell: { workspaceState.openShellTab(sandboxed: false) }
           )
         }
       }
@@ -327,7 +327,7 @@ private struct WorkspaceTitleBarActionCluster: View {
   let onNewAgent: () -> Void
   let onPresentTabCreator: () -> Void
   let onNewShell: () -> Void
-  let onNewSandboxedShell: () -> Void
+  let onNewPrivilegedShell: () -> Void
 
   var body: some View {
     ControlGroup {
@@ -457,8 +457,8 @@ private struct WorkspaceTerminalDeck: View {
           onNewShell: {
             workspaceState.openShellTab()
           },
-          onNewSandboxedShell: {
-            workspaceState.openShellTab(sandboxed: true)
+          onNewPrivilegedShell: {
+            workspaceState.openShellTab(sandboxed: false)
           }
         )
       }
@@ -792,7 +792,7 @@ private struct WorkspaceTerminalEmptyState: View {
         VStack(spacing: 8) {
           Text("No Tabs Yet")
             .font(.title3.weight(.semibold))
-          Text("Choose an agent, shell, or sandboxed shell to start working.")
+          Text("Open an agent, shell, or privileged shell in this worktree.")
             .font(.callout)
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
@@ -828,7 +828,7 @@ private struct WorkspaceTabCreationSheet: View {
   @Binding var isPresented: Bool
   let onNewAgent: () -> Void
   let onNewShell: () -> Void
-  let onNewSandboxedShell: () -> Void
+  let onNewPrivilegedShell: () -> Void
 
   var body: some View {
     VStack(alignment: .leading, spacing: 20) {
@@ -839,7 +839,7 @@ private struct WorkspaceTabCreationSheet: View {
         VStack(alignment: .leading, spacing: 2) {
           Text("Create a New Tab")
             .font(.title2.weight(.semibold))
-          Text("Pick the kind of workspace session you want to open in this worktree.")
+          Text("Choose what to open in this worktree.")
             .font(.callout)
             .foregroundStyle(.secondary)
         }
@@ -850,7 +850,7 @@ private struct WorkspaceTabCreationSheet: View {
           icon: "sparkles.rectangle.stack",
           title: "Agent Tab",
           description:
-            "Launch a saved or custom coding agent with optional sandboxing and agent-specific settings.",
+            "Launch a saved coding agent with sandbox and approval options.",
           shortcut: "⌘T",
           action: { select(onNewAgent) }
         )
@@ -860,19 +860,19 @@ private struct WorkspaceTabCreationSheet: View {
           icon: "terminal",
           title: "Shell Tab",
           description:
-            "Open a normal interactive shell rooted in the selected worktree for general commands.",
+            "Open a sandboxed shell rooted in the selected worktree.",
           shortcut: "⇧⌘T",
           action: { select(onNewShell) }
         )
         .keyboardShortcut("t", modifiers: [.command, .shift])
 
         WorkspaceTabTypeCard(
-          icon: "lock.shield",
-          title: "Sandboxed Shell Tab",
+          icon: "lock.open",
+          title: "Privileged Shell Tab",
           description:
-            "Open a shell with writes constrained to the selected worktree for safer experimentation.",
+            "Open an unsandboxed shell with your full user permissions.",
           shortcut: "⌥⇧⌘T",
-          action: { select(onNewSandboxedShell) }
+          action: { select(onNewPrivilegedShell) }
         )
         .keyboardShortcut("t", modifiers: [.command, .shift, .option])
       }
@@ -958,6 +958,7 @@ private struct WorkspaceTabTypeCard: View {
 }
 
 private struct WorkspaceAgentTabSheet: View {
+  @Environment(WorkspaceState.self) private var workspaceState
   @Environment(SavedAgentProfiles.self) private var savedAgents
   @Environment(AgentAvailability.self) private var agentAvailability
   @Binding var isPresented: Bool
@@ -966,12 +967,16 @@ private struct WorkspaceAgentTabSheet: View {
   let onDidLaunch: @MainActor () -> Void
 
   @State private var selectedAgentId: String?
-  @State private var yoloMode = false
-  @State private var sandboxEnabled = false
+  @State private var yoloMode = true
+  @State private var sandboxEnabled = true
   @State private var customCommand = ""
   @State private var customName = ""
   @State private var useCustom = false
   @State private var isLaunching = false
+  @State private var showSandboxHelp = false
+  @State private var sandboxHelp: SandboxHelpData?
+  @State private var sandboxHelpError: String?
+  @State private var sandboxHelpLoading = false
 
   private var selectedSavedAgent: SavedAgentProfile? {
     guard let selectedAgentId else { return nil }
@@ -989,8 +994,8 @@ private struct WorkspaceAgentTabSheet: View {
             .font(.title2.weight(.semibold))
           Text(
             allowsCustomCommand
-              ? "Choose a saved agent command or launch a custom one in the selected worktree."
-              : "Choose a saved agent command to launch in the selected worktree."
+              ? "Launch a saved agent or custom command in the selected worktree."
+              : "Launch a saved agent in the selected worktree."
           )
           .font(.callout)
           .foregroundStyle(.secondary)
@@ -1012,52 +1017,15 @@ private struct WorkspaceAgentTabSheet: View {
           columns: [GridItem(.adaptive(minimum: AgentPickerLayout.gridMinimumWidth))], spacing: 8
         ) {
           ForEach(savedAgents.profiles) { profile in
-            let status = agentAvailability.status(for: profile)
-            AgentPickerCard(
-              profile: profile,
-              status: status,
-              isSelected: !useCustom && selectedAgentId == profile.id
-            ) {
-              selectedAgentId = profile.id
-              useCustom = false
-              if profile.yoloFlag.isEmpty {
-                yoloMode = false
-              }
-            }
+            savedAgentCard(for: profile)
           }
 
           if allowsCustomCommand {
-            Button {
+            CustomAgentPickerCard(isSelected: useCustom, accentColor: .accentColor) {
               useCustom = true
               selectedAgentId = nil
               yoloMode = false
-            } label: {
-              HStack(spacing: 6) {
-                Image(systemName: "terminal")
-                  .foregroundStyle(useCustom ? Color.accentColor : .secondary)
-                Text("Custom")
-                  .fontWeight(useCustom ? .medium : .regular)
-              }
-              .font(.callout)
-              .padding(.horizontal, 12)
-              .padding(.vertical, 8)
-              .frame(maxWidth: .infinity, alignment: .leading)
-              .background(
-                useCustom
-                  ? Color.accentColor.opacity(0.12)
-                  : Color(nsColor: .controlBackgroundColor)
-              )
-              .foregroundStyle(useCustom ? Color.accentColor : .primary)
-              .clipShape(RoundedRectangle(cornerRadius: 8))
-              .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                  .stroke(
-                    useCustom ? Color.accentColor.opacity(0.35) : Color(nsColor: .separatorColor),
-                    lineWidth: 1
-                  )
-              )
             }
-            .buttonStyle(.plain)
           }
         }
       }
@@ -1072,29 +1040,40 @@ private struct WorkspaceAgentTabSheet: View {
         }
       }
 
+      VStack(alignment: .leading, spacing: 4) {
+        Toggle(isOn: $sandboxEnabled) {
+          Text("Sandboxed")
+            .font(.callout)
+        }
+        .toggleStyle(.checkbox)
+
+        Button("Configuration") {
+          presentSandboxHelp()
+        }
+        .buttonStyle(.link)
+        .font(.caption)
+        .padding(.leading, 22)
+        .popover(isPresented: $showSandboxHelp, arrowEdge: .bottom) {
+          SandboxHelpPopover(
+            help: sandboxHelp,
+            errorMessage: sandboxHelpError,
+            isLoading: sandboxHelpLoading
+          )
+        }
+      }
+
       if let selectedSavedAgent, !selectedSavedAgent.yoloFlag.isEmpty {
         Toggle(isOn: $yoloMode) {
           VStack(alignment: .leading, spacing: 1) {
             Text("Auto-approve mode")
               .font(.callout)
-            Text("Appends \(selectedSavedAgent.yoloFlag) to the command")
+            Text(yoloSubtitle(for: selectedSavedAgent.yoloFlag))
               .font(.caption)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(yoloSubtitleColor)
           }
         }
         .toggleStyle(.checkbox)
       }
-
-      Toggle(isOn: $sandboxEnabled) {
-        VStack(alignment: .leading, spacing: 1) {
-          Text("Sandboxed")
-            .font(.callout)
-          Text("Keep write access scoped to the selected worktree.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-      }
-      .toggleStyle(.checkbox)
 
       HStack {
         Spacer()
@@ -1191,9 +1170,65 @@ private struct WorkspaceAgentTabSheet: View {
       })?.id ?? savedAgents.profiles.first?.id
   }
 
+  private func presentSandboxHelp() {
+    showSandboxHelp = true
+    guard !sandboxHelpLoading else { return }
+    let repoRoot = workspaceState.target.repoRoot
+    if sandboxHelp?.repoRoot == repoRoot, sandboxHelpError == nil {
+      return
+    }
+
+    sandboxHelpLoading = true
+    sandboxHelpError = nil
+
+    Task {
+      let result = await Task.detached(priority: .userInitiated) {
+        Result {
+          let defaults = try ArgonCLI.sandboxDefaults(repoRoot: repoRoot)
+          let paths = try ArgonCLI.sandboxConfigPaths(repoRoot: repoRoot)
+          return SandboxHelpData(repoRoot: repoRoot, defaults: defaults, paths: paths)
+        }
+      }.value
+
+      sandboxHelpLoading = false
+      switch result {
+      case .success(let help):
+        sandboxHelp = help
+        sandboxHelpError = nil
+      case .failure(let error):
+        sandboxHelp = nil
+        sandboxHelpError = error.localizedDescription
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func savedAgentCard(for profile: SavedAgentProfile) -> some View {
+    let status = agentAvailability.status(for: profile)
+    AgentPickerCard(
+      profile: profile,
+      status: status,
+      isSelected: !useCustom && selectedAgentId == profile.id
+    ) {
+      selectedAgentId = profile.id
+      useCustom = false
+      if profile.yoloFlag.isEmpty {
+        yoloMode = false
+      }
+    }
+  }
+
   private func defaultDisplayName(for command: String) -> String {
     let base = command.split(separator: " ").first.map(String.init) ?? "Agent"
     return base.isEmpty ? "Agent" : base.capitalized
+  }
+
+  private func yoloSubtitle(for flag: String) -> String {
+    sandboxEnabled ? "Appends \(flag)." : "Dangerous without sandbox enabled."
+  }
+
+  private var yoloSubtitleColor: Color {
+    sandboxEnabled ? .secondary : .red
   }
 }
 

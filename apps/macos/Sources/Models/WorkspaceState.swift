@@ -335,13 +335,13 @@ final class WorkspaceState {
     preparedReviewTargetsByAgentTabID.removeValue(forKey: agentTabID)
   }
 
-  func openShellTab(sandboxed: Bool = false) {
+  func openShellTab(sandboxed: Bool = true) {
     guard let worktree = selectedWorktree else { return }
 
     let worktreePath = normalizedPath(worktree.path)
     let ordinal = nextOrdinal(in: worktreePath) { tab in
       if case .shell = tab.kind {
-        return true
+        return tab.isSandboxed == sandboxed
       }
       return false
     }
@@ -349,7 +349,7 @@ final class WorkspaceState {
     let tab = WorkspaceTerminalTab(
       worktreePath: worktreePath,
       worktreeLabel: worktree.branchName ?? repoName,
-      title: sandboxed ? "Sandboxed Shell \(ordinal)" : "Shell \(ordinal)",
+      title: sandboxed ? "Shell \(ordinal)" : "Privileged Shell \(ordinal)",
       commandDescription: sandboxed
         ? "Sandboxed \(UserShell.resolvedPath())"
         : UserShell
