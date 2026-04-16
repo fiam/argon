@@ -1,18 +1,27 @@
 .PHONY: check fmt lint test test-rust test-swift test-ui build-swift build-release build-dmg build-libghostty build-libghostty-universal print-libghostty-path print-libghostty-resources-path deny
 
+SWIFT_FORMAT ?= $(shell xcrun --find swift-format 2>/dev/null || command -v swift-format 2>/dev/null)
+SDKROOT ?= $(shell xcrun --sdk macosx --show-sdk-path 2>/dev/null)
+CC ?= $(shell xcrun --find clang 2>/dev/null || command -v cc 2>/dev/null)
+CXX ?= $(shell xcrun --find clang++ 2>/dev/null || command -v c++ 2>/dev/null)
+
+export SDKROOT
+export CC
+export CXX
+
 # Run all checks (formatting, linting, tests, license audit)
 check: fmt lint deny test
 
 # Format all code
 fmt:
 	cargo fmt
-	swift-format format --in-place --recursive apps/macos/Sources/ apps/macos/Tests/ apps/macos/UITests/
+	$(SWIFT_FORMAT) format --in-place --recursive apps/macos/Sources/ apps/macos/Tests/ apps/macos/UITests/
 
 # Lint all code
 lint:
 	cargo fmt --check
 	cargo clippy --workspace -- -D warnings
-	swift-format lint --recursive apps/macos/Sources/ apps/macos/Tests/ apps/macos/UITests/
+	$(SWIFT_FORMAT) lint --recursive apps/macos/Sources/ apps/macos/Tests/ apps/macos/UITests/
 
 # Run all tests
 test: test-rust test-swift

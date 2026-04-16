@@ -7,6 +7,11 @@ final class ArgonUITests: XCTestCase {
   private static let disableStateRestorationArguments = [
     "-ApplePersistenceIgnoreState", "YES",
   ]
+  private static let gitExecutableCandidates = [
+    "/Applications/Xcode.app/Contents/Developer/usr/bin/git",
+    "/Library/Developer/CommandLineTools/usr/bin/git",
+    "/usr/bin/git",
+  ]
   private static let ghosttyCrashDirectory = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent(".local/state/ghostty/crash", isDirectory: true)
 
@@ -167,9 +172,42 @@ final class ArgonUITests: XCTestCase {
     XCTAssertTrue(app.buttons["launch-reviewer-button"].exists)
   }
 
+  @MainActor
+  func testWorkspaceSidebarShowsConflictMarkerForConflictedWorktree() throws {
+    let target = try Self.createConflictedWorkspace()
+    let app = XCUIApplication()
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.fixtureRoot)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--workspace-repo-root", target.repoRoot,
+      "--workspace-common-dir", target.repoCommonDir,
+      "--selected-worktree-path", target.selectedWorktreePath,
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+    XCTAssertTrue(
+      app.descendants(matching: .any)["workspace-sidebar-conflicts"].waitForExistence(timeout: 15)
+    )
+  }
+
   private struct ReviewTarget {
     let sessionId: String
     let repoRoot: String
+    let argonHome: String
+  }
+
+  private struct WorkspaceLaunchTarget {
+    let fixtureRoot: String
+    let repoRoot: String
+    let repoCommonDir: String
+    let selectedWorktreePath: String
     let argonHome: String
   }
 
@@ -206,6 +244,64 @@ final class ArgonUITests: XCTestCase {
     try data.write(to: sessionFile, options: .atomic)
 
     return ReviewTarget(sessionId: sessionId, repoRoot: repoRoot, argonHome: argonHome)
+  }
+
+  private static func createConflictedWorkspace() throws -> WorkspaceLaunchTarget {
+    let fixtureRoot = FileManager.default.temporaryDirectory
+      .appendingPathComponent("argon-ui-tests", isDirectory: true)
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let repoRoot = fixtureRoot.appendingPathComponent("repo", isDirectory: true)
+    let worktreeRoot =
+      fixtureRoot
+      .appendingPathComponent("worktrees", isDirectory: true)
+      .appendingPathComponent("feature-conflicted", isDirectory: true)
+    let argonHome = fixtureRoot.appendingPathComponent("argon-home", isDirectory: true)
+
+    try FileManager.default.createDirectory(at: repoRoot, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+      at: worktreeRoot.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(at: argonHome, withIntermediateDirectories: true)
+
+    try git(repoRoot, ["init"])
+    try git(repoRoot, ["config", "user.name", "Argon UI Test"])
+    try git(repoRoot, ["config", "user.email", "argon-ui-test@example.com"])
+
+    let conflictFile = "conflict.txt"
+    try "shared line\n".write(
+      to: repoRoot.appendingPathComponent(conflictFile),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repoRoot, ["add", conflictFile])
+    try git(repoRoot, ["commit", "-m", "Initial commit"])
+    try git(repoRoot, ["branch", "-M", "main"])
+
+    try git(repoRoot, ["worktree", "add", "-b", "feature/conflicted", worktreeRoot.path, "HEAD"])
+
+    try "main branch change\n".write(
+      to: repoRoot.appendingPathComponent(conflictFile),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repoRoot, ["commit", "-am", "Main branch change"])
+
+    try "feature branch change\n".write(
+      to: worktreeRoot.appendingPathComponent(conflictFile),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(worktreeRoot, ["commit", "-am", "Feature branch change"])
+    _ = try git(worktreeRoot, ["merge", "main"], allowFailure: true)
+
+    return WorkspaceLaunchTarget(
+      fixtureRoot: fixtureRoot.path,
+      repoRoot: repoRoot.path,
+      repoCommonDir: repoRoot.appendingPathComponent(".git", isDirectory: true).path,
+      selectedWorktreePath: worktreeRoot.path,
+      argonHome: argonHome.path
+    )
   }
 
   private static func repositoryRoot(filePath: StaticString = #filePath) -> String {
@@ -346,5 +442,56 @@ final class ArgonUITests: XCTestCase {
       RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     }
     return false
+  }
+
+  @discardableResult
+  private static func git(
+    _ workingDirectory: URL, _ arguments: [String], allowFailure: Bool = false
+  )
+    throws -> String
+  {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: gitExecutablePath())
+    process.currentDirectoryURL = workingDirectory
+    process.arguments = arguments
+
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardOutput = stdout
+    process.standardError = stderr
+
+    try process.run()
+    process.waitUntilExit()
+
+    let output =
+      String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+      ?? ""
+    let errorOutput =
+      String(
+        data: stderr.fileHandleForReading.readDataToEndOfFile(),
+        encoding: .utf8
+      ) ?? ""
+
+    if process.terminationStatus != 0 && !allowFailure {
+      throw NSError(
+        domain: "ArgonUITests.git",
+        code: Int(process.terminationStatus),
+        userInfo: [
+          NSLocalizedDescriptionKey:
+            "git \(arguments.joined(separator: " ")) failed: \(errorOutput)"
+        ]
+      )
+    }
+
+    return output
+  }
+
+  private static func gitExecutablePath() -> String {
+    for candidate in gitExecutableCandidates
+    where FileManager.default.isExecutableFile(atPath: candidate) {
+      return candidate
+    }
+
+    return "/usr/bin/git"
   }
 }

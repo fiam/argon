@@ -195,7 +195,9 @@ private struct WorkspaceSidebarRow: View {
           }
 
           HStack(spacing: 10) {
-            if let reviewSnapshot {
+            WorkspaceCompactDiffSummary(summary: summary)
+
+            if let reviewSnapshot, reviewSnapshot.status != .approved {
               WorkspaceSidebarMetadataItem(
                 label: sidebarReviewLabel(for: reviewSnapshot.status),
                 symbolTint: sidebarReviewTint(for: reviewSnapshot.status)
@@ -205,7 +207,8 @@ private struct WorkspaceSidebarRow: View {
             if hasConflicts {
               WorkspaceSidebarMetadataItem(
                 label: "Conflicts",
-                symbolTint: .orange
+                symbolTint: .orange,
+                accessibilityIdentifier: "workspace-sidebar-conflicts"
               )
             }
 
@@ -214,8 +217,6 @@ private struct WorkspaceSidebarRow: View {
                 label: activeAgentCount == 1 ? "1 agent" : "\(activeAgentCount) agents"
               )
             }
-
-            WorkspaceCompactDiffSummary(summary: summary)
 
             Spacer(minLength: 0)
           }
@@ -304,6 +305,7 @@ private struct WorkspaceSidebarRow: View {
 private struct WorkspaceSidebarMetadataItem: View {
   let label: String
   var symbolTint: Color? = nil
+  var accessibilityIdentifier: String? = nil
 
   var body: some View {
     HStack(spacing: 4) {
@@ -311,6 +313,7 @@ private struct WorkspaceSidebarMetadataItem: View {
         Circle()
           .fill(symbolTint)
           .frame(width: 6, height: 6)
+          .accessibilityHidden(true)
       }
 
       Text(label)
@@ -318,6 +321,9 @@ private struct WorkspaceSidebarMetadataItem: View {
     }
     .font(.caption2)
     .foregroundStyle(.secondary)
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel(Text(label))
+    .accessibilityIdentifier(accessibilityIdentifier ?? "")
   }
 }
 
