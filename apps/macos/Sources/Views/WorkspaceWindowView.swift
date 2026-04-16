@@ -125,7 +125,7 @@ private struct WorkspaceSidebar: View {
           )
         } else {
           ScrollView {
-            LazyVStack(spacing: 10) {
+            LazyVStack(spacing: 4) {
               ForEach(workspaceState.worktrees) { worktree in
                 WorkspaceSidebarRow(
                   worktree: worktree,
@@ -136,9 +136,9 @@ private struct WorkspaceSidebar: View {
                 }
               }
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-            .padding(.bottom, 14)
+            .padding(.horizontal, 8)
+            .padding(.top, 6)
+            .padding(.bottom, 10)
           }
           .scrollIndicators(.hidden)
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -160,16 +160,7 @@ private struct WorkspaceSidebar: View {
     .sheet(isPresented: $showNewWorktreeSheet) {
       WorkspaceNewWorktreeSheet(isPresented: $showNewWorktreeSheet)
     }
-    .background(
-      LinearGradient(
-        colors: [
-          Color(nsColor: .controlBackgroundColor).opacity(0.92),
-          Color(nsColor: .windowBackgroundColor).opacity(0.96),
-        ],
-        startPoint: .top,
-        endPoint: .bottom
-      )
-    )
+    .background(Color(nsColor: .controlBackgroundColor))
     .overlay(alignment: .trailing) {
       Rectangle()
         .fill(Color(nsColor: .separatorColor))
@@ -185,18 +176,18 @@ private struct WorkspaceSidebarRow: View {
   let repoRoot: String
   let isSelected: Bool
   let onSelect: () -> Void
+  @State private var isHovering = false
 
   var body: some View {
     Button(action: onSelect) {
-      VStack(alignment: .leading, spacing: 10) {
-        HStack(spacing: 8) {
+      VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
           Text(worktree.branchName ?? "Detached HEAD")
-            .font(.system(.body, design: .monospaced))
-            .fontWeight(.medium)
+            .font(.body.weight(.semibold))
             .lineLimit(1)
 
           if worktree.isBaseWorktree {
-            WorkspaceBadge(label: "Base", tint: .blue)
+            WorkspaceBadge(label: "Base", tint: Color(nsColor: .controlAccentColor))
           } else if worktree.isDetached {
             WorkspaceBadge(label: "Detached", tint: .orange)
           }
@@ -204,66 +195,64 @@ private struct WorkspaceSidebarRow: View {
           Spacer(minLength: 0)
         }
 
-        HStack(spacing: 6) {
-          Image(systemName: "folder")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          Text(shortPath)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-        }
+        Text(pathLabel)
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
 
-        HStack(spacing: 6) {
+        HStack(spacing: 10) {
           if let reviewSnapshot {
-            WorkspaceReviewStatusPill(status: reviewSnapshot.status)
+            WorkspaceSidebarMetadataItem(
+              label: sidebarReviewLabel(for: reviewSnapshot.status),
+              symbolTint: sidebarReviewTint(for: reviewSnapshot.status)
+            )
           }
 
           if hasConflicts {
-            WorkspaceStatusPill(label: "conflicts", tint: .orange)
+            WorkspaceSidebarMetadataItem(
+              label: "Conflicts",
+              symbolTint: .orange
+            )
           }
 
           if activeAgentCount > 0 {
-            WorkspaceStatusPill(
-              label: activeAgentCount == 1 ? "1 agent" : "\(activeAgentCount) agents",
-              tint: .blue
+            WorkspaceSidebarMetadataItem(
+              label: activeAgentCount == 1 ? "1 agent" : "\(activeAgentCount) agents"
             )
           }
 
           if summary.hasChanges {
-            WorkspaceStatusPill(
-              label: summary.fileCount == 1 ? "1 file" : "\(summary.fileCount) files",
-              tint: Color(nsColor: .systemGreen)
+            WorkspaceSidebarMetadataItem(
+              label: summary.fileCount == 1 ? "1 file" : "\(summary.fileCount) files"
             )
           } else {
-            WorkspaceStatusPill(
-              label: "clean",
-              tint: .secondary
+            WorkspaceSidebarMetadataItem(
+              label: "Clean"
             )
           }
 
           Spacer(minLength: 0)
         }
       }
-      .padding(12)
+      .padding(.horizontal, 10)
+      .padding(.vertical, 8)
       .frame(maxWidth: .infinity, alignment: .leading)
       .background(
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
-          .fill(
-            isSelected
-              ? Color.accentColor.opacity(0.16)
-              : Color(nsColor: .windowBackgroundColor).opacity(0.76)
-          )
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .fill(rowBackground)
       )
-      .overlay(
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
-          .stroke(
-            isSelected ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.06), lineWidth: 1
-          )
-      )
-      .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+      .overlay {
+        if isSelected {
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .stroke(Color.accentColor.opacity(0.18), lineWidth: 1)
+        }
+      }
+      .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
     .buttonStyle(.plain)
+    .onHover { hovering in
+      isHovering = hovering
+    }
   }
 
   private var shortPath: String {
@@ -281,6 +270,44 @@ private struct WorkspaceSidebarRow: View {
     return normalizedPath
   }
 
+  private var pathLabel: String {
+    shortPath == "." ? "Repository root" : shortPath
+  }
+
+  private var rowBackground: Color {
+    if isSelected {
+      return Color.accentColor.opacity(0.14)
+    }
+
+    return isHovering ? Color.primary.opacity(0.05) : .clear
+  }
+
+  private func sidebarReviewLabel(for status: SessionStatus) -> String {
+    switch status {
+    case .awaitingReviewer:
+      "Needs review"
+    case .awaitingAgent:
+      "Needs agent"
+    case .approved:
+      "Approved"
+    case .closed:
+      "Closed"
+    }
+  }
+
+  private func sidebarReviewTint(for status: SessionStatus) -> Color {
+    switch status {
+    case .awaitingReviewer:
+      .orange
+    case .awaitingAgent:
+      Color(nsColor: .controlAccentColor)
+    case .approved:
+      Color(nsColor: .systemGreen)
+    case .closed:
+      .secondary
+    }
+  }
+
   private var summary: WorktreeDiffSummary {
     workspaceState.summary(for: worktree.path)
   }
@@ -295,6 +322,26 @@ private struct WorkspaceSidebarRow: View {
 
   private var activeAgentCount: Int {
     workspaceState.activeAgentCount(for: worktree.path)
+  }
+}
+
+private struct WorkspaceSidebarMetadataItem: View {
+  let label: String
+  var symbolTint: Color? = nil
+
+  var body: some View {
+    HStack(spacing: 4) {
+      if let symbolTint {
+        Circle()
+          .fill(symbolTint)
+          .frame(width: 6, height: 6)
+      }
+
+      Text(label)
+        .lineLimit(1)
+    }
+    .font(.caption2)
+    .foregroundStyle(.secondary)
   }
 }
 
@@ -1734,10 +1781,10 @@ private struct WorkspaceBadge: View {
 
   var body: some View {
     Text(label)
-      .font(.system(size: 10, weight: .semibold, design: .monospaced))
-      .padding(.horizontal, 7)
-      .padding(.vertical, 3)
-      .background(tint.opacity(0.12), in: Capsule())
+      .font(.caption2.weight(.medium))
+      .padding(.horizontal, 6)
+      .padding(.vertical, 2)
+      .background(tint.opacity(0.08), in: Capsule())
       .foregroundStyle(tint)
   }
 }
