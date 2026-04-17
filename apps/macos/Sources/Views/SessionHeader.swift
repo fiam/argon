@@ -914,29 +914,52 @@ struct DiffStatView: View {
 
   var body: some View {
     if !files.isEmpty {
-      HStack(spacing: 4) {
+      ViewThatFits(in: .horizontal) {
         if presentation == .full {
-          Text("\(files.count) files")
-            .font(.caption2)
-            .foregroundStyle(.secondary)
+          statRow(showFileCount: true, showTotals: true, showBar: true)
         }
-
         if presentation != .minimal {
-          Text("+\(added)")
-            .font(.caption2)
-            .fontWeight(.medium)
-            .foregroundColor(Color(nsColor: .systemGreen))
-          Text("-\(removed)")
-            .font(.caption2)
-            .fontWeight(.medium)
-            .foregroundColor(Color(nsColor: .systemRed))
+          statRow(showFileCount: false, showTotals: true, showBar: true)
+          statRow(showFileCount: false, showTotals: true, showBar: false)
+          statRow(showFileCount: false, showTotals: false, showBar: true)
         }
-
-        if presentation != .minimal {
-          DiffStatBar(added: added, removed: removed)
-        }
+        EmptyView()
       }
     }
+  }
+
+  @ViewBuilder
+  private func statRow(
+    showFileCount: Bool,
+    showTotals: Bool,
+    showBar: Bool
+  ) -> some View {
+    HStack(spacing: 4) {
+      if showFileCount {
+        Text("\(files.count) files")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+
+      if showTotals {
+        Text("+\(added)")
+          .font(.caption2)
+          .fontWeight(.medium)
+          .foregroundColor(Color(nsColor: .systemGreen))
+          .lineLimit(1)
+        Text("-\(removed)")
+          .font(.caption2)
+          .fontWeight(.medium)
+          .foregroundColor(Color(nsColor: .systemRed))
+          .lineLimit(1)
+      }
+
+      if showBar {
+        DiffStatBar(added: added, removed: removed)
+      }
+    }
+    .fixedSize(horizontal: true, vertical: true)
   }
 }
 

@@ -74,28 +74,22 @@ struct SettingsView: View {
       }
 
       Section("Worktrees") {
-        VStack(alignment: .leading, spacing: 8) {
-          Text("Root directory")
-            .foregroundStyle(.secondary)
-
-          Text(currentWorktreeRootPathDisplay)
-            .font(.system(.body, design: .monospaced))
-            .textSelection(.enabled)
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .help(worktreeRootPath)
-
-          HStack(spacing: 8) {
-            Button("Choose…") {
-              chooseWorktreeRootDirectory()
-            }
-            .controlSize(.small)
-
-            Button("Use Default") {
-              worktreeRootPath = WorktreeRootSettings.defaultRootPath()
-            }
-            .controlSize(.small)
+        HStack(spacing: 8) {
+          DirectoryPathControl(
+            path: worktreeRootPath,
+            placeholder: "Choose worktree root"
+          ) {
+            chooseWorktreeRootDirectory()
           }
+          .frame(minWidth: 220, idealWidth: 280, maxWidth: .infinity)
+          .frame(height: 22)
+          .help(worktreeRootPath)
+
+          Button("Reset to Default") {
+            worktreeRootPath = WorktreeRootSettings.defaultRootPath()
+          }
+          .controlSize(.small)
+          .disabled(worktreeRootPath == WorktreeRootSettings.defaultRootPath())
         }
       }
     }
@@ -226,10 +220,6 @@ struct SettingsView: View {
           : WorkspaceFinishedTerminalBehavior.keepOpen.rawValue
       }
     )
-  }
-
-  private var currentWorktreeRootPathDisplay: String {
-    WorktreeRootSettings.abbreviatedPath(worktreeRootPath)
   }
 
   private func chooseWorktreeRootDirectory() {

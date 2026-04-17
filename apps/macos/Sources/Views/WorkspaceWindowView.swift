@@ -1369,19 +1369,13 @@ private struct WorkspaceNewWorktreeSheet: View {
           Text("Path")
             .font(.callout.weight(.medium))
 
-          Text(currentPathDisplay)
-            .font(.system(.body, design: .monospaced))
-            .textSelection(.enabled)
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .help(path)
+          DirectoryPathControl(path: path) {
+            chooseWorktreeDirectory()
+          }
+          .frame(height: 22)
+          .help(path)
 
           HStack(spacing: 8) {
-            Button("Choose…") {
-              chooseWorktreeDirectory()
-            }
-            .controlSize(.small)
-
             Button("Use Suggested") {
               path = lastSuggestedPath
               hasCustomizedPath = false
@@ -1455,10 +1449,6 @@ private struct WorkspaceNewWorktreeSheet: View {
     !branchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       && !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       && !workspaceState.isCreatingWorktree
-  }
-
-  private var currentPathDisplay: String {
-    WorktreeRootSettings.abbreviatedPath(path)
   }
 
   private func createWorktree() {
