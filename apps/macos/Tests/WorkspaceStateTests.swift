@@ -67,6 +67,36 @@ struct WorkspaceStateTests {
     #expect(state.activeAgentCount(for: "/tmp/repo") == 0)
   }
 
+  @Test("custom agent tabs derive titles from the command and hash duplicate names")
+  @MainActor
+  func customAgentTabsDeriveTitlesFromCommandName() throws {
+    let state = makeState()
+
+    let first = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: commandExecutableName(from: "'/opt/tools/My Agent/bin/codex' --yolo"),
+          command: "'/opt/tools/My Agent/bin/codex' --yolo",
+          icon: "terminal",
+          sandboxEnabled: true,
+          useHashedDuplicateSuffix: true
+        ))
+    )
+    let second = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: commandExecutableName(from: "codex exec"),
+          command: "codex exec",
+          icon: "terminal",
+          sandboxEnabled: true,
+          useHashedDuplicateSuffix: true
+        ))
+    )
+
+    #expect(first.title == "codex")
+    #expect(second.title == "codex #2")
+  }
+
   @Test("review handoff auto-selects a single running agent tab")
   @MainActor
   func reviewHandoffAutoSelectsSingleRunningAgentTab() throws {

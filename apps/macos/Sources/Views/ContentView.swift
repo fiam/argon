@@ -61,7 +61,7 @@ struct ReviewLayout: View {
   var body: some View {
     NavigationSplitView {
       FileTreeSidebar()
-        .navigationSplitViewColumnWidth(min: 180, ideal: 230, max: 300)
+        .navigationSplitViewColumnWidth(min: 150, ideal: 210, max: 280)
     } detail: {
       VStack(spacing: 0) {
         HStack(spacing: 0) {
@@ -89,7 +89,7 @@ struct ReviewLayout: View {
       .accessibilityIdentifier("review-layout")
       .inspector(isPresented: $showInspector) {
         ThreadsSidebar(session: session)
-          .inspectorColumnWidth(min: 220, ideal: 260, max: 340)
+          .inspectorColumnWidth(min: 180, ideal: 240, max: 320)
       }
     }
     .toolbar {

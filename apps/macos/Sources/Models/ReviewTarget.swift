@@ -3,6 +3,7 @@ import Foundation
 enum ReviewLaunchContext: String, Codable, Hashable, Sendable {
   case standalone
   case coderHandoff
+  case externalHandoff
 }
 
 struct ReviewTarget: Codable, Hashable, Sendable {

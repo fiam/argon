@@ -1,5 +1,17 @@
 import SwiftUI
 
+enum ReviewHeaderActionPresentation {
+  case full
+  case compact
+  case iconOnly
+}
+
+enum ReviewHeaderContentPresentation {
+  case full
+  case compact
+  case minimal
+}
+
 struct SessionHeader: View {
   @Environment(AppState.self) private var appState
   let session: ReviewSession
@@ -8,30 +20,34 @@ struct SessionHeader: View {
   @State private var submitSummary = ""
   @State private var submitOutcome: String = "commented"
   @State private var showPromptToast = false
+  @State private var promptToastMessage = AgentPromptToast.defaultMessage
   @State private var toastDismissWorkItem: DispatchWorkItem?
+  @State private var hasShownExternalHandoffToast = false
+  @State private var availableWidth: CGFloat = 0
 
   var body: some View {
     HStack(spacing: 10) {
       HStack(spacing: 8) {
-        StatusBadge(status: session.status)
+        StatusBadge(status: session.status, presentation: contentPresentation)
 
-        ModePicker()
+        ModePicker(presentation: contentPresentation)
 
-        DiffStatView(files: appState.files)
+        DiffStatView(files: appState.files, presentation: contentPresentation)
       }
 
-      if let summary = session.changeSummary {
+      if contentPresentation == .full, let summary = session.changeSummary {
         Divider().frame(height: 16)
         Text(summary)
           .font(.caption)
           .foregroundStyle(.secondary)
           .lineLimit(1)
+          .truncationMode(.tail)
       }
 
       // Reviewer agent decision banner
       if let decision = session.decision {
         Divider().frame(height: 16)
-        DecisionBanner(decision: decision)
+        DecisionBanner(decision: decision, presentation: contentPresentation)
       }
 
       Spacer()
@@ -39,15 +55,15 @@ struct SessionHeader: View {
       DiffModeToggle()
 
       if session.status != .approved && session.status != .closed {
-        AgentLaunchButton()
+        AgentLaunchButton(presentation: actionPresentation)
         if appState.showsCoderSetupActions {
-          HandoffButton {
-            showAgentPromptToast()
+          HandoffButton(presentation: actionPresentation) {
+            showAgentPromptToast(externalHandoffToastMessage)
           }
         }
-        CoderConnectionBadge()
+        CoderConnectionBadge(presentation: actionPresentation)
         Divider().frame(height: 16)
-        reviewActions
+        reviewActions(presentation: actionPresentation)
       } else if session.status == .approved {
         Label("Approved", systemImage: "checkmark.circle.fill")
           .font(.callout)
@@ -59,12 +75,24 @@ struct SessionHeader: View {
           .foregroundStyle(.secondary)
       }
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.horizontal, 10)
     .padding(.vertical, 3)
     .background(Color(nsColor: .controlBackgroundColor))
+    .background {
+      GeometryReader { proxy in
+        Color.clear
+          .onAppear {
+            availableWidth = proxy.size.width
+          }
+          .onChange(of: proxy.size.width) { _, newWidth in
+            availableWidth = newWidth
+          }
+      }
+    }
     .overlay(alignment: .bottomTrailing) {
       if showPromptToast {
-        AgentPromptToast()
+        AgentPromptToast(message: promptToastMessage)
           .offset(x: -8, y: 40)
           .transition(.move(edge: .top).combined(with: .opacity))
           .allowsHitTesting(false)
@@ -94,6 +122,15 @@ struct SessionHeader: View {
     }
     .onAppear {
       appState.reloadDrafts()
+      if appState.reviewLaunchContext == .externalHandoff,
+        appState.coderConnectionState == .awaitingConnection,
+        !hasShownExternalHandoffToast
+      {
+        hasShownExternalHandoffToast = true
+        showAgentPromptToast(
+          "Review prompt copied. Paste it into your external agent to connect the session."
+        )
+      }
     }
     .onDisappear {
       toastDismissWorkItem?.cancel()
@@ -101,11 +138,20 @@ struct SessionHeader: View {
     }
   }
 
+  private var externalHandoffToastMessage: String {
+    if appState.reviewLaunchContext == .externalHandoff,
+      appState.coderConnectionState == .awaitingConnection
+    {
+      return "Review prompt copied. Paste it into your external agent to connect the session."
+    }
+    return AgentPromptToast.defaultMessage
+  }
+
   @ViewBuilder
-  private var reviewActions: some View {
+  private func reviewActions(presentation: ReviewHeaderActionPresentation) -> some View {
     HStack(spacing: 8) {
       // Pending drafts badge
-      if !appState.pendingDrafts.isEmpty {
+      if presentation == .full && !appState.pendingDrafts.isEmpty {
         Text("\(appState.pendingDrafts.count) pending")
           .font(.caption)
           .fontWeight(.medium)
@@ -120,14 +166,73 @@ struct SessionHeader: View {
         submitOutcome = "approved"
         showSubmitSheet = true
       } label: {
-        Label("Submit Review", systemImage: "paperplane")
+        switch presentation {
+        case .full:
+          Label("Submit Review", systemImage: "paperplane")
+        case .compact:
+          Label("Submit", systemImage: "paperplane")
+        case .iconOnly:
+          Image(systemName: "paperplane")
+        }
       }
+      .accessibilityIdentifier("submit-review-button")
+      .accessibilityLabel("Submit Review")
       .controlSize(.small)
     }
   }
 
-  private func showAgentPromptToast() {
+  private var actionPresentation: ReviewHeaderActionPresentation {
+    let measuredWidth = availableWidth > 0 ? availableWidth : 980
+    let reservedSummaryWidth: CGFloat = session.changeSummary == nil ? 0 : 170
+    let reservedDecisionWidth: CGFloat = session.decision == nil ? 0 : 150
+    let effectiveWidth = measuredWidth - reservedSummaryWidth - reservedDecisionWidth
+
+    if effectiveWidth < 540 {
+      return .iconOnly
+    }
+    if effectiveWidth < 620 {
+      return .compact
+    }
+    return .full
+  }
+
+  private var contentPresentation: ReviewHeaderContentPresentation {
+    let measuredWidth = availableWidth > 0 ? availableWidth : 980
+    let remainingWidth = measuredWidth - estimatedTrailingControlsWidth
+
+    if remainingWidth < 260 {
+      return .minimal
+    }
+    if remainingWidth < 440 {
+      return .compact
+    }
+    return .full
+  }
+
+  private var estimatedTrailingControlsWidth: CGFloat {
+    let diffModeWidth: CGFloat = 74
+    let basePadding: CGFloat = 48
+
+    guard session.status != .approved && session.status != .closed else {
+      return diffModeWidth + basePadding + 96
+    }
+
+    let reviewActionWidth: CGFloat
+    switch actionPresentation {
+    case .full:
+      reviewActionWidth = appState.showsCoderSetupActions ? 520 : 220
+    case .compact:
+      reviewActionWidth = appState.showsCoderSetupActions ? 380 : 160
+    case .iconOnly:
+      reviewActionWidth = appState.showsCoderSetupActions ? 228 : 92
+    }
+
+    return diffModeWidth + basePadding + reviewActionWidth
+  }
+
+  private func showAgentPromptToast(_ message: String = AgentPromptToast.defaultMessage) {
     toastDismissWorkItem?.cancel()
+    promptToastMessage = message
     withAnimation(.easeInOut(duration: 0.2)) {
       showPromptToast = true
     }
@@ -185,6 +290,7 @@ struct DiffModeToggle: View {
 
 struct ModePicker: View {
   @Environment(AppState.self) private var appState
+  let presentation: ReviewHeaderContentPresentation
 
   var body: some View {
     Menu {
@@ -209,7 +315,11 @@ struct ModePicker: View {
     } label: {
       HStack(spacing: 4) {
         Image(systemName: activeModeIcon)
-        Text(activeModeLabel)
+        if presentation != .minimal {
+          Text(activeModeLabel)
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+        }
         Image(systemName: "chevron.down")
           .font(.system(size: 8, weight: .semibold))
       }
@@ -217,7 +327,6 @@ struct ModePicker: View {
       .foregroundStyle(.secondary)
     }
     .menuStyle(.borderlessButton)
-    .fixedSize()
     .disabled(!appState.canSwitchReviewMode)
     .help(appState.modeSwitchDisabledReason ?? "Switch review target")
     .alert(
@@ -247,13 +356,25 @@ struct ModePicker: View {
   }
 
   private var activeModeLabel: String {
-    switch appState.activeMode {
-    case .branch:
-      "\(shorten(appState.activeBaseRef))...\(shorten(appState.activeHeadRef))"
-    case .commit:
-      "commit \(shorten(appState.activeHeadRef))"
-    case .uncommitted:
-      "uncommitted changes"
+    switch presentation {
+    case .full:
+      switch appState.activeMode {
+      case .branch:
+        "\(shorten(appState.activeBaseRef))...\(shorten(appState.activeHeadRef))"
+      case .commit:
+        "commit \(shorten(appState.activeHeadRef))"
+      case .uncommitted:
+        "uncommitted changes"
+      }
+    case .compact, .minimal:
+      switch appState.activeMode {
+      case .branch:
+        "branch"
+      case .commit:
+        "commit"
+      case .uncommitted:
+        "uncommitted"
+      }
     }
   }
 
@@ -347,36 +468,52 @@ struct SubmitReviewSheet: View {
           .fontWeight(.medium)
           .foregroundStyle(.secondary)
 
-        TextEditor(text: $summary)
-          .font(.system(.body, design: .monospaced))
-          .frame(width: 460, height: 70)
-          .scrollContentBackground(.hidden)
-          .padding(8)
-          .background(Color(nsColor: .textBackgroundColor))
-          .clipShape(RoundedRectangle(cornerRadius: 6))
-          .overlay(
-            RoundedRectangle(cornerRadius: 6)
-              .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
-          )
+        FocusedTextEditor(
+          text: $summary,
+          onCommandReturn: onSubmit,
+          accessibilityIdentifier: "submit-review-summary-editor"
+        )
+        .frame(width: 460, height: 70)
+        .background(Color(nsColor: .textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+          RoundedRectangle(cornerRadius: 6)
+            .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+        )
       }
 
       // Actions
       HStack {
+        HStack(spacing: 4) {
+          Text("\u{2318}\u{23CE}")
+            .font(.caption)
+            .fontWeight(.medium)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(Color(nsColor: .separatorColor).opacity(0.3))
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+          Text("to submit")
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+        }
         Spacer()
         Button("Cancel", action: onCancel)
+          .accessibilityIdentifier("submit-review-cancel-button")
           .keyboardShortcut(.cancelAction)
         Button {
           onSubmit()
         } label: {
           Label(submitLabel, systemImage: submitIcon)
         }
-        .keyboardShortcut(.defaultAction)
+        .accessibilityIdentifier("submit-review-confirm-button")
+        .keyboardShortcut(.return, modifiers: [.command])
         .buttonStyle(.borderedProminent)
         .tint(submitColor)
       }
     }
     .padding(24)
     .frame(width: 520)
+    .accessibilityIdentifier("submit-review-sheet")
   }
 
   private var submitLabel: String {
@@ -440,17 +577,19 @@ struct DecisionOption: View {
 
 struct DecisionBanner: View {
   let decision: ReviewDecision
+  let presentation: ReviewHeaderContentPresentation
 
   var body: some View {
     HStack(spacing: 6) {
       Image(systemName: icon)
         .font(.caption)
-      Text(label)
-        .font(.caption)
-        .fontWeight(.medium)
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
-      if let summary = decision.summary, !summary.isEmpty {
+      if presentation != .minimal {
+        Text(label)
+          .font(.caption)
+          .fontWeight(.medium)
+          .lineLimit(1)
+      }
+      if presentation == .full, let summary = decision.summary, !summary.isEmpty {
         Text("— \(summary)")
           .font(.caption)
           .foregroundStyle(.secondary)
@@ -462,6 +601,7 @@ struct DecisionBanner: View {
     .background(color.opacity(0.12))
     .foregroundStyle(color)
     .clipShape(Capsule())
+    .help(helpText)
   }
 
   private var label: String {
@@ -487,10 +627,18 @@ struct DecisionBanner: View {
     case .commented: .blue
     }
   }
+
+  private var helpText: String {
+    if let summary = decision.summary, !summary.isEmpty {
+      return "\(label): \(summary)"
+    }
+    return label
+  }
 }
 
 struct HandoffButton: View {
   @Environment(AppState.self) private var appState
+  let presentation: ReviewHeaderActionPresentation
   let onCopy: () -> Void
 
   var body: some View {
@@ -499,10 +647,21 @@ struct HandoffButton: View {
       NSPasteboard.general.setString(appState.handoffPrompt, forType: .string)
       onCopy()
     } label: {
-      HStack(spacing: 6) {
+      switch presentation {
+      case .full:
+        HStack(spacing: 6) {
+          Image(systemName: icon)
+          Text(buttonLabel)
+            .lineLimit(1)
+        }
+      case .compact:
+        HStack(spacing: 6) {
+          Image(systemName: icon)
+          Text("Copy Prompt")
+            .lineLimit(1)
+        }
+      case .iconOnly:
         Image(systemName: icon)
-        Text("Copy Agent Prompt")
-          .lineLimit(1)
       }
     }
     .controlSize(.small)
@@ -512,10 +671,20 @@ struct HandoffButton: View {
     .overlay(attentionBorder)
     .help(helpText)
     .accessibilityIdentifier("CoderHandoffButton")
+    .accessibilityLabel(buttonLabel)
   }
 
   private var icon: String {
     appState.coderNeedsPromptHandoff ? "bolt.badge.clock" : "doc.on.doc"
+  }
+
+  private var buttonLabel: String {
+    if appState.reviewLaunchContext == .externalHandoff,
+      appState.coderConnectionState == .awaitingConnection
+    {
+      return "Copy Prompt Again"
+    }
+    return "Copy Agent Prompt"
   }
 
   @ViewBuilder
@@ -535,6 +704,12 @@ struct HandoffButton: View {
   }
 
   private var helpText: String {
+    if appState.reviewLaunchContext == .externalHandoff,
+      appState.coderConnectionState == .awaitingConnection
+    {
+      return
+        "The review prompt is already on your clipboard. Copy it again if needed, then paste it into your external agent."
+    }
     if appState.coderNeedsPromptHandoff {
       return
         "No coder agent heartbeat yet. Copy the full agent prompt, then paste it into your coder agent or start an agent with that prompt."
@@ -546,14 +721,27 @@ struct HandoffButton: View {
 
 private struct CoderConnectionBadge: View {
   @Environment(AppState.self) private var appState
+  let presentation: ReviewHeaderActionPresentation
 
   var body: some View {
     HStack(spacing: 6) {
-      Circle()
-        .fill(color)
-        .frame(width: 7, height: 7)
-      Text(appState.coderConnectionLabel)
-        .lineLimit(1)
+      switch presentation {
+      case .full:
+        Circle()
+          .fill(color)
+          .frame(width: 7, height: 7)
+        Text(appState.coderConnectionLabel)
+          .lineLimit(1)
+      case .compact:
+        Circle()
+          .fill(color)
+          .frame(width: 7, height: 7)
+        Text(compactLabel)
+          .lineLimit(1)
+      case .iconOnly:
+        Image(systemName: statusIcon)
+          .font(.caption2.weight(.semibold))
+      }
     }
     .font(.caption2)
     .fontWeight(.medium)
@@ -565,6 +753,7 @@ private struct CoderConnectionBadge: View {
     .fixedSize()
     .help(appState.coderConnectionHelpText)
     .accessibilityIdentifier("CoderConnectionBadge")
+    .accessibilityLabel(appState.coderConnectionLabel)
   }
 
   private var color: Color {
@@ -575,18 +764,46 @@ private struct CoderConnectionBadge: View {
       .green
     }
   }
+
+  private var compactLabel: String {
+    switch appState.coderConnectionState {
+    case .awaitingConnection:
+      switch appState.reviewLaunchContext {
+      case .coderHandoff:
+        "Connecting"
+      case .externalHandoff:
+        "Paste"
+      case .standalone:
+        "No coder"
+      }
+    case .connected:
+      "Connected"
+    }
+  }
+
+  private var statusIcon: String {
+    switch appState.coderConnectionState {
+    case .awaitingConnection:
+      "bolt.badge.clock"
+    case .connected:
+      "checkmark.circle.fill"
+    }
+  }
 }
 
 private struct AgentPromptToast: View {
+  static let defaultMessage =
+    "Agent prompt copied. Paste it into your coder agent or start an agent with that prompt."
+
+  let message: String
+
   var body: some View {
     HStack(spacing: 8) {
       Image(systemName: "checkmark.circle.fill")
         .foregroundStyle(.green)
-      Text(
-        "Agent prompt copied. Paste it into your coder agent or start an agent with that prompt."
-      )
-      .font(.caption)
-      .fixedSize(horizontal: false, vertical: true)
+      Text(message)
+        .font(.caption)
+        .fixedSize(horizontal: false, vertical: true)
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 8)
@@ -605,27 +822,43 @@ private struct AgentPromptToast: View {
 struct StatusBadge: View {
   @Environment(AppState.self) private var appState
   let status: SessionStatus
+  let presentation: ReviewHeaderContentPresentation
 
   var body: some View {
-    Text(label)
-      .font(.caption2)
-      .fontWeight(.medium)
-      .lineLimit(1)
-      .fixedSize()
-      .padding(.horizontal, 6)
-      .padding(.vertical, 2)
-      .background(color.opacity(0.15))
-      .foregroundStyle(color)
-      .clipShape(Capsule())
-      .help(helpText)
+    Group {
+      if presentation == .minimal {
+        Image(systemName: icon)
+      } else {
+        Text(label)
+          .lineLimit(1)
+      }
+    }
+    .font(.caption2)
+    .fontWeight(.medium)
+    .padding(.horizontal, 6)
+    .padding(.vertical, 2)
+    .background(color.opacity(0.15))
+    .foregroundStyle(color)
+    .clipShape(Capsule())
+    .help(helpText)
   }
 
   private var label: String {
-    switch status {
-    case .awaitingReviewer: "Awaiting Review"
-    case .awaitingAgent: "Awaiting Agent"
-    case .approved: "Approved"
-    case .closed: "Closed"
+    switch presentation {
+    case .full:
+      switch status {
+      case .awaitingReviewer: "Awaiting Review"
+      case .awaitingAgent: "Awaiting Agent"
+      case .approved: "Approved"
+      case .closed: "Closed"
+      }
+    case .compact, .minimal:
+      switch status {
+      case .awaitingReviewer: "Review"
+      case .awaitingAgent: "Agent"
+      case .approved: "Approved"
+      case .closed: "Closed"
+      }
     }
   }
 
@@ -656,10 +889,20 @@ struct StatusBadge: View {
       "The review session was closed."
     }
   }
+
+  private var icon: String {
+    switch status {
+    case .awaitingReviewer: "ellipsis.circle.fill"
+    case .awaitingAgent: "bolt.circle.fill"
+    case .approved: "checkmark.circle.fill"
+    case .closed: "xmark.circle.fill"
+    }
+  }
 }
 
 struct DiffStatView: View {
   let files: [FileDiff]
+  let presentation: ReviewHeaderContentPresentation
 
   private var added: Int {
     files.reduce(0) { $0 + $1.addedCount }
@@ -672,20 +915,27 @@ struct DiffStatView: View {
   var body: some View {
     if !files.isEmpty {
       HStack(spacing: 4) {
-        Text("\(files.count) files")
-          .font(.caption2)
-          .foregroundStyle(.secondary)
-        Text("+\(added)")
-          .font(.caption2)
-          .fontWeight(.medium)
-          .foregroundColor(Color(nsColor: .systemGreen))
-        Text("-\(removed)")
-          .font(.caption2)
-          .fontWeight(.medium)
-          .foregroundColor(Color(nsColor: .systemRed))
-        DiffStatBar(added: added, removed: removed)
+        if presentation == .full {
+          Text("\(files.count) files")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+
+        if presentation != .minimal {
+          Text("+\(added)")
+            .font(.caption2)
+            .fontWeight(.medium)
+            .foregroundColor(Color(nsColor: .systemGreen))
+          Text("-\(removed)")
+            .font(.caption2)
+            .fontWeight(.medium)
+            .foregroundColor(Color(nsColor: .systemRed))
+        }
+
+        if presentation != .minimal {
+          DiffStatBar(added: added, removed: removed)
+        }
       }
-      .fixedSize()
     }
   }
 }

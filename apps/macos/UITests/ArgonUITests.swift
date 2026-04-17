@@ -197,6 +197,94 @@ final class ArgonUITests: XCTestCase {
     )
   }
 
+  @MainActor
+  func testWorkspaceReviewExternalLaunchOpensManualPasteState() throws {
+    let target = try Self.createWorkspace()
+    let app = XCUIApplication()
+    let signalFile = URL(fileURLWithPath: target.argonHome).appendingPathComponent("signal.txt")
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.fixtureRoot)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--workspace-repo-root", target.repoRoot,
+      "--workspace-common-dir", target.repoCommonDir,
+      "--selected-worktree-path", target.selectedWorktreePath,
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launchEnvironment[Self.signalFileEnvironmentKey] = signalFile.path
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+
+    let reviewButton = app.buttons["workspace-review-button"]
+    XCTAssertTrue(reviewButton.waitForExistence(timeout: 10))
+    reviewButton.tap()
+
+    let externalButton = app.buttons["workspace-review-external-button"]
+    XCTAssertTrue(externalButton.waitForExistence(timeout: 10))
+    externalButton.tap()
+
+    XCTAssertTrue(waitForSignal("review-window-appeared", at: signalFile, timeout: 10))
+    XCTAssertTrue(waitForSignal("session-loaded", at: signalFile, timeout: 10))
+    XCTAssertTrue(app.staticTexts["Paste into agent"].waitForExistence(timeout: 10))
+    let copyAgainButton = app.buttons.matching(
+      NSPredicate(format: "label == %@", "Copy Prompt Again")
+    ).firstMatch
+    XCTAssertTrue(copyAgainButton.waitForExistence(timeout: 10))
+    XCTAssertEqual(copyAgainButton.label, "Copy Prompt Again")
+
+    let copiedPrompt = NSPasteboard.general.string(forType: .string) ?? ""
+    XCTAssertTrue(copiedPrompt.hasPrefix("You are reviewing feedback for Argon session"))
+    XCTAssertTrue(copiedPrompt.contains("Execution contract:"))
+    XCTAssertTrue(copiedPrompt.contains("agent wait"))
+    XCTAssertFalse(copiedPrompt.contains("session: "))
+    XCTAssertFalse(copiedPrompt.contains("agent-prompt-command:"))
+  }
+
+  @MainActor
+  func testSubmitReviewSheetAcceptsCommandReturn() throws {
+    let target = try Self.createSession()
+    let app = XCUIApplication()
+    let signalFile = URL(fileURLWithPath: target.argonHome).appendingPathComponent("signal.txt")
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.argonHome)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--session-id", target.sessionId,
+      "--repo-root", target.repoRoot,
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launchEnvironment[Self.signalFileEnvironmentKey] = signalFile.path
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+    XCTAssertTrue(waitForSignal("load-session-started", at: signalFile, timeout: 10))
+    XCTAssertTrue(waitForSignal("session-loaded", at: signalFile, timeout: 20))
+    app.activate()
+
+    let submitButton = app.buttons.matching(NSPredicate(format: "label == %@", "Submit Review"))
+      .firstMatch
+    XCTAssertTrue(submitButton.waitForExistence(timeout: 20))
+    submitButton.click()
+
+    let submitSummaryEditor = app.descendants(matching: .any)["submit-review-summary-editor"]
+    XCTAssertTrue(submitSummaryEditor.waitForExistence(timeout: 10))
+    submitSummaryEditor.click()
+
+    app.typeKey(.return, modifierFlags: .command)
+
+    XCTAssertTrue(waitForNonExistence(submitSummaryEditor, timeout: 5))
+    XCTAssertTrue(app.staticTexts["Approved"].waitForExistence(timeout: 5))
+  }
+
   private struct ReviewTarget {
     let sessionId: String
     let repoRoot: String
@@ -300,6 +388,38 @@ final class ArgonUITests: XCTestCase {
       repoRoot: repoRoot.path,
       repoCommonDir: repoRoot.appendingPathComponent(".git", isDirectory: true).path,
       selectedWorktreePath: worktreeRoot.path,
+      argonHome: argonHome.path
+    )
+  }
+
+  private static func createWorkspace() throws -> WorkspaceLaunchTarget {
+    let fixtureRoot = FileManager.default.temporaryDirectory
+      .appendingPathComponent("argon-ui-tests", isDirectory: true)
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let repoRoot = fixtureRoot.appendingPathComponent("repo", isDirectory: true)
+    let argonHome = fixtureRoot.appendingPathComponent("argon-home", isDirectory: true)
+
+    try FileManager.default.createDirectory(at: repoRoot, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: argonHome, withIntermediateDirectories: true)
+
+    try git(repoRoot, ["init"])
+    try git(repoRoot, ["config", "user.name", "Argon UI Test"])
+    try git(repoRoot, ["config", "user.email", "argon-ui-test@example.com"])
+
+    try "initial\n".write(
+      to: repoRoot.appendingPathComponent("README.md"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repoRoot, ["add", "README.md"])
+    try git(repoRoot, ["commit", "-m", "Initial commit"])
+    try git(repoRoot, ["branch", "-M", "main"])
+
+    return WorkspaceLaunchTarget(
+      fixtureRoot: fixtureRoot.path,
+      repoRoot: repoRoot.path,
+      repoCommonDir: repoRoot.appendingPathComponent(".git", isDirectory: true).path,
+      selectedWorktreePath: repoRoot.path,
       argonHome: argonHome.path
     )
   }
@@ -442,6 +562,12 @@ final class ArgonUITests: XCTestCase {
       RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     }
     return false
+  }
+
+  private func waitForNonExistence(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+    let predicate = NSPredicate(format: "exists == false")
+    let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
+    return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
   }
 
   @discardableResult

@@ -67,6 +67,7 @@ struct CommentEditorPopover: View {
 struct FocusedTextEditor: NSViewRepresentable {
   @Binding var text: String
   var onCommandReturn: (() -> Void)?
+  var accessibilityIdentifier: String? = nil
 
   func makeCoordinator() -> Coordinator {
     Coordinator(self)
@@ -100,6 +101,10 @@ struct FocusedTextEditor: NSViewRepresentable {
     textView.textContainer?.widthTracksTextView = true
 
     scrollView.documentView = textView
+    if let accessibilityIdentifier {
+      scrollView.setAccessibilityIdentifier(accessibilityIdentifier)
+      textView.setAccessibilityIdentifier(accessibilityIdentifier)
+    }
 
     // Delayed focus to work in popovers
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -117,6 +122,10 @@ struct FocusedTextEditor: NSViewRepresentable {
       textView.string = text
     }
     textView.onCommandReturn = onCommandReturn
+    if let accessibilityIdentifier {
+      scrollView.setAccessibilityIdentifier(accessibilityIdentifier)
+      textView.setAccessibilityIdentifier(accessibilityIdentifier)
+    }
   }
 
   class Coordinator: NSObject, NSTextViewDelegate {

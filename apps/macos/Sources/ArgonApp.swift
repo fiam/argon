@@ -49,7 +49,7 @@ struct ArgonApp: App {
         reviewRoot(target: target)
       }
     }
-    .defaultSize(width: 1100, height: 700)
+    .defaultSize(width: 980, height: 700)
     .commands {
       WorkspaceFileCommands(
         recentProjects: recentProjects,

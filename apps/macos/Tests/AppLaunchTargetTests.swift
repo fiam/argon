@@ -39,6 +39,25 @@ final class AppLaunchTargetTests: XCTestCase {
     )
   }
 
+  func testCurrentParsesExternalReviewLaunchContext() {
+    XCTAssertEqual(
+      AppLaunchTarget.current(
+        arguments: [
+          "Argon",
+          "--session-id", "session-123",
+          "--repo-root", "/tmp/repo",
+          "--review-launch-context", "externalHandoff",
+        ]
+      ),
+      .review(
+        ReviewTarget(
+          sessionId: "session-123",
+          repoRoot: "/tmp/repo",
+          launchContext: .externalHandoff
+        ))
+    )
+  }
+
   func testCurrentParsesWorkspaceArguments() {
     XCTAssertEqual(
       AppLaunchTarget.current(

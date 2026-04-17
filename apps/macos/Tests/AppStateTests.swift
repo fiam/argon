@@ -125,6 +125,23 @@ struct AppStateTests {
     #expect(state.coderConnectionHelpText.contains("selected coder tab"))
   }
 
+  @Test("external handoff reviews keep setup actions visible while prompting manual paste")
+  func externalHandoffReviewsPromptForManualPaste() {
+    let state = AppState(
+      sessionId: UUID().uuidString.lowercased(),
+      repoRoot: "/tmp/repo",
+      reviewLaunchContext: .externalHandoff
+    )
+    state.session = makeSessionWithThread()
+
+    #expect(!state.coderHasConnected)
+    #expect(state.coderNeedsPromptHandoff)
+    #expect(!state.coderHandoffPendingFromWorkspace)
+    #expect(state.showsCoderSetupActions)
+    #expect(state.coderConnectionLabel == "Paste into agent")
+    #expect(state.coderConnectionHelpText.contains("copied the session prompt"))
+  }
+
   @Test("expanding omitted context reveals lines from the requested edge")
   func expandingOmittedContextTracksPerBlockState() {
     let state = AppState()

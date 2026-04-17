@@ -75,7 +75,7 @@ struct SavedAgentProfile: Codable, Identifiable, Hashable, Sendable {
   }
 
   var baseCommand: String {
-    command.split(separator: " ").first.map(String.init) ?? command
+    commandExecutableName(from: command)
   }
 }
 
@@ -180,4 +180,68 @@ func renderAgentCommand(
 private func shellQuote(_ value: String) -> String {
   let escaped = value.replacingOccurrences(of: "'", with: "'\\''")
   return "'\(escaped)'"
+}
+
+func commandExecutableName(from command: String) -> String {
+  let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !trimmed.isEmpty else { return "agent" }
+
+  var token = ""
+  var index = trimmed.startIndex
+  var quote: Character?
+
+  while index < trimmed.endIndex {
+    let character = trimmed[index]
+
+    if let activeQuote = quote {
+      if character == activeQuote {
+        quote = nil
+        index = trimmed.index(after: index)
+        continue
+      }
+
+      if activeQuote == "\"" && character == "\\" {
+        let nextIndex = trimmed.index(after: index)
+        if nextIndex < trimmed.endIndex {
+          token.append(trimmed[nextIndex])
+          index = trimmed.index(after: nextIndex)
+          continue
+        }
+      }
+
+      token.append(character)
+      index = trimmed.index(after: index)
+      continue
+    }
+
+    if character.isWhitespace {
+      if token.isEmpty {
+        index = trimmed.index(after: index)
+        continue
+      }
+      break
+    }
+
+    if character == "'" || character == "\"" {
+      quote = character
+      index = trimmed.index(after: index)
+      continue
+    }
+
+    if character == "\\" {
+      let nextIndex = trimmed.index(after: index)
+      if nextIndex < trimmed.endIndex {
+        token.append(trimmed[nextIndex])
+        index = trimmed.index(after: nextIndex)
+        continue
+      }
+    }
+
+    token.append(character)
+    index = trimmed.index(after: index)
+  }
+
+  let executable = token.isEmpty ? trimmed : token
+  let basename = URL(fileURLWithPath: executable).lastPathComponent
+  return basename.isEmpty ? "agent" : basename
 }

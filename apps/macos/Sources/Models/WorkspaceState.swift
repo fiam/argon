@@ -546,7 +546,7 @@ final class WorkspaceState {
     let tab = WorkspaceTerminalTab(
       worktreePath: worktreePath,
       worktreeLabel: worktree.branchName ?? repoName,
-      title: ordinal == 1 ? request.displayName : "\(request.displayName) \(ordinal)",
+      title: agentTabTitle(for: request, ordinal: ordinal),
       commandDescription: request.command,
       kind: .agent(profileName: request.displayName, icon: request.icon),
       launch: launch,
@@ -954,6 +954,14 @@ final class WorkspaceState {
     terminalTabsByWorktreePath.values
       .joined()
       .first { $0.id == tabID }
+  }
+
+  private func agentTabTitle(for request: WorkspaceAgentLaunchRequest, ordinal: Int) -> String {
+    guard ordinal > 1 else { return request.displayName }
+    if request.useHashedDuplicateSuffix {
+      return "\(request.displayName) #\(ordinal)"
+    }
+    return "\(request.displayName) \(ordinal)"
   }
 
   private func eligibleReviewAgentTabs() -> [WorkspaceTerminalTab] {

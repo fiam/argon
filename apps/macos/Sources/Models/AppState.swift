@@ -741,7 +741,7 @@ final class AppState {
     guard let session else { return false }
     return session.status != .approved && session.status != .closed
       && coderConnectionState == .awaitingConnection
-      && reviewLaunchContext == .standalone
+      && reviewLaunchContext != .coderHandoff
   }
 
   var coderHandoffPendingFromWorkspace: Bool {
@@ -749,13 +749,20 @@ final class AppState {
   }
 
   var showsCoderSetupActions: Bool {
-    reviewLaunchContext == .standalone
+    reviewLaunchContext != .coderHandoff
   }
 
   var coderConnectionLabel: String {
     switch coderConnectionState {
     case .awaitingConnection:
-      reviewLaunchContext == .coderHandoff ? "Connecting coder" : "No coder yet"
+      switch reviewLaunchContext {
+      case .coderHandoff:
+        "Connecting coder"
+      case .externalHandoff:
+        "Paste into agent"
+      case .standalone:
+        "No coder yet"
+      }
     case .connected:
       "Coder connected"
     }
@@ -767,6 +774,10 @@ final class AppState {
       if reviewLaunchContext == .coderHandoff {
         return
           "Argon handed this session to the selected coder tab and is waiting for the first heartbeat."
+      }
+      if reviewLaunchContext == .externalHandoff {
+        return
+          "Argon copied the session prompt. Paste it into your external agent and wait for the first heartbeat."
       }
       return "No coder agent heartbeat yet. Copy Agent Prompt to hand off this session."
     case .connected(let lastSeenAt):

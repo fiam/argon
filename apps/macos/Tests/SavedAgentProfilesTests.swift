@@ -73,4 +73,11 @@ struct SavedAgentProfilesTests {
     #expect(decoded.count == 1)
     #expect(decoded[0].promptArgumentTemplate == "")
   }
+
+  @Test("command executable names strip paths and preserve quoted argv0")
+  func commandExecutableNamesUseArgvZero() {
+    #expect(commandExecutableName(from: "codex --yolo") == "codex")
+    #expect(commandExecutableName(from: "/opt/tools/claude --print") == "claude")
+    #expect(commandExecutableName(from: "'/Applications/My Tool/bin/agent' --json") == "agent")
+  }
 }

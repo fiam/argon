@@ -24,6 +24,21 @@ struct WorkspaceAgentLaunchRequest: Sendable {
   let command: String
   let icon: String
   let sandboxEnabled: Bool
+  let useHashedDuplicateSuffix: Bool
+
+  init(
+    displayName: String,
+    command: String,
+    icon: String,
+    sandboxEnabled: Bool,
+    useHashedDuplicateSuffix: Bool = false
+  ) {
+    self.displayName = displayName
+    self.command = command
+    self.icon = icon
+    self.sandboxEnabled = sandboxEnabled
+    self.useHashedDuplicateSuffix = useHashedDuplicateSuffix
+  }
 }
 
 enum WorkspaceAgentLaunchSource: Sendable {
@@ -46,7 +61,8 @@ struct WorkspaceAgentLaunchOptions: Sendable {
           prompt: prompt
         ),
         icon: profile.icon,
-        sandboxEnabled: sandboxEnabled
+        sandboxEnabled: sandboxEnabled,
+        useHashedDuplicateSuffix: false
       )
     case .custom(let displayName, let command, let icon):
       return WorkspaceAgentLaunchRequest(
@@ -57,7 +73,8 @@ struct WorkspaceAgentLaunchOptions: Sendable {
           prompt: prompt
         ),
         icon: icon,
-        sandboxEnabled: sandboxEnabled
+        sandboxEnabled: sandboxEnabled,
+        useHashedDuplicateSuffix: true
       )
     }
   }

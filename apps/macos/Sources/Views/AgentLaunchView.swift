@@ -6,15 +6,28 @@ enum AgentPickerLayout {
 
 struct AgentLaunchButton: View {
   @Environment(AppState.self) private var appState
+  let presentation: ReviewHeaderActionPresentation
   @State private var showLaunchSheet = false
+
+  init(presentation: ReviewHeaderActionPresentation = .full) {
+    self.presentation = presentation
+  }
 
   var body: some View {
     Button {
       showLaunchSheet = true
     } label: {
-      Label("Launch Reviewer", systemImage: "person.badge.plus")
+      switch presentation {
+      case .full:
+        Label("Launch Reviewer", systemImage: "person.badge.plus")
+      case .compact:
+        Label("Reviewer", systemImage: "person.badge.plus")
+      case .iconOnly:
+        Image(systemName: "person.badge.plus")
+      }
     }
     .accessibilityIdentifier("launch-reviewer-button")
+    .accessibilityLabel("Launch Reviewer")
     .controlSize(.small)
     .disabled(appState.session?.status == .approved || appState.session?.status == .closed)
     .sheet(isPresented: $showLaunchSheet) {
@@ -197,7 +210,7 @@ struct AgentLaunchSheet: View {
       let cmd = customCommand.trimmingCharacters(in: .whitespacesAndNewlines)
       profile = AgentProfile(
         id: "custom-\(UUID().uuidString.prefix(8))",
-        name: "Custom",
+        name: commandExecutableName(from: cmd),
         command: cmd,
         icon: "terminal",
         isDetected: false,
@@ -552,9 +565,11 @@ struct CustomAgentPickerCard: View {
     Button(action: onSelect) {
       HStack(spacing: 6) {
         Image(systemName: "terminal")
+          .font(.callout.weight(.medium))
           .foregroundStyle(isSelected ? accentColor : .secondary)
-        Text("Custom")
+        Text("Custom Command")
           .fontWeight(isSelected ? .medium : .regular)
+          .lineLimit(1)
       }
       .font(.callout)
       .padding(.horizontal, 12)
@@ -570,5 +585,46 @@ struct CustomAgentPickerCard: View {
       )
     }
     .buttonStyle(.plain)
+    .help("Run any command in a new agent tab.")
+  }
+}
+
+struct ExternalAgentPickerCard: View {
+  let action: () -> Void
+  @State private var isHovering = false
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 6) {
+        Image(systemName: "arrow.up.right.square")
+          .font(.callout.weight(.medium))
+          .foregroundStyle(.secondary)
+        Text("External Agent")
+          .lineLimit(1)
+      }
+      .font(.callout)
+      .padding(.horizontal, 12)
+      .padding(.vertical, 8)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(
+        isHovering
+          ? Color.accentColor.opacity(0.08)
+          : Color(nsColor: .controlBackgroundColor)
+      )
+      .foregroundStyle(.primary)
+      .overlay(
+        RoundedRectangle(cornerRadius: 8)
+          .stroke(
+            isHovering ? Color.accentColor.opacity(0.22) : Color.clear,
+            lineWidth: 1
+          )
+      )
+      .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+    .buttonStyle(.plain)
+    .help("Copy the review prompt and paste it into an external agent.")
+    .onHover { hovering in
+      isHovering = hovering
+    }
   }
 }

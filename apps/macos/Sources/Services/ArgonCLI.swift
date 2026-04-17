@@ -218,14 +218,14 @@ enum ArgonCLI {
   }
 
   static func agentPrompt(sessionId: String, repoRoot: String) throws -> String {
-    try run(
+    let output = try run(
       repoRoot: repoRoot,
       args: [
         "agent", "prompt",
         "--session", sessionId,
       ]
     )
-    .trimmingCharacters(in: .whitespacesAndNewlines)
+    return extractAgentPromptText(from: output)
   }
 
   /// Get the reviewer prompt from the CLI (includes full context: mode, refs, commands).
@@ -250,6 +250,20 @@ enum ArgonCLI {
   static func sandboxConfigPaths(repoRoot: String?) throws -> SandboxConfigPaths {
     let output = try run(repoRoot: repoRoot, args: ["sandbox", "config", "paths", "--json"])
     return try decode(SandboxConfigPaths.self, from: output)
+  }
+
+  static func extractAgentPromptText(from output: String) -> String {
+    let normalized =
+      output
+      .replacingOccurrences(of: "\r\n", with: "\n")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+
+    guard normalized.hasPrefix("session:"), let separator = normalized.range(of: "\n\n") else {
+      return normalized
+    }
+
+    return String(normalized[separator.upperBound...]).trimmingCharacters(
+      in: .whitespacesAndNewlines)
   }
 
   /// Build a reviewer prompt with optional focus instructions prepended.

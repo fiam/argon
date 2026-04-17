@@ -43,6 +43,7 @@ struct ReviewWindowView: View {
     if let window {
       guard attachedWindow !== window else { return }
       attachedWindow = window
+      window.contentMinSize = NSSize(width: 860, height: 560)
       reviewWindowRegistry.register(window: window, repoRoot: target.repoRoot)
       return
     }

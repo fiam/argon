@@ -457,6 +457,8 @@ private struct WorkspaceChangedFilesPane: View {
 
 private struct WorkspaceTerminalDeck: View {
   @Environment(WorkspaceState.self) private var workspaceState
+  @Environment(ReviewWindowRegistry.self) private var reviewWindowRegistry
+  @Environment(\.openWindow) private var openWindow
 
   var body: some View {
     @Bindable var workspaceState = workspaceState
@@ -508,6 +510,7 @@ private struct WorkspaceTerminalDeck: View {
           isPresented: $workspaceState.isPresentingAgentLaunchSheet,
           allowsCustomCommand: workspaceState.isPreparingReviewAgentLaunch,
           isReviewHandoffRequest: workspaceState.isPreparingReviewAgentLaunch,
+          showsExternalOption: workspaceState.isPreparingReviewAgentLaunch,
           onLaunch: { options in
             do {
               try await workspaceState.launchAgent(using: options)
@@ -517,12 +520,47 @@ private struct WorkspaceTerminalDeck: View {
               return false
             }
           },
+          onExternalLaunch: {
+            await launchExternalReview()
+          },
           onDidLaunch: {
             workspaceState.activateStagedReviewLaunch()
           }
         )
       }
     )
+  }
+
+  private func launchExternalReview() async -> Bool {
+    do {
+      let target = try await workspaceState.createReviewTarget(launchContext: .externalHandoff)
+      do {
+        let prompt = try await Task.detached {
+          try ArgonCLI.agentPrompt(sessionId: target.sessionId, repoRoot: target.repoRoot)
+        }.value
+        copyToPasteboard(prompt)
+        reviewWindowRegistry.open(target: target) { target in
+          openWindow(value: target)
+        }
+        return true
+      } catch {
+        try? await Task.detached {
+          try ArgonCLI.closeSession(sessionId: target.sessionId, repoRoot: target.repoRoot)
+        }.value
+        workspaceState.refreshReviewSnapshot(for: target.repoRoot)
+        workspaceState.errorMessage =
+          "Argon could not build the external agent handoff prompt: \(error.localizedDescription)"
+      }
+    } catch {
+      workspaceState.errorMessage = error.localizedDescription
+    }
+
+    return false
+  }
+
+  private func copyToPasteboard(_ text: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
   }
 }
 
@@ -1000,14 +1038,15 @@ private struct WorkspaceAgentTabSheet: View {
   @Binding var isPresented: Bool
   let allowsCustomCommand: Bool
   let isReviewHandoffRequest: Bool
+  let showsExternalOption: Bool
   let onLaunch: @MainActor (WorkspaceAgentLaunchOptions) async -> Bool
+  let onExternalLaunch: @MainActor () async -> Bool
   let onDidLaunch: @MainActor () -> Void
 
   @State private var selectedAgentId: String?
   @State private var yoloMode = true
   @State private var sandboxEnabled = true
   @State private var customCommand = ""
-  @State private var customName = ""
   @State private var useCustom = false
   @State private var isLaunching = false
   @State private var showSandboxHelp = false
@@ -1053,6 +1092,14 @@ private struct WorkspaceAgentTabSheet: View {
             savedAgentCard(for: profile)
           }
 
+          if showsExternalOption {
+            ExternalAgentPickerCard {
+              launchExternal()
+            }
+            .disabled(isLaunching)
+            .accessibilityIdentifier("workspace-review-external-button")
+          }
+
           if allowsCustomCommand {
             CustomAgentPickerCard(isSelected: useCustom, accentColor: .accentColor) {
               useCustom = true
@@ -1065,9 +1112,7 @@ private struct WorkspaceAgentTabSheet: View {
 
       if allowsCustomCommand && useCustom {
         VStack(alignment: .leading, spacing: 8) {
-          TextField("Tab name", text: $customName)
-            .textFieldStyle(.roundedBorder)
-          TextField("Command", text: $customCommand)
+          TextField("Command", text: $customCommand, prompt: Text("e.g. codex --yolo"))
             .textFieldStyle(.roundedBorder)
             .font(.system(.body, design: .monospaced))
         }
@@ -1158,7 +1203,8 @@ private struct WorkspaceAgentTabSheet: View {
 
   private var sheetSubtitle: String {
     if isReviewHandoffRequest {
-      return "Launch an agent to handle review comments for this worktree."
+      return
+        "Launch a coder tab here, or copy the review prompt for your own external agent."
     }
 
     return allowsCustomCommand
@@ -1181,14 +1227,25 @@ private struct WorkspaceAgentTabSheet: View {
     }
   }
 
+  private func launchExternal() {
+    guard !isLaunching else { return }
+
+    isLaunching = true
+    Task { @MainActor in
+      let didLaunch = await onExternalLaunch()
+      isLaunching = false
+      guard didLaunch else { return }
+      isPresented = false
+    }
+  }
+
   private var launchOptions: WorkspaceAgentLaunchOptions? {
     if allowsCustomCommand && useCustom {
       let command = customCommand.trimmingCharacters(in: .whitespacesAndNewlines)
-      let displayName = customName.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !command.isEmpty else { return nil }
       return WorkspaceAgentLaunchOptions(
         source: .custom(
-          displayName: displayName.isEmpty ? defaultDisplayName(for: command) : displayName,
+          displayName: commandExecutableName(from: command),
           command: command,
           icon: "terminal"
         ),
@@ -1263,11 +1320,6 @@ private struct WorkspaceAgentTabSheet: View {
         yoloMode = false
       }
     }
-  }
-
-  private func defaultDisplayName(for command: String) -> String {
-    let base = command.split(separator: " ").first.map(String.init) ?? "Agent"
-    return base.isEmpty ? "Agent" : base.capitalized
   }
 
   private func yoloSubtitle(for flag: String) -> String {
@@ -1472,6 +1524,7 @@ private struct WorkspaceInspectorPane: View {
                 ) {
                   handleReviewButton(for: worktree.path)
                 }
+                .accessibilityIdentifier("workspace-review-button")
 
                 HStack(spacing: 8) {
                   WorkspaceEditorLauncher(worktreePath: worktree.path)
