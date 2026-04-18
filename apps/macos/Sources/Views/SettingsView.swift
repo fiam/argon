@@ -215,7 +215,8 @@ struct SettingsView: View {
           command: "",
           icon: "agent",
           yoloFlag: "",
-          promptArgumentTemplate: ""
+          promptArgumentTemplate: "",
+          resumeArgumentTemplate: ""
         )
       ) { newProfile in
         savedAgents.add(newProfile)
@@ -605,6 +606,12 @@ private struct AgentProfileRow: View {
             .foregroundStyle(.secondary)
             .lineLimit(1)
         }
+        if !profile.resumeArgumentTemplate.isEmpty {
+          Text(profile.resumeArgumentTemplate)
+            .font(.caption2.monospaced())
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
       }
       Spacer()
       Text(statusLabel)
@@ -659,6 +666,7 @@ private struct AgentEditorSheet: View {
   @State private var editCommand: String
   @State private var editYoloFlag: String
   @State private var editPromptArgumentTemplate: String
+  @State private var editResumeArgumentTemplate: String
 
   init(profile: SavedAgentProfile, onSave: @escaping (SavedAgentProfile) -> Void) {
     self.profile = profile
@@ -667,6 +675,7 @@ private struct AgentEditorSheet: View {
     self._editCommand = State(initialValue: profile.command)
     self._editYoloFlag = State(initialValue: profile.yoloFlag)
     self._editPromptArgumentTemplate = State(initialValue: profile.promptArgumentTemplate)
+    self._editResumeArgumentTemplate = State(initialValue: profile.resumeArgumentTemplate)
   }
 
   var body: some View {
@@ -690,6 +699,13 @@ private struct AgentEditorSheet: View {
         )
         .font(.caption)
         .foregroundStyle(.secondary)
+        TextField("Resume argument template", text: $editResumeArgumentTemplate)
+          .font(.system(.body, design: .monospaced))
+        Text(
+          "Use {{session_id}} where the quoted session ID should be inserted. Leave empty to disable resume-on-restore for this agent."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
       }
       .formStyle(.grouped)
 
@@ -706,6 +722,9 @@ private struct AgentEditorSheet: View {
           updated.command = editCommand.trimmingCharacters(in: .whitespacesAndNewlines)
           updated.yoloFlag = editYoloFlag.trimmingCharacters(in: .whitespacesAndNewlines)
           updated.promptArgumentTemplate = editPromptArgumentTemplate.trimmingCharacters(
+            in: .whitespacesAndNewlines
+          )
+          updated.resumeArgumentTemplate = editResumeArgumentTemplate.trimmingCharacters(
             in: .whitespacesAndNewlines
           )
           if !updated.name.isEmpty && !updated.command.isEmpty {

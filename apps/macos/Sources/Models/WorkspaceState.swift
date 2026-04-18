@@ -4,6 +4,7 @@ import Foundation
 @Observable
 final class WorkspaceState {
   nonisolated(unsafe) static var tabRestoreTestDelay: Duration?
+  nonisolated(unsafe) static var sessionRecordsProvider: (@Sendable () -> [AgentSessionRecord])?
 
   var worktrees: [DiscoveredWorktree] = []
   var worktreeSummaries: [String: WorktreeDiffSummary] = [:]
@@ -197,33 +198,22 @@ final class WorkspaceState {
       showsLinkedWorktreeWarning: false
     )
 
+    let pendingTabsByWorktreePath = pendingRestorableTabsByWorktreePath.reduce(
+      into: [String: [PersistedWorkspaceTerminalTab]]()
+    ) { partialResult, entry in
+      let migratedTabs = entry.value.map(Self.persistedTabByInferringResumeTemplate(from:))
+      if !migratedTabs.isEmpty {
+        partialResult[entry.key] = migratedTabs
+      }
+    }
+
     let terminalTabsByWorktreePath =
-      pendingRestorableTabsByWorktreePath.merging(
+      pendingTabsByWorktreePath.merging(
         terminalTabsByWorktreePath.reduce(into: [String: [PersistedWorkspaceTerminalTab]]()) {
           partialResult, entry in
-          let persistedTabs = entry.value.compactMap { tab -> PersistedWorkspaceTerminalTab? in
-            guard tab.isRunning, tab.isRestorableAfterRelaunch else { return nil }
-
-            let kind: PersistedWorkspaceTerminalTabKind
-            switch tab.kind {
-            case .shell:
-              kind = .shell
-            case .agent(let profileName, let icon):
-              kind = .agent(profileName: profileName, icon: icon)
-            }
-
-            return PersistedWorkspaceTerminalTab(
-              id: tab.id,
-              worktreePath: tab.worktreePath,
-              worktreeLabel: tab.worktreeLabel,
-              title: tab.title,
-              commandDescription: tab.commandDescription,
-              kind: kind,
-              createdAt: tab.createdAt,
-              isSandboxed: tab.isSandboxed,
-              writableRoots: tab.writableRoots
-            )
-          }
+          let persistedTabs = entry.value.compactMap(Self.persistedTerminalTab(from:)).map(
+            Self.persistedTabByInferringResumeTemplate(from:)
+          )
 
           if !persistedTabs.isEmpty {
             partialResult[entry.key] = persistedTabs
@@ -253,17 +243,21 @@ final class WorkspaceState {
       into: [String: [PersistedWorkspaceTerminalTab]]()
     ) { partialResult, entry in
       partialResult[normalizedPath(entry.key)] = entry.value.map { tab in
-        PersistedWorkspaceTerminalTab(
-          id: tab.id,
-          worktreePath: normalizedPath(tab.worktreePath),
-          worktreeLabel: tab.worktreeLabel,
-          title: tab.title,
-          commandDescription: tab.commandDescription,
-          kind: tab.kind,
-          createdAt: tab.createdAt,
-          isSandboxed: tab.isSandboxed,
-          writableRoots: tab.writableRoots.map(normalizedPath)
-        )
+        Self.persistedTabByInferringResumeTemplate(
+          from: PersistedWorkspaceTerminalTab(
+            id: tab.id,
+            worktreePath: normalizedPath(tab.worktreePath),
+            worktreeLabel: tab.worktreeLabel,
+            title: tab.title,
+            commandDescription: tab.commandDescription,
+            kind: tab.kind,
+            createdAt: tab.createdAt,
+            isSandboxed: tab.isSandboxed,
+            writableRoots: tab.writableRoots.map(normalizedPath),
+            resumeArgumentTemplate: tab.resumeArgumentTemplate,
+            resumeSessionID: tab.resumeSessionID,
+            resumeCommandDescription: tab.resumeCommandDescription
+          ))
       }
     }
 
@@ -789,6 +783,15 @@ final class WorkspaceState {
         writableRoots: writableRoots
       )
       : TerminalLaunchConfiguration.command(request.command, currentDirectory: worktree.path)
+    let resumeArgumentTemplate =
+      request.isRestorableAfterRelaunch
+      ? request.resumeArgumentTemplate
+      : ""
+    let resumeCommandDescription = renderAgentResumeCommand(
+      baseCommand: request.command,
+      resumeArgumentTemplate: resumeArgumentTemplate,
+      sessionID: nil
+    )
 
     let tab = WorkspaceTerminalTab(
       worktreePath: worktreePath,
@@ -799,7 +802,10 @@ final class WorkspaceState {
       launch: launch,
       isSandboxed: request.sandboxEnabled,
       writableRoots: writableRoots.map(normalizedPath),
-      isRestorableAfterRelaunch: request.isRestorableAfterRelaunch
+      isRestorableAfterRelaunch: request.isRestorableAfterRelaunch,
+      resumeArgumentTemplate: resumeArgumentTemplate,
+      resumeSessionID: nil,
+      resumeCommandDescription: resumeCommandDescription
     )
 
     insertTerminalTab(tab, for: worktreePath)
@@ -1027,19 +1033,25 @@ final class WorkspaceState {
   nonisolated private static func restorePersistedTabs(
     _ persistedTabs: [PersistedWorkspaceTerminalTab]
   ) -> RestoredPersistedTabs {
+    let hydratedTabs = hydratedPersistedAgentResumeMetadata(for: persistedTabs)
+
     let commandStatuses = UserShell.loginCommandStatuses(
-      persistedTabs.compactMap { persistedTab in
+      hydratedTabs.compactMap { persistedTab in
         guard case .agent = persistedTab.kind else { return nil }
-        return commandExecutableToken(from: persistedTab.commandDescription)
+        return commandExecutableToken(
+          from: persistedTab.resumeCommandDescription ?? persistedTab.commandDescription
+        )
       }
     )
 
     var restorableTabs: [PersistedWorkspaceTerminalTab] = []
     var missingAgentCount = 0
 
-    for persistedTab in persistedTabs {
+    for persistedTab in hydratedTabs {
       if case .agent = persistedTab.kind {
-        let executable = commandExecutableToken(from: persistedTab.commandDescription)
+        let executable = commandExecutableToken(
+          from: persistedTab.resumeCommandDescription ?? persistedTab.commandDescription
+        )
         guard commandStatuses[executable] == true else {
           missingAgentCount += 1
           continue
@@ -1060,6 +1072,8 @@ final class WorkspaceState {
   ) -> WorkspaceTerminalTab {
     let launch: TerminalLaunchConfiguration
     let kind: WorkspaceTerminalKind
+    let launchCommandDescription =
+      persistedTab.resumeCommandDescription ?? persistedTab.commandDescription
 
     switch persistedTab.kind {
     case .shell:
@@ -1076,12 +1090,12 @@ final class WorkspaceState {
       launch =
         persistedTab.isSandboxed
         ? TerminalLaunchConfiguration.sandboxedCommand(
-          persistedTab.commandDescription,
+          launchCommandDescription,
           currentDirectory: persistedTab.worktreePath,
           writableRoots: persistedTab.writableRoots
         )
         : TerminalLaunchConfiguration.command(
-          persistedTab.commandDescription,
+          launchCommandDescription,
           currentDirectory: persistedTab.worktreePath
         )
     }
@@ -1097,8 +1111,361 @@ final class WorkspaceState {
       createdAt: persistedTab.createdAt,
       isSandboxed: persistedTab.isSandboxed,
       writableRoots: persistedTab.writableRoots,
-      isRestorableAfterRelaunch: true
+      isRestorableAfterRelaunch: true,
+      resumeArgumentTemplate: persistedTab.resumeArgumentTemplate,
+      resumeSessionID: persistedTab.resumeSessionID,
+      resumeCommandDescription: persistedTab.resumeCommandDescription
     )
+  }
+
+  nonisolated private static func hydratedPersistedAgentResumeMetadata(
+    for persistedTabs: [PersistedWorkspaceTerminalTab]
+  ) -> [PersistedWorkspaceTerminalTab] {
+    var hydratedTabs = persistedTabs
+
+    for index in hydratedTabs.indices {
+      let tab = hydratedTabs[index]
+      guard case .agent = tab.kind else { continue }
+      guard tab.resumeCommandDescription == nil else { continue }
+      guard
+        let renderedResumeCommand = renderAgentResumeCommand(
+          baseCommand: tab.commandDescription,
+          resumeArgumentTemplate: tab.resumeArgumentTemplate,
+          sessionID: tab.resumeSessionID
+        )
+      else { continue }
+      hydratedTabs[index] = PersistedWorkspaceTerminalTab(
+        id: tab.id,
+        worktreePath: tab.worktreePath,
+        worktreeLabel: tab.worktreeLabel,
+        title: tab.title,
+        commandDescription: tab.commandDescription,
+        kind: tab.kind,
+        createdAt: tab.createdAt,
+        isSandboxed: tab.isSandboxed,
+        writableRoots: tab.writableRoots,
+        resumeArgumentTemplate: tab.resumeArgumentTemplate,
+        resumeSessionID: tab.resumeSessionID,
+        resumeCommandDescription: renderedResumeCommand
+      )
+    }
+
+    let unresolvedGroups = Dictionary(
+      grouping: hydratedTabs.indices.filter { index in
+        let tab = hydratedTabs[index]
+        guard case .agent = tab.kind else { return false }
+        guard tab.resumeCommandDescription == nil else { return false }
+        guard tab.resumeArgumentTemplate.contains("{{session_id}}") else { return false }
+        return isCodexCommand(tab.commandDescription)
+      }
+    ) { index in
+      normalizedPath(hydratedTabs[index].worktreePath)
+    }
+
+    guard !unresolvedGroups.isEmpty else { return hydratedTabs }
+
+    let earliestCreatedAt =
+      unresolvedGroups.values
+      .flatMap { $0 }
+      .compactMap { hydratedTabs[$0].createdAt }
+      .min()
+      ?? .distantPast
+    let codexSessionsByWorktreePath = groupedCodexSessions(
+      notBefore: earliestCreatedAt.addingTimeInterval(-3600)
+    )
+
+    for (worktreePath, indices) in unresolvedGroups {
+      guard !indices.isEmpty else { continue }
+      guard var sessions = codexSessionsByWorktreePath[worktreePath], !sessions.isEmpty else {
+        continue
+      }
+
+      sessions.sort {
+        if $0.startedAt == $1.startedAt {
+          return $0.sessionID < $1.sessionID
+        }
+        return $0.startedAt < $1.startedAt
+      }
+
+      let existingSessionIDs: Set<String> = Set(
+        hydratedTabs.compactMap { tab in
+          let normalizedTabWorktreePath = normalizedPath(tab.worktreePath)
+          guard normalizedTabWorktreePath == worktreePath else { return nil }
+          return tab.resumeSessionID
+        }
+      )
+      var usedSessionIDs = existingSessionIDs
+
+      let sortedIndices = indices.sorted {
+        let lhs = hydratedTabs[$0]
+        let rhs = hydratedTabs[$1]
+        if lhs.createdAt == rhs.createdAt {
+          return lhs.id.uuidString < rhs.id.uuidString
+        }
+        return lhs.createdAt < rhs.createdAt
+      }
+
+      for index in sortedIndices {
+        let tab = hydratedTabs[index]
+        if let tabSessionID = tab.resumeSessionID, !tabSessionID.isEmpty {
+          usedSessionIDs.insert(tabSessionID)
+          if let renderedResumeCommand = renderAgentResumeCommand(
+            baseCommand: tab.commandDescription,
+            resumeArgumentTemplate: tab.resumeArgumentTemplate,
+            sessionID: tabSessionID
+          ) {
+            hydratedTabs[index] = PersistedWorkspaceTerminalTab(
+              id: tab.id,
+              worktreePath: tab.worktreePath,
+              worktreeLabel: tab.worktreeLabel,
+              title: tab.title,
+              commandDescription: tab.commandDescription,
+              kind: tab.kind,
+              createdAt: tab.createdAt,
+              isSandboxed: tab.isSandboxed,
+              writableRoots: tab.writableRoots,
+              resumeArgumentTemplate: tab.resumeArgumentTemplate,
+              resumeSessionID: tabSessionID,
+              resumeCommandDescription: renderedResumeCommand
+            )
+          }
+          continue
+        }
+
+        let createdAtCutoff = tab.createdAt.addingTimeInterval(-120)
+        let matchingSession =
+          sessions.first { session in
+            !usedSessionIDs.contains(session.sessionID) && session.startedAt >= createdAtCutoff
+          }
+          ?? sessions.first { session in
+            !usedSessionIDs.contains(session.sessionID)
+          }
+
+        guard let matchingSession else { continue }
+        usedSessionIDs.insert(matchingSession.sessionID)
+        guard
+          let renderedResumeCommand = renderAgentResumeCommand(
+            baseCommand: tab.commandDescription,
+            resumeArgumentTemplate: tab.resumeArgumentTemplate,
+            sessionID: matchingSession.sessionID
+          )
+        else { continue }
+
+        hydratedTabs[index] = PersistedWorkspaceTerminalTab(
+          id: tab.id,
+          worktreePath: tab.worktreePath,
+          worktreeLabel: tab.worktreeLabel,
+          title: tab.title,
+          commandDescription: tab.commandDescription,
+          kind: tab.kind,
+          createdAt: tab.createdAt,
+          isSandboxed: tab.isSandboxed,
+          writableRoots: tab.writableRoots,
+          resumeArgumentTemplate: tab.resumeArgumentTemplate,
+          resumeSessionID: matchingSession.sessionID,
+          resumeCommandDescription: renderedResumeCommand
+        )
+      }
+    }
+
+    return hydratedTabs
+  }
+
+  nonisolated private static func groupedCodexSessions(notBefore: Date) -> [String:
+    [CodexSessionRecord]]
+  {
+    let records = loadCodexSessionRecords(notBefore: notBefore)
+    return Dictionary(grouping: records) { record in
+      normalizedPath(record.cwd)
+    }
+  }
+
+  nonisolated private static func loadCodexSessionRecords(notBefore: Date) -> [CodexSessionRecord] {
+    if let provider = sessionRecordsProvider {
+      return provider()
+        .filter { $0.provider == .codex && $0.startedAt >= notBefore }
+        .map {
+          CodexSessionRecord(sessionID: $0.sessionID, cwd: $0.cwd, startedAt: $0.startedAt)
+        }
+    }
+
+    let root = FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent(".codex/sessions", isDirectory: true)
+    guard FileManager.default.fileExists(atPath: root.path) else { return [] }
+
+    let keys: Set<URLResourceKey> = [.isRegularFileKey]
+    guard
+      let enumerator = FileManager.default.enumerator(
+        at: root,
+        includingPropertiesForKeys: Array(keys),
+        options: [.skipsHiddenFiles]
+      )
+    else { return [] }
+
+    var records: [CodexSessionRecord] = []
+    for case let fileURL as URL in enumerator {
+      guard fileURL.pathExtension == "jsonl" else { continue }
+      guard fileURL.lastPathComponent.hasPrefix("rollout-") else { continue }
+      guard
+        let values = try? fileURL.resourceValues(forKeys: keys),
+        values.isRegularFile == true
+      else {
+        continue
+      }
+      guard
+        let metadata = codexSessionMetadataFromRolloutFilename(fileURL.lastPathComponent)
+      else {
+        continue
+      }
+      let startedAt = metadata.startedAt ?? .distantPast
+      guard startedAt >= notBefore else { continue }
+      guard let prefix = try? readUTF8Prefix(of: fileURL, maxBytes: 4096) else { continue }
+      guard let cwd = jsonStringValue(forKey: "cwd", in: prefix), !cwd.isEmpty else { continue }
+      records.append(
+        CodexSessionRecord(sessionID: metadata.sessionID, cwd: cwd, startedAt: startedAt)
+      )
+    }
+
+    return records
+  }
+
+  nonisolated private static func readUTF8Prefix(of url: URL, maxBytes: Int) throws -> String {
+    let handle = try FileHandle(forReadingFrom: url)
+    defer { try? handle.close() }
+    let data = try handle.read(upToCount: maxBytes) ?? Data()
+    return String(decoding: data, as: UTF8.self)
+  }
+
+  nonisolated private static func codexSessionMetadataFromRolloutFilename(_ filename: String)
+    -> (sessionID: String, startedAt: Date?)?
+  {
+    guard filename.hasPrefix("rollout-"), filename.hasSuffix(".jsonl") else { return nil }
+    let stem = filename.dropFirst("rollout-".count).dropLast(".jsonl".count)
+    let timestampLength = 19  // yyyy-MM-dd'T'HH-mm-ss
+    guard stem.count > timestampLength else {
+      return nil
+    }
+    let separatorIndex = stem.index(stem.startIndex, offsetBy: timestampLength)
+    guard stem[separatorIndex] == "-" else { return nil }
+
+    let timestampText = String(stem[..<separatorIndex])
+    let sessionStart = parseCodexRolloutTimestamp(timestampText)
+
+    let sessionIDStart = stem.index(after: separatorIndex)
+    let sessionID = String(stem[sessionIDStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !sessionID.isEmpty else {
+      return nil
+    }
+    return (sessionID, sessionStart)
+  }
+
+  nonisolated private static func parseCodexRolloutTimestamp(_ value: String) -> Date? {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = .current
+    formatter.dateFormat = "yyyy-MM-dd'T'HH-mm-ss"
+    return formatter.date(from: value)
+  }
+
+  nonisolated private static func jsonStringValue(forKey key: String, in text: String) -> String? {
+    let token = "\"\(key)\":\""
+    guard let tokenRange = text.range(of: token) else { return nil }
+    var index = tokenRange.upperBound
+    var escaped = false
+    var characters: [Character] = []
+
+    while index < text.endIndex {
+      let character = text[index]
+      if escaped {
+        characters.append(character)
+        escaped = false
+      } else if character == "\\" {
+        escaped = true
+      } else if character == "\"" {
+        let raw = String(characters)
+        return raw.replacingOccurrences(of: "\\/", with: "/")
+      } else {
+        characters.append(character)
+      }
+      index = text.index(after: index)
+    }
+
+    return nil
+  }
+
+  nonisolated private static func isCodexCommand(_ command: String) -> Bool {
+    commandExecutableName(from: command).lowercased() == "codex"
+  }
+
+  private static func persistedTerminalTab(from tab: WorkspaceTerminalTab)
+    -> PersistedWorkspaceTerminalTab?
+  {
+    guard tab.isRunning, tab.isRestorableAfterRelaunch else { return nil }
+
+    let kind: PersistedWorkspaceTerminalTabKind
+    switch tab.kind {
+    case .shell:
+      kind = .shell
+    case .agent(let profileName, let icon):
+      kind = .agent(profileName: profileName, icon: icon)
+    }
+
+    return PersistedWorkspaceTerminalTab(
+      id: tab.id,
+      worktreePath: tab.worktreePath,
+      worktreeLabel: tab.worktreeLabel,
+      title: tab.title,
+      commandDescription: tab.commandDescription,
+      kind: kind,
+      createdAt: tab.createdAt,
+      isSandboxed: tab.isSandboxed,
+      writableRoots: tab.writableRoots,
+      resumeArgumentTemplate: tab.resumeArgumentTemplate,
+      resumeSessionID: tab.resumeSessionID,
+      resumeCommandDescription: tab.resumeCommandDescription
+    )
+  }
+
+  nonisolated private static func persistedTabByInferringResumeTemplate(
+    from tab: PersistedWorkspaceTerminalTab
+  ) -> PersistedWorkspaceTerminalTab {
+    guard case .agent = tab.kind else { return tab }
+    guard tab.resumeArgumentTemplate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return tab
+    }
+
+    let inferredTemplate = defaultResumeArgumentTemplate(forCommand: tab.commandDescription)
+    guard !inferredTemplate.isEmpty else { return tab }
+
+    return PersistedWorkspaceTerminalTab(
+      id: tab.id,
+      worktreePath: tab.worktreePath,
+      worktreeLabel: tab.worktreeLabel,
+      title: tab.title,
+      commandDescription: tab.commandDescription,
+      kind: tab.kind,
+      createdAt: tab.createdAt,
+      isSandboxed: tab.isSandboxed,
+      writableRoots: tab.writableRoots,
+      resumeArgumentTemplate: inferredTemplate,
+      resumeSessionID: tab.resumeSessionID,
+      resumeCommandDescription: tab.resumeCommandDescription
+    )
+  }
+
+  nonisolated private static func defaultResumeArgumentTemplate(forCommand command: String)
+    -> String
+  {
+    switch commandExecutableName(from: command).lowercased() {
+    case "codex":
+      return "resume {{session_id}}"
+    case "claude":
+      return "-c"
+    case "gemini":
+      return "--resume latest"
+    default:
+      return ""
+    }
   }
 
   nonisolated private static func normalizedPath(_ path: String) -> String {
@@ -1653,6 +2020,23 @@ private struct RestoredPersistedTabs: Sendable {
 private struct StagedReviewLaunch {
   let target: ReviewTarget
   let agentTabID: UUID
+}
+
+enum AgentSessionProvider: String, Sendable {
+  case codex
+}
+
+struct AgentSessionRecord: Sendable, Equatable {
+  let provider: AgentSessionProvider
+  let sessionID: String
+  let cwd: String
+  let startedAt: Date
+}
+
+private struct CodexSessionRecord: Sendable, Equatable {
+  let sessionID: String
+  let cwd: String
+  let startedAt: Date
 }
 
 struct WorktreeRemovalRequest: Identifiable, Sendable {

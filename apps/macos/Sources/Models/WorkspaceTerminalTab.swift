@@ -24,6 +24,7 @@ struct WorkspaceAgentLaunchRequest: Sendable {
   let command: String
   let icon: String
   let sandboxEnabled: Bool
+  let resumeArgumentTemplate: String
   let useHashedDuplicateSuffix: Bool
   let isRestorableAfterRelaunch: Bool
   let additionalWritableRoots: [String]
@@ -33,6 +34,7 @@ struct WorkspaceAgentLaunchRequest: Sendable {
     command: String,
     icon: String,
     sandboxEnabled: Bool,
+    resumeArgumentTemplate: String = "",
     useHashedDuplicateSuffix: Bool = false,
     isRestorableAfterRelaunch: Bool = true,
     additionalWritableRoots: [String] = []
@@ -41,6 +43,7 @@ struct WorkspaceAgentLaunchRequest: Sendable {
     self.command = command
     self.icon = icon
     self.sandboxEnabled = sandboxEnabled
+    self.resumeArgumentTemplate = resumeArgumentTemplate
     self.useHashedDuplicateSuffix = useHashedDuplicateSuffix
     self.isRestorableAfterRelaunch = isRestorableAfterRelaunch
     self.additionalWritableRoots = additionalWritableRoots
@@ -71,6 +74,7 @@ struct WorkspaceAgentLaunchOptions: Sendable {
         ),
         icon: profile.icon,
         sandboxEnabled: sandboxEnabled,
+        resumeArgumentTemplate: profile.resumeArgumentTemplate,
         useHashedDuplicateSuffix: false,
         isRestorableAfterRelaunch: prompt == nil,
         additionalWritableRoots: additionalWritableRoots
@@ -85,6 +89,7 @@ struct WorkspaceAgentLaunchOptions: Sendable {
         ),
         icon: icon,
         sandboxEnabled: sandboxEnabled,
+        resumeArgumentTemplate: "",
         useHashedDuplicateSuffix: true,
         isRestorableAfterRelaunch: prompt == nil,
         additionalWritableRoots: additionalWritableRoots
@@ -107,6 +112,9 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
   let isSandboxed: Bool
   let writableRoots: [String]
   let isRestorableAfterRelaunch: Bool
+  let resumeArgumentTemplate: String
+  var resumeSessionID: String?
+  var resumeCommandDescription: String?
   var isRunning: Bool
   var hasAttention: Bool
   var lastDeselectedAt: Date?
@@ -123,6 +131,9 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
     isSandboxed: Bool = false,
     writableRoots: [String] = [],
     isRestorableAfterRelaunch: Bool = true,
+    resumeArgumentTemplate: String = "",
+    resumeSessionID: String? = nil,
+    resumeCommandDescription: String? = nil,
     isRunning: Bool = true,
     hasAttention: Bool = false,
     lastDeselectedAt: Date? = nil
@@ -138,6 +149,9 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
     self.isSandboxed = isSandboxed
     self.writableRoots = writableRoots
     self.isRestorableAfterRelaunch = isRestorableAfterRelaunch
+    self.resumeArgumentTemplate = resumeArgumentTemplate
+    self.resumeSessionID = resumeSessionID
+    self.resumeCommandDescription = resumeCommandDescription
     self.isRunning = isRunning
     self.hasAttention = hasAttention
     self.lastDeselectedAt = lastDeselectedAt

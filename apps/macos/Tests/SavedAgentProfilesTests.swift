@@ -72,6 +72,92 @@ struct SavedAgentProfilesTests {
 
     #expect(decoded.count == 1)
     #expect(decoded[0].promptArgumentTemplate == "")
+    #expect(decoded[0].resumeArgumentTemplate == "")
+  }
+
+  @Test("legacy built-in profiles get resume defaults only when field was missing")
+  func legacyBuiltinsGetResumeDefaultsWhenFieldWasMissing() throws {
+    let legacyData = """
+      [
+        {
+          "id": "codex",
+          "name": "Codex",
+          "command": "codex",
+          "icon": "codex",
+          "yoloFlag": "--yolo"
+        },
+        {
+          "id": "custom",
+          "name": "Custom",
+          "command": "custom-agent",
+          "icon": "terminal",
+          "yoloFlag": ""
+        }
+      ]
+      """.data(using: .utf8)!
+
+    let decoded = try JSONDecoder().decode([SavedAgentProfile].self, from: legacyData)
+    let missingIDs = SavedAgentProfiles.missingResumeFieldProfileIDs(from: legacyData) ?? []
+    let migrated = SavedAgentProfiles.applyingLegacyResumeDefaults(
+      to: decoded,
+      missingResumeFieldProfileIDs: missingIDs
+    )
+
+    #expect(
+      migrated.first(where: { $0.id == "codex" })?.resumeArgumentTemplate == "resume {{session_id}}"
+    )
+    #expect(migrated.first(where: { $0.id == "custom" })?.resumeArgumentTemplate == "")
+  }
+
+  @Test("explicitly empty resume templates are preserved")
+  func explicitlyEmptyResumeTemplatesArePreserved() throws {
+    let currentData = """
+      [
+        {
+          "id": "codex",
+          "name": "Codex",
+          "command": "codex",
+          "icon": "codex",
+          "yoloFlag": "--yolo",
+          "resumeArgumentTemplate": ""
+        }
+      ]
+      """.data(using: .utf8)!
+
+    let decoded = try JSONDecoder().decode([SavedAgentProfile].self, from: currentData)
+    let missingIDs = SavedAgentProfiles.missingResumeFieldProfileIDs(from: currentData) ?? []
+    let migrated = SavedAgentProfiles.applyingLegacyResumeDefaults(
+      to: decoded,
+      missingResumeFieldProfileIDs: missingIDs
+    )
+
+    #expect(missingIDs.isEmpty)
+    #expect(migrated[0].resumeArgumentTemplate == "")
+  }
+
+  @Test("resume templates render with optional session placeholders")
+  func resumeTemplatesRenderWithOptionalSessionPlaceholders() {
+    #expect(
+      renderAgentResumeCommand(
+        baseCommand: "codex --yolo",
+        resumeArgumentTemplate: "resume {{session_id}}",
+        sessionID: "019da1c2-0e69-7c83-9f67-34c26af5fe33"
+      ) == "codex --yolo resume '019da1c2-0e69-7c83-9f67-34c26af5fe33'"
+    )
+    #expect(
+      renderAgentResumeCommand(
+        baseCommand: "claude --dangerously-skip-permissions",
+        resumeArgumentTemplate: "-c",
+        sessionID: nil
+      ) == "claude --dangerously-skip-permissions -c"
+    )
+    #expect(
+      renderAgentResumeCommand(
+        baseCommand: "codex",
+        resumeArgumentTemplate: "resume {{session_id}}",
+        sessionID: nil
+      ) == nil
+    )
   }
 
   @Test("command executable names strip paths and preserve quoted argv0")

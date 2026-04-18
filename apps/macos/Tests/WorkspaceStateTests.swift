@@ -1076,6 +1076,153 @@ struct WorkspaceStateTests {
     #expect(state.reviewSnapshot(for: "/tmp/repo")?.status == .closed)
   }
 
+  @Test("lazy restore maps legacy Codex tabs to distinct sessions in one worktree")
+  @MainActor
+  func lazyRestoreMapsMultipleCodexTabsToDistinctSessions() async {
+    WorkspaceState.sessionRecordsProvider = {
+      [
+        AgentSessionRecord(
+          provider: .codex,
+          sessionID: "11111111-1111-1111-1111-111111111111",
+          cwd: "/tmp/repo/feature",
+          startedAt: Date(timeIntervalSince1970: 11)
+        ),
+        AgentSessionRecord(
+          provider: .codex,
+          sessionID: "22222222-2222-2222-2222-222222222222",
+          cwd: "/tmp/repo/feature",
+          startedAt: Date(timeIntervalSince1970: 21)
+        ),
+      ]
+    }
+    defer { WorkspaceState.sessionRecordsProvider = nil }
+
+    let snapshot = PersistedWorkspaceWindowSnapshot(
+      target: WorkspaceTarget(
+        repoRoot: "/tmp/repo",
+        repoCommonDir: "/tmp/repo/.git",
+        selectedWorktreePath: "/tmp/repo/feature"
+      ),
+      terminalTabsByWorktreePath: [
+        "/tmp/repo/feature": [
+          PersistedWorkspaceTerminalTab(
+            id: UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Codex",
+            commandDescription: "codex --yolo",
+            kind: .agent(profileName: "Codex", icon: "codex"),
+            createdAt: Date(timeIntervalSince1970: 10),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"]
+          ),
+          PersistedWorkspaceTerminalTab(
+            id: UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB")!,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Codex 2",
+            commandDescription: "codex --yolo",
+            kind: .agent(profileName: "Codex", icon: "codex"),
+            createdAt: Date(timeIntervalSince1970: 20),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"]
+          ),
+        ]
+      ],
+      selectedTerminalTabIDsByWorktreePath: [
+        "/tmp/repo/feature": UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB")!
+      ]
+    )
+
+    let state = makeState()
+    state.applyPersistedWindowSnapshot(snapshot)
+
+    state.prepareSelectionLoading(for: "/tmp/repo/feature")
+    #expect(await waitUntil { state.selectedTerminalTabs.count == 2 })
+
+    let tabsByTitle = Dictionary(
+      uniqueKeysWithValues: state.selectedTerminalTabs.map {
+        ($0.title, $0)
+      })
+    let firstTab = tabsByTitle["Codex"]
+    let secondTab = tabsByTitle["Codex 2"]
+
+    #expect(firstTab?.resumeSessionID == "11111111-1111-1111-1111-111111111111")
+    #expect(secondTab?.resumeSessionID == "22222222-2222-2222-2222-222222222222")
+    #expect(
+      firstTab?.launch.processSpec.args.last?.contains(
+        "resume '11111111-1111-1111-1111-111111111111'") == true)
+    #expect(
+      secondTab?.launch.processSpec.args.last?.contains(
+        "resume '22222222-2222-2222-2222-222222222222'"
+      ) == true
+    )
+  }
+
+  @Test("lazy restore falls back to original command when no resume session is available")
+  @MainActor
+  func lazyRestoreFallsBackToOriginalCommandWhenNoResumeSessionIsAvailable() async {
+    WorkspaceState.sessionRecordsProvider = { [] }
+    defer { WorkspaceState.sessionRecordsProvider = nil }
+
+    let snapshot = PersistedWorkspaceWindowSnapshot(
+      target: WorkspaceTarget(
+        repoRoot: "/tmp/repo",
+        repoCommonDir: "/tmp/repo/.git",
+        selectedWorktreePath: "/tmp/repo/feature"
+      ),
+      terminalTabsByWorktreePath: [
+        "/tmp/repo/feature": [
+          PersistedWorkspaceTerminalTab(
+            id: UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")!,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Codex",
+            commandDescription: "codex --yolo",
+            kind: .agent(profileName: "Codex", icon: "codex"),
+            createdAt: Date(timeIntervalSince1970: 30),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"]
+          )
+        ]
+      ],
+      selectedTerminalTabIDsByWorktreePath: [
+        "/tmp/repo/feature": UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")!
+      ]
+    )
+
+    let state = makeState()
+    state.applyPersistedWindowSnapshot(snapshot)
+
+    state.prepareSelectionLoading(for: "/tmp/repo/feature")
+    #expect(await waitUntil { state.selectedTerminalTabs.count == 1 })
+
+    let tab = state.selectedTerminalTabs.first
+    #expect(tab?.resumeSessionID == nil)
+    #expect(tab?.launch.processSpec.args.last == "codex --yolo")
+  }
+
+  @Test("persisted snapshots do not serialize resume templates per tab")
+  @MainActor
+  func persistedSnapshotsDoNotSerializeResumeTemplatesPerTab() throws {
+    let state = makeState()
+    _ = state.openAgentTab(
+      WorkspaceAgentLaunchRequest(
+        displayName: "Codex",
+        command: "codex --yolo",
+        icon: "codex",
+        sandboxEnabled: true,
+        resumeArgumentTemplate: "resume {{session_id}}"
+      )
+    )
+
+    let snapshot = state.persistedWindowSnapshot
+    let data = try JSONEncoder().encode(snapshot)
+    let json = String(decoding: data, as: UTF8.self)
+
+    #expect(!json.contains("resumeArgumentTemplate"))
+  }
+
   @MainActor
   private func makeState(worktreeRootPath: String = "/tmp/default-worktrees") -> WorkspaceState {
     let target = WorkspaceTarget(
