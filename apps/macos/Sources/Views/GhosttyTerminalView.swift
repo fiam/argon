@@ -19,6 +19,9 @@ private enum GhosttyHostRegistry {
   nonisolated(unsafe) private static var nextIdentifier: UInt = 1
   nonisolated(unsafe) private static var hosts: [UInt: WeakGhosttyHostBox] = [:]
   nonisolated(unsafe) private static var hostsByTerminalID: [UUID: WeakGhosttyHostBox] = [:]
+  nonisolated(unsafe) private static var retainedHostsByTerminalID:
+    [UUID: GhosttyTerminalHostView] =
+      [:]
 
   static func register(
     _ host: GhosttyTerminalHostView,
@@ -67,7 +70,7 @@ private enum GhosttyHostRegistry {
 
     lock.lock()
     hosts.removeValue(forKey: identifier)
-    if let terminalID {
+    if let terminalID, retainedHostsByTerminalID[terminalID] == nil {
       hostsByTerminalID.removeValue(forKey: terminalID)
     }
     lock.unlock()
@@ -77,6 +80,10 @@ private enum GhosttyHostRegistry {
     lock.lock()
     defer { lock.unlock() }
 
+    if let host = retainedHostsByTerminalID[terminalID] {
+      return host
+    }
+
     guard let box = hostsByTerminalID[terminalID] else { return nil }
     if let host = box.host {
       return host
@@ -84,6 +91,31 @@ private enum GhosttyHostRegistry {
 
     hostsByTerminalID.removeValue(forKey: terminalID)
     return nil
+  }
+
+  static func retain(_ host: GhosttyTerminalHostView, terminalID: UUID?) {
+    guard let terminalID else { return }
+
+    lock.lock()
+    retainedHostsByTerminalID[terminalID] = host
+    hostsByTerminalID[terminalID] = WeakGhosttyHostBox(host: host)
+    lock.unlock()
+  }
+
+  static func releaseRetainedHost(for terminalID: UUID) -> GhosttyTerminalHostView? {
+    lock.lock()
+    let host = retainedHostsByTerminalID.removeValue(forKey: terminalID)
+    hostsByTerminalID.removeValue(forKey: terminalID)
+    lock.unlock()
+    return host
+  }
+
+  static func isRetained(_ host: GhosttyTerminalHostView, terminalID: UUID?) -> Bool {
+    guard let terminalID else { return false }
+
+    lock.lock()
+    defer { lock.unlock() }
+    return retainedHostsByTerminalID[terminalID] === host
   }
 }
 
@@ -175,6 +207,15 @@ struct GhosttyTerminalView: NSViewRepresentable {
   }
 
   func makeNSView(context: Context) -> GhosttyTerminalHostView {
+    if let terminalID, let host = GhosttyHostRegistry.host(for: terminalID) {
+      host.prepareForAttachment()
+      UITestAutomationSignal.write(
+        "ghostty-terminal-host-created",
+        to: UITestAutomationConfig.current().signalFilePath
+      )
+      return host
+    }
+
     UITestAutomationSignal.write(
       "ghostty-terminal-host-created",
       to: UITestAutomationConfig.current().signalFilePath
@@ -197,6 +238,10 @@ struct GhosttyTerminalView: NSViewRepresentable {
   }
 
   static func dismantleNSView(_ nsView: GhosttyTerminalHostView, coordinator: ()) {
+    if GhosttyHostRegistry.isRetained(nsView, terminalID: nsView.terminalID) {
+      nsView.prepareForDetachment()
+      return
+    }
     nsView.shutdown()
   }
 
@@ -242,12 +287,17 @@ struct GhosttyTerminalView: NSViewRepresentable {
 
     return false
   }
+
+  @MainActor
+  static func releaseTerminal(_ terminalID: UUID) {
+    GhosttyHostRegistry.releaseRetainedHost(for: terminalID)?.shutdown()
+  }
 }
 
 final class GhosttyTerminalHostView: NSView {
   private let controller: any TerminalProcessControlling
   private let launch: TerminalLaunchConfiguration
-  private let terminalID: UUID?
+  let terminalID: UUID?
   private var terminalFontSize: CGFloat
   private let waitAfterCommand: Bool
   private var onProcessExit: (() -> Void)?
@@ -294,6 +344,7 @@ final class GhosttyTerminalHostView: NSView {
     self.pendingFocusRequestID = focusRequestID
     super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
     self.callbackUserdata = GhosttyHostRegistry.register(self, terminalID: terminalID)
+    GhosttyHostRegistry.retain(self, terminalID: terminalID)
     initializeTerminal()
   }
 
@@ -303,6 +354,7 @@ final class GhosttyTerminalHostView: NSView {
   }
 
   func shutdown() {
+    prepareForDetachment()
     GhosttyHostRegistry.unregister(callbackUserdata, terminalID: terminalID)
     callbackUserdata = nil
 
@@ -326,6 +378,18 @@ final class GhosttyTerminalHostView: NSView {
       ghostty_config_free(config)
       self.config = nil
     }
+  }
+
+  func prepareForAttachment() {
+    if let superview {
+      removeFromSuperview()
+      superview.layoutSubtreeIfNeeded()
+    }
+  }
+
+  func prepareForDetachment() {
+    window?.makeFirstResponder(nil)
+    removeFromSuperview()
   }
 
   func updateTerminalFontSize(_ newValue: CGFloat) {

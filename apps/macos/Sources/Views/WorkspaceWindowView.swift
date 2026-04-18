@@ -6,11 +6,11 @@ struct WorkspaceWindowView: View {
   @Environment(CommandContext.self) private var commandContext
   @Environment(WorkspaceWindowRegistry.self) private var workspaceWindowRegistry
   let target: WorkspaceTarget
-  @State private var workspaceState: WorkspaceState
+  let workspaceState: WorkspaceState
 
-  init(target: WorkspaceTarget) {
+  init(target: WorkspaceTarget, workspaceState: WorkspaceState) {
     self.target = target
-    self._workspaceState = State(initialValue: WorkspaceState(target: target))
+    self.workspaceState = workspaceState
   }
 
   var body: some View {
@@ -84,18 +84,34 @@ private struct WorkspaceContentView: View {
             workspaceState.errorMessage = nil
           }
         }
-
-        if let launchWarningMessage = workspaceState.launchWarningMessage {
-          WorkspaceBanner(
-            message: launchWarningMessage,
-            symbolName: "arrow.turn.up.left.circle.fill",
-            tint: .orange
-          ) {
+      }
+    }
+    .overlay(alignment: .top) {
+      if let launchWarningMessage = workspaceState.launchWarningMessage {
+        WorkspaceToast(
+          message: launchWarningMessage,
+          symbolName: "arrow.turn.up.left.circle.fill",
+          tint: .orange
+        ) {
+          withAnimation(.easeInOut(duration: 0.2)) {
             workspaceState.launchWarningMessage = nil
           }
         }
+        .padding(.top, 10)
+        .transition(.move(edge: .top).combined(with: .opacity))
       }
     }
+    .task(id: workspaceState.launchWarningMessage) {
+      guard let launchWarningMessage = workspaceState.launchWarningMessage else { return }
+      try? await Task.sleep(for: .seconds(4))
+      guard !Task.isCancelled else { return }
+      if workspaceState.launchWarningMessage == launchWarningMessage {
+        withAnimation(.easeInOut(duration: 0.2)) {
+          workspaceState.launchWarningMessage = nil
+        }
+      }
+    }
+    .animation(.easeInOut(duration: 0.2), value: workspaceState.launchWarningMessage != nil)
     .toolbar {
       if workspaceState.selectedWorktree != nil {
         WorkspaceToolbarItems(
@@ -272,7 +288,7 @@ private struct WorkspaceSidebar: View {
     GeometryReader { proxy in
       VStack(spacing: 0) {
         if workspaceState.worktrees.isEmpty && workspaceState.isLoading {
-          ProgressView("Loading worktrees...")
+          Color.clear
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if workspaceState.worktrees.isEmpty {
           ContentUnavailableView(
@@ -1954,6 +1970,37 @@ private struct WorkspaceBanner: View {
     .padding(.horizontal, 14)
     .padding(.vertical, 8)
     .background(tint.opacity(0.08))
+  }
+}
+
+private struct WorkspaceToast: View {
+  let message: String
+  let symbolName: String
+  let tint: Color
+  let onDismiss: () -> Void
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Image(systemName: symbolName)
+      Text(message)
+        .lineLimit(2)
+      Button(action: onDismiss) {
+        Image(systemName: "xmark")
+      }
+      .buttonStyle(.plain)
+      .foregroundStyle(tint.opacity(0.85))
+    }
+    .font(.caption)
+    .foregroundStyle(tint)
+    .padding(.horizontal, 14)
+    .padding(.vertical, 9)
+    .background(.regularMaterial, in: Capsule())
+    .overlay(
+      Capsule()
+        .stroke(tint.opacity(0.18), lineWidth: 1)
+    )
+    .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+    .padding(.horizontal, 16)
   }
 }
 

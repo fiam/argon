@@ -41,6 +41,13 @@ struct WelcomeView: View {
           openWindow(value: target)
         }
         dismissWindow(id: "welcome")
+      } else {
+        let restoredCount = workspaceWindowRegistry.restorePersistedWorkspacesIfNeeded { target in
+          openWindow(value: target)
+        }
+        if restoredCount > 0 {
+          dismissWindow(id: "welcome")
+        }
       }
     }
   }

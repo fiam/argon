@@ -25,6 +25,7 @@ struct WorkspaceAgentLaunchRequest: Sendable {
   let icon: String
   let sandboxEnabled: Bool
   let useHashedDuplicateSuffix: Bool
+  let isRestorableAfterRelaunch: Bool
   let additionalWritableRoots: [String]
 
   init(
@@ -33,6 +34,7 @@ struct WorkspaceAgentLaunchRequest: Sendable {
     icon: String,
     sandboxEnabled: Bool,
     useHashedDuplicateSuffix: Bool = false,
+    isRestorableAfterRelaunch: Bool = true,
     additionalWritableRoots: [String] = []
   ) {
     self.displayName = displayName
@@ -40,6 +42,7 @@ struct WorkspaceAgentLaunchRequest: Sendable {
     self.icon = icon
     self.sandboxEnabled = sandboxEnabled
     self.useHashedDuplicateSuffix = useHashedDuplicateSuffix
+    self.isRestorableAfterRelaunch = isRestorableAfterRelaunch
     self.additionalWritableRoots = additionalWritableRoots
   }
 }
@@ -69,6 +72,7 @@ struct WorkspaceAgentLaunchOptions: Sendable {
         icon: profile.icon,
         sandboxEnabled: sandboxEnabled,
         useHashedDuplicateSuffix: false,
+        isRestorableAfterRelaunch: prompt == nil,
         additionalWritableRoots: additionalWritableRoots
       )
     case .custom(let displayName, let command, let icon):
@@ -82,6 +86,7 @@ struct WorkspaceAgentLaunchOptions: Sendable {
         icon: icon,
         sandboxEnabled: sandboxEnabled,
         useHashedDuplicateSuffix: true,
+        isRestorableAfterRelaunch: prompt == nil,
         additionalWritableRoots: additionalWritableRoots
       )
     }
@@ -101,6 +106,7 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
   let createdAt: Date
   let isSandboxed: Bool
   let writableRoots: [String]
+  let isRestorableAfterRelaunch: Bool
   var isRunning: Bool
 
   init(
@@ -114,6 +120,7 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
     createdAt: Date = Date(),
     isSandboxed: Bool = false,
     writableRoots: [String] = [],
+    isRestorableAfterRelaunch: Bool = true,
     isRunning: Bool = true
   ) {
     self.id = id
@@ -126,6 +133,7 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
     self.createdAt = createdAt
     self.isSandboxed = isSandboxed
     self.writableRoots = writableRoots
+    self.isRestorableAfterRelaunch = isRestorableAfterRelaunch
     self.isRunning = isRunning
   }
 }

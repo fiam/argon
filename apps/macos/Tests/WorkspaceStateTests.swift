@@ -481,6 +481,40 @@ struct WorkspaceStateTests {
     #expect(state.windowTitle == "Argon — repo — feature/window")
   }
 
+  @Test("persisted snapshots restore the selected worktree and its selected tab")
+  @MainActor
+  func persistedSnapshotsRestoreSelectedWorktreeAndSelectedTab() throws {
+    let state = makeState()
+    state.openShellTab()
+
+    selectFeatureWorktree(in: state)
+    let codexTab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex --yolo",
+          icon: "codex",
+          sandboxEnabled: true
+        ))
+    )
+    _ = state.openShellTab(sandboxed: false)
+    state.selectTerminalTab(codexTab.id)
+
+    let snapshot = state.persistedWindowSnapshot
+    #expect(snapshot.target.showsLinkedWorktreeWarning == false)
+
+    let restoredState = makeState()
+    restoredState.applyPersistedWindowSnapshot(snapshot)
+
+    #expect(restoredState.selectedWorktreePath == "/tmp/repo/feature")
+    #expect(restoredState.selectedTerminalTabs.map(\.title) == ["Codex", "Privileged Shell 1"])
+    #expect(restoredState.selectedTerminalTab?.id == codexTab.id)
+    #expect(
+      restoredState.selectedTerminalTabs.allSatisfy { $0.worktreePath == "/tmp/repo/feature" })
+    #expect(restoredState.terminalTabsByWorktreePath["/tmp/repo"]?.map(\.title) == ["Shell 1"])
+    #expect(restoredState.launchWarningMessage == nil)
+  }
+
   @Test("suggested worktree path uses configured root and repo subtree")
   @MainActor
   func suggestedWorktreePathUsesConfiguredRootAndRepoSubtree() {
@@ -600,6 +634,40 @@ struct WorkspaceStateTests {
     #expect(state.selectedWorktreePath == "/tmp/repo")
     #expect(state.allTerminalTabs.isEmpty)
     #expect(state.worktrees.map(\.path) == ["/tmp/repo"])
+  }
+
+  @Test("restored selections fall back to the base worktree when the selected worktree was deleted")
+  @MainActor
+  func restoredSelectionsFallBackToTheBaseWorktreeWhenSelectedWorktreeWasDeleted() {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+    state.openAgentTab(
+      WorkspaceAgentLaunchRequest(
+        displayName: "Codex",
+        command: "codex --yolo",
+        icon: "codex",
+        sandboxEnabled: true
+      )
+    )
+
+    let snapshot = state.persistedWindowSnapshot
+
+    let restoredState = makeState()
+    restoredState.applyPersistedWindowSnapshot(snapshot)
+    restoredState.applyDiscoveredWorktreeInventory([
+      DiscoveredWorktree(
+        path: "/tmp/repo",
+        branchName: "main",
+        headSHA: "abc123",
+        isBaseWorktree: true,
+        isDetached: false
+      )
+    ])
+
+    #expect(restoredState.selectedWorktreePath == "/tmp/repo")
+    #expect(restoredState.selectedTerminalTabs.isEmpty)
+    #expect(restoredState.allTerminalTabs.isEmpty)
+    #expect(restoredState.worktrees.map(\.path) == ["/tmp/repo"])
   }
 
   @Test("prepareWorktreeRemoval rejects the base worktree")

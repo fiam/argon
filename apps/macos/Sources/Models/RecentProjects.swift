@@ -10,12 +10,19 @@ struct RecentProject: Codable, Identifiable, Hashable {
 @MainActor
 @Observable
 final class RecentProjects {
-  private static let key = "recentProjects"
+  private static let defaultStorageKey = "recentProjects"
   private static let maxCount = 20
 
+  private let userDefaults: UserDefaults
+  private let storageKey: String
   var projects: [RecentProject] = []
 
-  init() {
+  init(
+    userDefaults: UserDefaults = .standard,
+    storageKey: String = defaultStorageKey
+  ) {
+    self.userDefaults = userDefaults
+    self.storageKey = storageKey
     load()
   }
 
@@ -44,7 +51,7 @@ final class RecentProjects {
   }
 
   private func load() {
-    guard let data = UserDefaults.standard.data(forKey: Self.key),
+    guard let data = userDefaults.data(forKey: storageKey),
       let decoded = try? JSONDecoder().decode([RecentProject].self, from: data)
     else { return }
     projects = decoded
@@ -52,7 +59,7 @@ final class RecentProjects {
 
   private func save() {
     if let data = try? JSONEncoder().encode(projects) {
-      UserDefaults.standard.set(data, forKey: Self.key)
+      userDefaults.set(data, forKey: storageKey)
     }
   }
 }

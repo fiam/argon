@@ -38,6 +38,7 @@ final class WorkspaceState {
   var terminalFocusRequestIDsByWorktreePath: [String: UUID] = [:]
 
   let target: WorkspaceTarget
+  var onRestorableStateChange: (() -> Void)?
   private let worktreeRootPathProvider: () -> String
 
   private var commonDirWatcher: FileWatcher?
@@ -173,6 +174,115 @@ final class WorkspaceState {
     return terminalFocusRequestIDsByWorktreePath[path]
   }
 
+  var persistedWindowSnapshot: PersistedWorkspaceWindowSnapshot {
+    let target = WorkspaceTarget(
+      repoRoot: target.repoRoot,
+      repoCommonDir: target.repoCommonDir,
+      selectedWorktreePath: selectedWorktreePath,
+      showsLinkedWorktreeWarning: false
+    )
+
+    let terminalTabsByWorktreePath = terminalTabsByWorktreePath.reduce(
+      into: [String: [PersistedWorkspaceTerminalTab]]()
+    ) { partialResult, entry in
+      let persistedTabs = entry.value.compactMap { tab -> PersistedWorkspaceTerminalTab? in
+        guard tab.isRunning, tab.isRestorableAfterRelaunch else { return nil }
+
+        let kind: PersistedWorkspaceTerminalTabKind
+        switch tab.kind {
+        case .shell:
+          kind = .shell
+        case .agent(let profileName, let icon):
+          kind = .agent(profileName: profileName, icon: icon)
+        }
+
+        return PersistedWorkspaceTerminalTab(
+          id: tab.id,
+          worktreePath: tab.worktreePath,
+          worktreeLabel: tab.worktreeLabel,
+          title: tab.title,
+          commandDescription: tab.commandDescription,
+          kind: kind,
+          createdAt: tab.createdAt,
+          isSandboxed: tab.isSandboxed,
+          writableRoots: tab.writableRoots
+        )
+      }
+
+      if !persistedTabs.isEmpty {
+        partialResult[entry.key] = persistedTabs
+      }
+    }
+
+    let selectedTerminalTabIDsByWorktreePath = selectedTerminalTabIDsByWorktreePath.filter {
+      worktreePath,
+      tabID in
+      terminalTabsByWorktreePath[worktreePath]?.contains(where: { $0.id == tabID }) == true
+    }
+
+    return PersistedWorkspaceWindowSnapshot(
+      target: target,
+      terminalTabsByWorktreePath: terminalTabsByWorktreePath,
+      selectedTerminalTabIDsByWorktreePath: selectedTerminalTabIDsByWorktreePath
+    )
+  }
+
+  func applyPersistedWindowSnapshot(_ snapshot: PersistedWorkspaceWindowSnapshot) {
+    selectedWorktreePath = normalizedPath(snapshot.target.selectedWorktreePath ?? target.repoRoot)
+    terminalTabsByWorktreePath = snapshot.terminalTabsByWorktreePath.mapValues { tabs in
+      tabs.map { persistedTab in
+        let launch: TerminalLaunchConfiguration
+        let kind: WorkspaceTerminalKind
+
+        switch persistedTab.kind {
+        case .shell:
+          kind = .shell
+          launch =
+            persistedTab.isSandboxed
+            ? TerminalLaunchConfiguration.sandboxedShell(
+              currentDirectory: persistedTab.worktreePath,
+              writableRoots: persistedTab.writableRoots
+            )
+            : TerminalLaunchConfiguration.shell(currentDirectory: persistedTab.worktreePath)
+        case .agent(let profileName, let icon):
+          kind = .agent(profileName: profileName, icon: icon)
+          launch =
+            persistedTab.isSandboxed
+            ? TerminalLaunchConfiguration.sandboxedCommand(
+              persistedTab.commandDescription,
+              currentDirectory: persistedTab.worktreePath,
+              writableRoots: persistedTab.writableRoots
+            )
+            : TerminalLaunchConfiguration.command(
+              persistedTab.commandDescription,
+              currentDirectory: persistedTab.worktreePath
+            )
+        }
+
+        return WorkspaceTerminalTab(
+          id: persistedTab.id,
+          worktreePath: normalizedPath(persistedTab.worktreePath),
+          worktreeLabel: persistedTab.worktreeLabel,
+          title: persistedTab.title,
+          commandDescription: persistedTab.commandDescription,
+          kind: kind,
+          launch: launch,
+          createdAt: persistedTab.createdAt,
+          isSandboxed: persistedTab.isSandboxed,
+          writableRoots: persistedTab.writableRoots.map(normalizedPath),
+          isRestorableAfterRelaunch: true
+        )
+      }
+    }
+
+    selectedTerminalTabIDsByWorktreePath = snapshot.selectedTerminalTabIDsByWorktreePath.filter {
+      worktreePath,
+      tabID in
+      terminalTabsByWorktreePath[normalizedPath(worktreePath)]?.contains(where: { $0.id == tabID })
+        == true
+    }
+  }
+
   func load() {
     let requestedSelection = normalizedSelectedWorktreePath ?? normalizedPath(target.repoRoot)
     isLoading = true
@@ -207,6 +317,7 @@ final class WorkspaceState {
     guard normalizedSelectedWorktreePath != requestedSelection else {
       if worktrees.isEmpty && !isLoading {
         selectedWorktreePath = requestedSelection
+        notifyRestorableStateChanged()
         load()
       }
       return
@@ -214,6 +325,7 @@ final class WorkspaceState {
 
     if worktrees.isEmpty {
       selectedWorktreePath = requestedSelection
+      notifyRestorableStateChanged()
       if !isLoading {
         load()
       }
@@ -640,7 +752,8 @@ final class WorkspaceState {
         )
         : TerminalLaunchConfiguration.shell(currentDirectory: worktree.path),
       isSandboxed: sandboxed,
-      writableRoots: sandboxed ? [normalizedPath(worktree.path)] : []
+      writableRoots: sandboxed ? [normalizedPath(worktree.path)] : [],
+      isRestorableAfterRelaunch: true
     )
 
     insertTerminalTab(tab, for: worktreePath)
@@ -682,7 +795,8 @@ final class WorkspaceState {
       kind: .agent(profileName: request.displayName, icon: request.icon),
       launch: launch,
       isSandboxed: request.sandboxEnabled,
-      writableRoots: writableRoots.map(normalizedPath)
+      writableRoots: writableRoots.map(normalizedPath),
+      isRestorableAfterRelaunch: request.isRestorableAfterRelaunch
     )
 
     insertTerminalTab(tab, for: worktreePath)
@@ -693,6 +807,7 @@ final class WorkspaceState {
     guard let worktreePath = normalizedSelectedWorktreePath else { return }
     selectedTerminalTabIDsByWorktreePath[worktreePath] = tabID
     requestTerminalFocus(in: worktreePath)
+    notifyRestorableStateChanged()
   }
 
   func closeTerminalTab(_ tabID: UUID) {
@@ -712,6 +827,8 @@ final class WorkspaceState {
           terminalFocusRequestIDsByWorktreePath.removeValue(forKey: worktreePath)
         }
       }
+      GhosttyTerminalView.releaseTerminal(tabID)
+      notifyRestorableStateChanged()
       return
     }
   }
@@ -878,6 +995,7 @@ final class WorkspaceState {
   }
 
   nonisolated private static func launchWarningMessage(for target: WorkspaceTarget) -> String? {
+    guard target.showsLinkedWorktreeWarning else { return nil }
     guard let selectedWorktreePath = target.selectedWorktreePath else { return nil }
 
     let normalizedRepoRoot = normalizedPath(target.repoRoot)
@@ -910,6 +1028,7 @@ final class WorkspaceState {
     let validPaths = Set(data.worktrees.map { normalizedPath($0.path) })
     pruneWorktreeState(validPaths: validPaths)
     configureWatchers(validPaths: validPaths)
+    notifyRestorableStateChanged()
   }
 
   func applyDiscoveredWorktreeInventory(_ discoveredWorktrees: [DiscoveredWorktree]) {
@@ -939,6 +1058,7 @@ final class WorkspaceState {
     ) {
       if nextSelection == preservedSelection {
         selectedWorktreePath = nextSelection
+        notifyRestorableStateChanged()
       } else {
         prepareSelectionLoading(for: nextSelection)
         loadSelectedWorktreeDetails(for: nextSelection)
@@ -981,12 +1101,14 @@ final class WorkspaceState {
     selectedBranchTopology = nil
     selectedUpdatedAt = nil
     isLoadingSelectionDetails = true
+    notifyRestorableStateChanged()
   }
 
   private func insertTerminalTab(_ tab: WorkspaceTerminalTab, for worktreePath: String) {
     terminalTabsByWorktreePath[worktreePath, default: []].append(tab)
     selectedTerminalTabIDsByWorktreePath[worktreePath] = tab.id
     requestTerminalFocus(in: worktreePath)
+    notifyRestorableStateChanged()
   }
 
   private func nextOrdinal(
@@ -997,6 +1119,16 @@ final class WorkspaceState {
   }
 
   private func pruneTerminalState(validPaths: Set<String>) {
+    let removedTabIDs =
+      terminalTabsByWorktreePath
+      .filter { !validPaths.contains($0.key) }
+      .values
+      .flatMap { $0.map(\.id) }
+
+    for tabID in removedTabIDs {
+      GhosttyTerminalView.releaseTerminal(tabID)
+    }
+
     terminalTabsByWorktreePath =
       terminalTabsByWorktreePath
       .filter { validPaths.contains($0.key) }
@@ -1006,6 +1138,7 @@ final class WorkspaceState {
     terminalFocusRequestIDsByWorktreePath =
       terminalFocusRequestIDsByWorktreePath
       .filter { validPaths.contains($0.key) }
+    notifyRestorableStateChanged()
   }
 
   private func pruneWorktreeState(validPaths: Set<String>) {
@@ -1228,6 +1361,10 @@ final class WorkspaceState {
     terminalFocusRequestIDsByWorktreePath[worktreePath] = UUID()
   }
 
+  private func notifyRestorableStateChanged() {
+    onRestorableStateChange?()
+  }
+
   private func resolvedInventorySelectionPath(
     preferredSelection: String,
     validPaths: Set<String>
@@ -1254,6 +1391,7 @@ final class WorkspaceState {
     selectedUpdatedAt = nil
     selectionLoadRequestID = nil
     isLoadingSelectionDetails = false
+    notifyRestorableStateChanged()
   }
 
   func stageReviewLaunch(target: ReviewTarget, agentTabID: UUID) {

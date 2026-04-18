@@ -76,10 +76,13 @@ enum GitService {
     }
 
     let repoRoot = baseWorktreePath(repoCommonDir: repoCommonDir) ?? selectedWorktreePath
+    let normalizedRepoRoot = normalizePath(repoRoot)
+    let normalizedSelectedWorktreePath = normalizePath(selectedWorktreePath)
     return WorkspaceTarget(
-      repoRoot: normalizePath(repoRoot),
+      repoRoot: normalizedRepoRoot,
       repoCommonDir: normalizePath(repoCommonDir),
-      selectedWorktreePath: normalizePath(selectedWorktreePath)
+      selectedWorktreePath: normalizedSelectedWorktreePath,
+      showsLinkedWorktreeWarning: normalizedRepoRoot != normalizedSelectedWorktreePath
     )
   }
 

@@ -24,7 +24,9 @@ final class ReviewWindowRegistry {
     case open
   }
 
+  @ObservationIgnored
   private var openingRepoRoots = Set<String>()
+  @ObservationIgnored
   private var registrationsByRepoRoot: [String: [Registration]] = [:]
 
   func open(target: ReviewTarget, openWindow: (ReviewTarget) -> Void) {

@@ -39,6 +39,8 @@ struct ArgonApp: App {
     WindowGroup(for: WorkspaceTarget.self) { $target in
       if let target {
         workspaceRoot(target: target)
+      } else {
+        NilSceneRecoveryView()
       }
     }
     .defaultSize(width: 1180, height: 700)
@@ -47,6 +49,8 @@ struct ArgonApp: App {
     WindowGroup(for: ReviewTarget.self) { $target in
       if let target {
         reviewRoot(target: target)
+      } else {
+        NilSceneRecoveryView()
       }
     }
     .defaultSize(width: 980, height: 700)
@@ -125,20 +129,23 @@ struct ArgonApp: App {
 
   @ViewBuilder
   private func workspaceRoot(target: WorkspaceTarget) -> some View {
-    WorkspaceWindowView(target: target)
-      .environment(recentProjects)
-      .environment(savedAgents)
-      .environment(agentAvailability)
-      .environment(commandContext)
-      .environment(reviewWindowRegistry)
-      .environment(workspaceWindowRegistry)
-      .preferredColorScheme(Self.launchAppearance.colorScheme)
-      .task {
-        recentProjects.add(repoRoot: target.repoRoot)
-      }
-      .task(id: savedAgents.profiles) {
-        agentAvailability.refresh(for: savedAgents.profiles)
-      }
+    WorkspaceWindowView(
+      target: target,
+      workspaceState: workspaceWindowRegistry.workspaceState(for: target)
+    )
+    .environment(recentProjects)
+    .environment(savedAgents)
+    .environment(agentAvailability)
+    .environment(commandContext)
+    .environment(reviewWindowRegistry)
+    .environment(workspaceWindowRegistry)
+    .preferredColorScheme(Self.launchAppearance.colorScheme)
+    .task {
+      recentProjects.add(repoRoot: target.repoRoot)
+    }
+    .task(id: savedAgents.profiles) {
+      agentAvailability.refresh(for: savedAgents.profiles)
+    }
   }
 
   @ViewBuilder
@@ -152,6 +159,28 @@ struct ArgonApp: App {
       .preferredColorScheme(Self.launchAppearance.colorScheme)
       .task(id: savedAgents.profiles) {
         agentAvailability.refresh(for: savedAgents.profiles)
+      }
+  }
+}
+
+private struct NilSceneRecoveryView: View {
+  @Environment(\.dismiss) private var dismiss
+  @Environment(\.openWindow) private var openWindow
+  @State private var hasAttemptedRecovery = false
+
+  var body: some View {
+    Color.clear
+      .frame(minWidth: 1, minHeight: 1)
+      .task {
+        guard !hasAttemptedRecovery else { return }
+        hasAttemptedRecovery = true
+        // WindowGroup(for:) can briefly render with a nil binding before the
+        // actual payload arrives. Only dismiss if the scene is still orphaned
+        // after a short grace period.
+        try? await Task.sleep(for: .milliseconds(750))
+        guard !Task.isCancelled else { return }
+        openWindow(id: "welcome")
+        dismiss()
       }
   }
 }
@@ -171,14 +200,55 @@ private struct WorkspaceFileCommands: Commands {
       }
       .keyboardShortcut("o", modifiers: .command)
 
+      Menu("Open Recent") {
+        if recentProjects.projects.isEmpty {
+          Text("No Recent Projects")
+        } else {
+          ForEach(OpenRecentMenuItemBuilder.menuItems(from: recentProjects.projects)) { project in
+            Button(project.menuTitle) {
+              openProject(repoRoot: project.repoRoot)
+            }
+          }
+
+          Divider()
+
+          Button("Clear Menu") {
+            recentProjects.clear()
+          }
+        }
+      }
+
       Divider()
+
+      Button {
+        commandContext.activeWorkspaceState?.presentAgentLaunchSheet()
+      } label: {
+        Label("New Agent Tab…", systemImage: "sparkles.rectangle.stack")
+      }
+      .keyboardShortcut("t", modifiers: .command)
+      .disabled(commandContext.activeWorkspaceState?.selectedWorktree == nil)
 
       Button {
         commandContext.activeWorkspaceState?.presentTabCreationSheet()
       } label: {
         Label("New Tab…", systemImage: "plus")
       }
-      .keyboardShortcut("t", modifiers: .command)
+      .disabled(commandContext.activeWorkspaceState?.selectedWorktree == nil)
+
+      Button {
+        commandContext.activeWorkspaceState?.openShellTab()
+      } label: {
+        Label("New Shell Tab", systemImage: "terminal")
+      }
+      .keyboardShortcut("t", modifiers: [.command, .shift])
+      .disabled(commandContext.activeWorkspaceState?.selectedWorktree == nil)
+
+      Button {
+        commandContext.activeWorkspaceState?.openShellTab(sandboxed: false)
+      } label: {
+        Label("New Privileged Shell Tab", systemImage: "lock.open")
+      }
+      .keyboardShortcut("t", modifiers: [.command, .shift, .option])
       .disabled(commandContext.activeWorkspaceState?.selectedWorktree == nil)
     }
   }
@@ -219,6 +289,35 @@ private struct WorkspaceFileCommands: Commands {
     alert.messageText = "Unable to Open Repository"
     alert.informativeText = error.localizedDescription
     alert.runModal()
+  }
+
+}
+
+struct OpenRecentMenuItem: Identifiable, Equatable {
+  let repoRoot: String
+  let menuTitle: String
+
+  var id: String { repoRoot }
+}
+
+enum OpenRecentMenuItemBuilder {
+  static func menuItems(from projects: [RecentProject]) -> [OpenRecentMenuItem] {
+    let duplicateNames = Dictionary(grouping: projects, by: \.repoName)
+      .mapValues(\.count)
+
+    return projects.map { project in
+      let menuTitle =
+        if duplicateNames[project.repoName, default: 0] > 1 {
+          "\(project.repoName) — \(project.repoRoot)"
+        } else {
+          project.repoName
+        }
+
+      return OpenRecentMenuItem(
+        repoRoot: project.repoRoot,
+        menuTitle: menuTitle
+      )
+    }
   }
 }
 

@@ -146,6 +146,7 @@ struct GitServiceTests {
     #expect(target.repoRoot == repo.path)
     #expect(target.repoCommonDir == repo.appendingPathComponent(".git").path)
     #expect(target.selectedWorktreePath == worktree.path)
+    #expect(target.showsLinkedWorktreeWarning == true)
   }
 
   @Test("branchTopology reports ahead and behind commit counts")
