@@ -79,9 +79,14 @@ argon-native/
 
 ## Commit Conventions
 
-- Short subject line (target 50 chars max).
-- Body wrapped to 72 chars per line.
-- One blank line between subject and body.
+- Use Conventional Commits:
+  `<type>(<scope>): <summary>` (scope optional).
+- Supported types: `feat`, `fix`, `refactor`, `docs`, `test`, `build`,
+  `ci`, `chore`, `perf`, `revert`.
+- Subject line must be imperative and target 50 chars max.
+- Include a commit body for every commit.
+- Wrap body lines at 72 chars.
+- Keep exactly one blank line between subject and body.
 - Commit without GPG signature.
 
 ## Key Design Decisions
