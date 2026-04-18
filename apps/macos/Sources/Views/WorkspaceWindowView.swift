@@ -54,9 +54,13 @@ struct WorkspaceWindowView: View {
 
 private struct WorkspaceContentView: View {
   @Environment(WorkspaceState.self) private var workspaceState
+  @Environment(ReviewWindowRegistry.self) private var reviewWindowRegistry
+  @Environment(\.openWindow) private var openWindow
   @State private var showInspector = true
 
   var body: some View {
+    @Bindable var workspaceState = workspaceState
+
     NavigationSplitView {
       WorkspaceSidebar()
         .navigationSplitViewColumnWidth(min: 230, ideal: 250, max: 290)
@@ -93,17 +97,170 @@ private struct WorkspaceContentView: View {
       }
     }
     .toolbar {
-      ToolbarItemGroup(placement: .primaryAction) {
-        if workspaceState.selectedWorktree != nil {
-          WorkspaceTitleBarActionCluster(
-            onNewAgent: { workspaceState.presentAgentLaunchSheet() },
-            onPresentTabCreator: { workspaceState.presentTabCreationSheet() },
-            onNewShell: { workspaceState.openShellTab() },
-            onNewPrivilegedShell: { workspaceState.openShellTab(sandboxed: false) }
-          )
-        }
+      if workspaceState.selectedWorktree != nil {
+        WorkspaceToolbarItems(
+          showsFinalizeControls: workspaceState.canFinalizeSelectedWorktree,
+          showsReviewProgress: isPreparingSelectedWorktreeReview,
+          isReviewDisabled: workspaceState.isPresentingReviewAgentPicker,
+          canRebase: workspaceState.canRebaseSelectedWorktree,
+          canMergeBack: workspaceState.canMergeBackSelectedWorktree,
+          canOpenPR: workspaceState.canOpenPullRequestForSelectedWorktree,
+          onPresentTabCreator: { workspaceState.presentTabCreationSheet() },
+          onReview: handleSelectedWorktreeReviewButton,
+          onRebase: { workspaceState.beginRebaseFlow() },
+          onMergeBack: { workspaceState.beginMergeBackFlow() },
+          onOpenPR: { workspaceState.beginOpenPullRequestFlow() }
+        )
       }
     }
+    .sheet(
+      isPresented: $workspaceState.isPresentingReviewAgentPicker,
+      onDismiss: {
+        workspaceState.dismissReviewAgentPicker()
+      }
+    ) {
+      WorkspaceAgentPickerSheet(
+        title: "Choose Agent",
+        subtitle: "Select the live agent tab that should receive the review handoff.",
+        candidates: workspaceState.reviewAgentCandidates,
+        onSelect: { tabID in
+          workspaceState.chooseReviewAgentTab(tabID)
+        },
+        onCancel: {
+          workspaceState.dismissReviewAgentPicker()
+        }
+      )
+    }
+    .sheet(
+      isPresented: $workspaceState.isPresentingFinalizeAgentPicker,
+      onDismiss: {
+        workspaceState.dismissFinalizeAgentPicker(
+          resetAction: workspaceState.pendingFinalizeAgentTabID == nil
+        )
+      }
+    ) {
+      WorkspaceAgentPickerSheet(
+        title: "Choose Agent",
+        subtitle: workspaceState.activeFinalizeAction?.pickerSubtitle
+          ?? "Select the live agent tab that should receive the finalize task.",
+        candidates: workspaceState.finalizeAgentCandidates,
+        onSelect: { tabID in
+          workspaceState.chooseFinalizeAgentTab(tabID)
+        },
+        onCancel: {
+          workspaceState.dismissFinalizeAgentPicker()
+        }
+      )
+    }
+    .confirmationDialog(
+      "Merge Back",
+      isPresented: $workspaceState.isPresentingMergeBackOptions,
+      titleVisibility: .visible
+    ) {
+      ForEach(workspaceState.mergeBackOptions) { action in
+        Button(action.optionTitle) {
+          workspaceState.chooseMergeBackAction(action)
+        }
+      }
+      Button("Cancel", role: .cancel) {
+        workspaceState.dismissMergeBackOptions()
+      }
+    } message: {
+      Text(mergeBackDialogMessage)
+    }
+    .onChange(of: workspaceState.pendingReviewAgentTabID) { _, tabID in
+      guard let tabID else { return }
+      workspaceState.pendingReviewAgentTabID = nil
+      launchReview(using: tabID)
+    }
+    .onChange(of: workspaceState.pendingFinalizeAgentTabID) { _, tabID in
+      guard let tabID else { return }
+      launchFinalize(using: tabID)
+    }
+  }
+
+  private var isPreparingSelectedWorktreeReview: Bool {
+    guard let worktreePath = workspaceState.selectedWorktree?.path else { return false }
+    if workspaceState.isLaunchingReview {
+      return true
+    }
+    return reviewWindowRegistry.state(for: worktreePath) == .opening
+  }
+
+  private func handleSelectedWorktreeReviewButton() {
+    guard let worktreePath = workspaceState.selectedWorktree?.path else { return }
+
+    if reviewWindowRegistry.bringToFront(repoRoot: worktreePath) {
+      return
+    }
+
+    guard reviewWindowRegistry.state(for: worktreePath) != .opening else { return }
+    workspaceState.beginReviewLaunchFlow()
+  }
+
+  private func launchReview(using agentTabID: UUID) {
+    Task {
+      do {
+        let target: ReviewTarget
+        if let preparedTarget = workspaceState.consumePreparedReviewTarget(for: agentTabID) {
+          target = preparedTarget
+        } else {
+          target = try await workspaceState.createReviewTarget(launchContext: .coderHandoff)
+          do {
+            let prompt = try await Task.detached {
+              try ArgonCLI.agentPrompt(sessionId: target.sessionId, repoRoot: target.repoRoot)
+            }.value
+            let injected = await GhosttyTerminalView.injectPrompt(prompt, into: agentTabID)
+            if !injected {
+              workspaceState.errorMessage =
+                "Opened the review, but Argon could not hand off the session prompt to the selected agent tab."
+            }
+          } catch {
+            workspaceState.errorMessage =
+              "Opened the review, but Argon could not build the agent handoff prompt: \(error.localizedDescription)"
+          }
+        }
+        reviewWindowRegistry.open(target: target) { target in
+          openWindow(value: target)
+        }
+      } catch {
+        workspaceState.errorMessage = error.localizedDescription
+      }
+    }
+  }
+
+  private func launchFinalize(using agentTabID: UUID) {
+    Task {
+      defer {
+        workspaceState.finishFinalizeFlow()
+      }
+
+      guard let action = workspaceState.activeFinalizeAction else { return }
+
+      do {
+        let prompt = try workspaceState.finalizePrompt(for: action)
+        let injected = await GhosttyTerminalView.injectPrompt(prompt, into: agentTabID)
+        if !injected {
+          workspaceState.errorMessage =
+            "Argon could not hand off the \(action.title.lowercased()) prompt to the selected agent tab."
+        }
+      } catch {
+        workspaceState.errorMessage = error.localizedDescription
+      }
+    }
+  }
+
+  private var mergeBackDialogMessage: String {
+    guard let topology = workspaceState.selectedBranchTopology else {
+      return "Choose how to land this worktree on the base branch."
+    }
+
+    if topology.needsRebase {
+      return
+        "The base branch has moved ahead. Choose how to land this worktree back onto the updated base branch."
+    }
+
+    return "Choose how to land this worktree back onto the base branch."
   }
 }
 
@@ -193,6 +350,7 @@ private struct WorkspaceSidebarRow: View {
 
             Spacer(minLength: 0)
           }
+          .padding(.trailing, hoverActionsInset)
 
           HStack(spacing: 10) {
             WorkspaceCompactDiffSummary(summary: summary)
@@ -238,17 +396,19 @@ private struct WorkspaceSidebarRow: View {
       }
       .buttonStyle(.plain)
 
-      if !worktree.isBaseWorktree {
-        WorkspaceRemoveWorktreeButton(
-          worktree: worktree,
-          isVisible: isHovering
-        )
-        .padding(8)
-      }
+      WorkspaceSidebarHoverActions(
+        worktree: worktree,
+        isVisible: isHovering
+      )
+      .padding(8)
     }
     .onHover { hovering in
       isHovering = hovering
     }
+  }
+
+  private var hoverActionsInset: CGFloat {
+    worktree.isBaseWorktree ? 28 : 56
   }
 
   private var rowBackground: Color {
@@ -352,38 +512,101 @@ private struct WorkspaceCenterPane: View {
   }
 }
 
-private struct WorkspaceTitleBarActionCluster: View {
-  let onNewAgent: () -> Void
+private struct WorkspaceToolbarItems: ToolbarContent {
+  let showsFinalizeControls: Bool
+  let showsReviewProgress: Bool
+  let isReviewDisabled: Bool
+  let canRebase: Bool
+  let canMergeBack: Bool
+  let canOpenPR: Bool
   let onPresentTabCreator: () -> Void
-  let onNewShell: () -> Void
-  let onNewPrivilegedShell: () -> Void
+  let onReview: () -> Void
+  let onRebase: () -> Void
+  let onMergeBack: () -> Void
+  let onOpenPR: () -> Void
 
-  var body: some View {
-    ControlGroup {
-      Button(action: onNewAgent) {
-        Image(systemName: "sparkles.rectangle.stack")
-          .font(.system(size: 13, weight: .semibold))
-          .frame(width: 26, height: 26)
-      }
-      .help("New agent tab")
-
+  var body: some ToolbarContent {
+    ToolbarItem(placement: .primaryAction) {
       Button(action: onPresentTabCreator) {
         Image(systemName: "plus")
-          .font(.system(size: 14, weight: .bold))
-          .frame(width: 28, height: 28)
       }
-      .help("Create a tab")
-
-      Button(action: onNewShell) {
-        Image(systemName: "terminal")
-          .font(.system(size: 13, weight: .semibold))
-          .frame(width: 26, height: 26)
-      }
-      .help("New shell tab")
+      .help("New tab")
+      .accessibilityLabel("New Tab")
     }
-    .controlGroupStyle(.navigation)
-    .controlSize(.regular)
-    .fixedSize()
+
+    if #available(macOS 26.0, *) {
+      ToolbarSpacer(.fixed, placement: .primaryAction)
+    }
+
+    ToolbarItem(placement: .primaryAction) {
+      Button(action: onReview) {
+        Image(systemName: showsReviewProgress ? "ellipsis" : "text.magnifyingglass")
+      }
+      .help(
+        isReviewDisabled
+          ? "Close the review window to enable review for this worktree again."
+          : "Start review"
+      )
+      .accessibilityLabel("Start Review")
+      .disabled(isReviewDisabled)
+    }
+
+    ToolbarItem(placement: .primaryAction) {
+      Button(action: onRebase) {
+        Image(systemName: "arrow.clockwise")
+      }
+      .help(rebaseHelpText)
+      .accessibilityLabel("Rebase onto Base")
+      .disabled(!showsFinalizeControls || !canRebase)
+    }
+
+    ToolbarItem(placement: .primaryAction) {
+      Button(action: onMergeBack) {
+        Image(systemName: "arrow.triangle.branch")
+      }
+      .help(mergeBackHelpText)
+      .accessibilityLabel("Merge Back")
+      .disabled(!showsFinalizeControls || !canMergeBack)
+    }
+
+    ToolbarItem(placement: .primaryAction) {
+      Button(action: onOpenPR) {
+        Image(systemName: "arrow.up.forward.app")
+      }
+      .help(openPRHelpText)
+      .accessibilityLabel("Open Pull Request")
+      .disabled(!showsFinalizeControls || !canOpenPR)
+    }
+  }
+
+  private var rebaseHelpText: String {
+    if !showsFinalizeControls {
+      return "The base worktree cannot be rebased onto itself."
+    }
+    if !canRebase {
+      return "Rebase is only available when this worktree is behind the base branch."
+    }
+    return "Rebase onto base branch"
+  }
+
+  private var mergeBackHelpText: String {
+    if !showsFinalizeControls {
+      return "The base worktree is already the landing branch."
+    }
+    if !canMergeBack {
+      return "Merge Back is only available when this worktree has commits to land."
+    }
+    return "Merge back to base branch"
+  }
+
+  private var openPRHelpText: String {
+    if !showsFinalizeControls {
+      return "The base worktree does not open pull requests against itself."
+    }
+    if !canOpenPR {
+      return "Open Pull Request is only available when this worktree has commits to propose."
+    }
+    return "Open pull request"
   }
 }
 
@@ -506,11 +729,18 @@ private struct WorkspaceTerminalDeck: View {
         workspaceState.dismissAgentLaunchSheet()
       },
       content: {
+        let taskContext: WorkspaceAgentTaskContext =
+          if workspaceState.isPreparingReviewAgentLaunch {
+            .reviewHandoff
+          } else if let action = workspaceState.activeFinalizeAction {
+            .finalize(action)
+          } else {
+            .general
+          }
+
         WorkspaceAgentTabSheet(
           isPresented: $workspaceState.isPresentingAgentLaunchSheet,
-          allowsCustomCommand: workspaceState.isPreparingReviewAgentLaunch,
-          isReviewHandoffRequest: workspaceState.isPreparingReviewAgentLaunch,
-          showsExternalOption: workspaceState.isPreparingReviewAgentLaunch,
+          taskContext: taskContext,
           onLaunch: { options in
             do {
               try await workspaceState.launchAgent(using: options)
@@ -521,10 +751,17 @@ private struct WorkspaceTerminalDeck: View {
             }
           },
           onExternalLaunch: {
-            await launchExternalReview()
+            switch taskContext {
+            case .reviewHandoff:
+              await launchExternalReview()
+            case .general, .finalize(_):
+              false
+            }
           },
           onDidLaunch: {
-            workspaceState.activateStagedReviewLaunch()
+            if case .reviewHandoff = taskContext {
+              workspaceState.activateStagedReviewLaunch()
+            }
           }
         )
       }
@@ -1036,9 +1273,7 @@ private struct WorkspaceAgentTabSheet: View {
   @Environment(SavedAgentProfiles.self) private var savedAgents
   @Environment(AgentAvailability.self) private var agentAvailability
   @Binding var isPresented: Bool
-  let allowsCustomCommand: Bool
-  let isReviewHandoffRequest: Bool
-  let showsExternalOption: Bool
+  let taskContext: WorkspaceAgentTaskContext
   let onLaunch: @MainActor (WorkspaceAgentLaunchOptions) async -> Bool
   let onExternalLaunch: @MainActor () async -> Bool
   let onDidLaunch: @MainActor () -> Void
@@ -1092,7 +1327,7 @@ private struct WorkspaceAgentTabSheet: View {
             savedAgentCard(for: profile)
           }
 
-          if showsExternalOption {
+          if taskContext.showsExternalOption {
             ExternalAgentPickerCard {
               launchExternal()
             }
@@ -1100,7 +1335,7 @@ private struct WorkspaceAgentTabSheet: View {
             .accessibilityIdentifier("workspace-review-external-button")
           }
 
-          if allowsCustomCommand {
+          if taskContext.allowsCustomCommand {
             CustomAgentPickerCard(isSelected: useCustom, accentColor: .accentColor) {
               useCustom = true
               selectedAgentId = nil
@@ -1110,7 +1345,7 @@ private struct WorkspaceAgentTabSheet: View {
         }
       }
 
-      if allowsCustomCommand && useCustom {
+      if taskContext.allowsCustomCommand && useCustom {
         VStack(alignment: .leading, spacing: 8) {
           TextField("Command", text: $customCommand, prompt: Text("e.g. codex --yolo"))
             .textFieldStyle(.roundedBorder)
@@ -1181,7 +1416,7 @@ private struct WorkspaceAgentTabSheet: View {
     .onChange(of: agentAvailability.revision) { _, _ in
       syncSelectedAgent()
     }
-    .onChange(of: allowsCustomCommand) { _, allowsCustomCommand in
+    .onChange(of: taskContext.allowsCustomCommand) { _, allowsCustomCommand in
       if !allowsCustomCommand {
         useCustom = false
       }
@@ -1190,7 +1425,7 @@ private struct WorkspaceAgentTabSheet: View {
 
   private var canLaunch: Bool {
     guard !isLaunching else { return false }
-    if allowsCustomCommand && useCustom {
+    if taskContext.allowsCustomCommand && useCustom {
       return !customCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     guard let selectedSavedAgent else { return false }
@@ -1198,18 +1433,11 @@ private struct WorkspaceAgentTabSheet: View {
   }
 
   private var sheetTitle: String {
-    isReviewHandoffRequest ? "Launch Review Agent" : "New Agent Tab"
+    taskContext.sheetTitle
   }
 
   private var sheetSubtitle: String {
-    if isReviewHandoffRequest {
-      return
-        "Launch a coder tab here, or copy the review prompt for your own external agent."
-    }
-
-    return allowsCustomCommand
-      ? "Launch a saved agent or custom command in the selected worktree."
-      : "Launch a saved agent in the selected worktree."
+    taskContext.sheetSubtitle
   }
 
   private func launch() {
@@ -1240,7 +1468,7 @@ private struct WorkspaceAgentTabSheet: View {
   }
 
   private var launchOptions: WorkspaceAgentLaunchOptions? {
-    if allowsCustomCommand && useCustom {
+    if taskContext.allowsCustomCommand && useCustom {
       let command = customCommand.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !command.isEmpty else { return nil }
       return WorkspaceAgentLaunchOptions(
@@ -1328,6 +1556,50 @@ private struct WorkspaceAgentTabSheet: View {
 
   private var yoloSubtitleColor: Color {
     sandboxEnabled ? .secondary : .red
+  }
+}
+
+private enum WorkspaceAgentTaskContext {
+  case general
+  case reviewHandoff
+  case finalize(WorktreeFinalizeAction)
+
+  var allowsCustomCommand: Bool {
+    switch self {
+    case .general:
+      false
+    case .reviewHandoff, .finalize(_):
+      true
+    }
+  }
+
+  var showsExternalOption: Bool {
+    if case .reviewHandoff = self {
+      return true
+    }
+    return false
+  }
+
+  var sheetTitle: String {
+    switch self {
+    case .general:
+      "New Agent Tab"
+    case .reviewHandoff:
+      "Launch Review Agent"
+    case .finalize(let action):
+      action.launchSheetTitle
+    }
+  }
+
+  var sheetSubtitle: String {
+    switch self {
+    case .general:
+      "Launch a saved agent in the selected worktree."
+    case .reviewHandoff:
+      "Launch a coder tab here, or copy the review prompt for your own external agent."
+    case .finalize(let action):
+      action.launchSheetSubtitle
+    }
   }
 }
 
@@ -1485,12 +1757,8 @@ private struct WorkspaceNewWorktreeSheet: View {
 
 private struct WorkspaceInspectorPane: View {
   @Environment(WorkspaceState.self) private var workspaceState
-  @Environment(ReviewWindowRegistry.self) private var reviewWindowRegistry
-  @Environment(\.openWindow) private var openWindow
 
   var body: some View {
-    @Bindable var workspaceState = workspaceState
-
     GeometryReader { proxy in
       Group {
         if let worktree = workspaceState.selectedWorktree {
@@ -1503,37 +1771,9 @@ private struct WorkspaceInspectorPane: View {
                   WorkspaceStatusPill(label: "conflicts", tint: .orange)
                 }
 
-                Divider()
-                  .padding(.vertical, 2)
-
-                WorkspacePrimaryActionButton(
-                  title: "Review",
-                  systemImage: "arrow.trianglehead.branch",
-                  showsProgress: isPreparingReview(for: worktree.path),
-                  isDisabled: workspaceState.isPresentingReviewAgentPicker
-                ) {
-                  handleReviewButton(for: worktree.path)
-                }
-                .accessibilityIdentifier("workspace-review-button")
-
-                HStack(spacing: 8) {
-                  WorkspaceEditorLauncher(worktreePath: worktree.path)
-                    .frame(maxWidth: .infinity)
-                    .layoutPriority(1)
-
-                  if let pullRequestURL = workspaceState.selectedPullRequestURL {
-                    Button {
-                      openPullRequest(urlString: pullRequestURL)
-                    } label: {
-                      Label("PR", systemImage: "arrow.up.right.square")
-                        .frame(maxWidth: .infinity, alignment: .center)
-                    }
-                    .buttonStyle(.bordered)
-                  }
-                }
-
-                WorkspaceFinderLauncher(worktreePath: worktree.path)
+                WorkspaceEditorLauncher(worktreePath: worktree.path)
                   .frame(maxWidth: .infinity)
+                  .layoutPriority(1)
               }
             }
             .fixedSize(horizontal: false, vertical: true)
@@ -1560,84 +1800,12 @@ private struct WorkspaceInspectorPane: View {
         .fill(Color(nsColor: .separatorColor))
         .frame(width: 0.5)
     }
-    .sheet(
-      isPresented: $workspaceState.isPresentingReviewAgentPicker,
-      onDismiss: {
-        workspaceState.dismissReviewAgentPicker()
-      }
-    ) {
-      WorkspaceReviewAgentPickerSheet(
-        candidates: workspaceState.reviewAgentCandidates,
-        onSelect: { tabID in
-          workspaceState.chooseReviewAgentTab(tabID)
-        },
-        onCancel: {
-          workspaceState.dismissReviewAgentPicker()
-        }
-      )
-    }
-    .onChange(of: workspaceState.pendingReviewAgentTabID) { _, tabID in
-      guard let tabID else { return }
-      workspaceState.pendingReviewAgentTabID = nil
-      launchReview(using: tabID)
-    }
-  }
-
-  private func launchReview(using agentTabID: UUID) {
-    Task {
-      do {
-        let target: ReviewTarget
-        if let preparedTarget = workspaceState.consumePreparedReviewTarget(for: agentTabID) {
-          target = preparedTarget
-        } else {
-          target = try await workspaceState.createReviewTarget(launchContext: .coderHandoff)
-          do {
-            let prompt = try await Task.detached {
-              try ArgonCLI.agentPrompt(sessionId: target.sessionId, repoRoot: target.repoRoot)
-            }.value
-            let injected = await GhosttyTerminalView.injectPrompt(prompt, into: agentTabID)
-            if !injected {
-              workspaceState.errorMessage =
-                "Opened the review, but Argon could not hand off the session prompt to the selected agent tab."
-            }
-          } catch {
-            workspaceState.errorMessage =
-              "Opened the review, but Argon could not build the agent handoff prompt: \(error.localizedDescription)"
-          }
-        }
-        reviewWindowRegistry.open(target: target) { target in
-          openWindow(value: target)
-        }
-      } catch {
-        workspaceState.errorMessage = error.localizedDescription
-      }
-    }
-  }
-
-  private func handleReviewButton(for worktreePath: String) {
-    if reviewWindowRegistry.bringToFront(repoRoot: worktreePath) {
-      return
-    }
-
-    guard reviewWindowRegistry.state(for: worktreePath) != .opening else { return }
-    workspaceState.beginReviewLaunchFlow()
-  }
-
-  private func isPreparingReview(for worktreePath: String) -> Bool {
-    if workspaceState.isLaunchingReview {
-      return true
-    }
-
-    return reviewWindowRegistry.state(for: worktreePath) == .opening
-  }
-
-  private func openPullRequest(urlString: String) {
-    guard let url = URL(string: urlString) else { return }
-    NSWorkspace.shared.open(url)
   }
 }
 
-private struct WorkspaceReviewAgentPickerSheet: View {
+private struct WorkspaceAgentPickerSheet: View {
+  let title: String
+  let subtitle: String
   let candidates: [WorkspaceTerminalTab]
   let onSelect: (UUID) -> Void
   let onCancel: () -> Void
@@ -1649,9 +1817,9 @@ private struct WorkspaceReviewAgentPickerSheet: View {
           .font(.title2)
           .foregroundStyle(.blue)
         VStack(alignment: .leading, spacing: 2) {
-          Text("Choose Agent")
+          Text(title)
             .font(.title2.weight(.semibold))
-          Text("Select the live agent tab that should receive the review handoff.")
+          Text(subtitle)
             .font(.callout)
             .foregroundStyle(.secondary)
         }
@@ -1699,60 +1867,6 @@ private struct WorkspaceReviewAgentPickerSheet: View {
     }
     .padding(24)
     .frame(width: 520)
-  }
-}
-
-private struct WorkspacePrimaryActionButton: View {
-  let title: String
-  let systemImage: String
-  let showsProgress: Bool
-  let isDisabled: Bool
-  let action: () -> Void
-
-  var body: some View {
-    Button(action: action) {
-      ZStack {
-        Label(title, systemImage: systemImage)
-          .font(.headline.weight(.semibold))
-          .foregroundStyle(.white)
-          .frame(maxWidth: .infinity)
-
-        HStack {
-          Spacer()
-
-          Group {
-            if showsProgress {
-              ProgressView()
-                .controlSize(.small)
-                .tint(.white)
-            } else {
-              Color.clear
-            }
-          }
-          .frame(width: 14, height: 14)
-        }
-      }
-      .padding(.horizontal, 14)
-      .frame(maxWidth: .infinity)
-      .frame(height: 36)
-      .background(
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-          .fill(Color.accentColor.opacity(isDisabled ? 0.82 : 1))
-      )
-      .overlay(
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-          .stroke(Color.accentColor.opacity(0.14), lineWidth: isDisabled ? 1 : 0)
-      )
-      .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
-    .buttonStyle(.plain)
-    .allowsHitTesting(!isDisabled)
-    .accessibilityLabel(title)
-    .accessibilityHint(
-      isDisabled
-        ? "Close the review window to enable review for this worktree again."
-        : "Open a review window for the selected worktree."
-    )
   }
 }
 
@@ -2040,53 +2154,53 @@ private struct WorkspaceEditorLauncher: View {
   }
 }
 
-private struct WorkspaceFinderLauncher: View {
+private struct WorkspaceSidebarHoverActions: View {
+  let worktree: DiscoveredWorktree
+  let isVisible: Bool
+
+  var body: some View {
+    HStack(spacing: 4) {
+      WorkspaceRevealInFinderButton(
+        worktreePath: worktree.path,
+        isVisible: isVisible
+      )
+
+      if !worktree.isBaseWorktree {
+        WorkspaceRemoveWorktreeButton(
+          worktree: worktree,
+          isVisible: isVisible
+        )
+      }
+    }
+  }
+}
+
+private struct WorkspaceRevealInFinderButton: View {
   let worktreePath: String
-  private let bundleIdentifier = "com.apple.finder"
+  let isVisible: Bool
 
   var body: some View {
     Button {
-      NSWorkspace.shared.open(URL(fileURLWithPath: worktreePath))
+      NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: worktreePath)])
     } label: {
-      HStack(spacing: 8) {
-        Image(nsImage: finderIcon)
-          .resizable()
-          .aspectRatio(contentMode: .fit)
-          .frame(width: 16, height: 16)
-        Text("Open in Finder")
-          .lineLimit(1)
-      }
-      .frame(maxWidth: .infinity, alignment: .center)
-      .padding(.horizontal, 12)
-      .padding(.vertical, 6)
+      Image(systemName: "magnifyingglass")
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(.primary)
+        .frame(width: 20, height: 20)
+        .padding(4)
+        .background(
+          Circle()
+            .fill(Color.primary.opacity(showButton ? 0.08 : 0))
+        )
     }
     .buttonStyle(.plain)
-    .frame(minHeight: 32, maxHeight: 32)
-    .background(
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
-        .fill(Color(nsColor: .controlBackgroundColor))
-    )
-    .overlay(
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
-        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-    )
+    .opacity(showButton ? 1 : 0)
+    .allowsHitTesting(showButton)
+    .help("Reveal in Finder")
   }
 
-  private var finderIcon: NSImage {
-    if let applicationURL = NSWorkspace.shared.urlForApplication(
-      withBundleIdentifier: bundleIdentifier)
-    {
-      return EditorLocator.icon(
-        for: DetectedEditorApp(
-          bundleIdentifier: bundleIdentifier,
-          displayName: "Finder",
-          applicationURL: applicationURL
-        ),
-        size: 16
-      )
-    }
-
-    return NSWorkspace.shared.icon(for: .folder)
+  private var showButton: Bool {
+    isVisible
   }
 }
 

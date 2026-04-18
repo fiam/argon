@@ -43,6 +43,8 @@ struct SettingsView: View {
   private var worktreeRootPath = WorktreeRootSettings.defaultRootPath()
   @AppStorage(WorkspaceFinishedTerminalBehavior.storageKey)
   private var finishedTerminalBehavior = WorkspaceFinishedTerminalBehavior.autoClose.rawValue
+  @AppStorage(WorktreeMergeStrategySettings.defaultStrategyStorageKey)
+  private var defaultWorktreeMergeStrategy = WorktreeMergeStrategy.mergeCommit.rawValue
   @State private var selectedAgentId: String?
   @State private var editingNewAgent = false
 
@@ -91,6 +93,16 @@ struct SettingsView: View {
           .controlSize(.small)
           .disabled(worktreeRootPath == WorktreeRootSettings.defaultRootPath())
         }
+      }
+
+      Section("Finalize") {
+        Picker("Default merge style", selection: $defaultWorktreeMergeStrategy) {
+          ForEach(WorktreeMergeStrategy.allCases) { strategy in
+            Text(strategy.menuTitle)
+              .tag(strategy.rawValue)
+          }
+        }
+        .pickerStyle(.menu)
       }
     }
     .formStyle(.grouped)

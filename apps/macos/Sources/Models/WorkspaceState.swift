@@ -13,6 +13,7 @@ final class WorkspaceState {
   var selectedDiffStat = ""
   var selectedPullRequestURL: String?
   var selectedReviewTarget: ResolvedTarget?
+  var selectedBranchTopology: BranchTopology?
   var selectedUpdatedAt: Date?
   var errorMessage: String?
   var launchWarningMessage: String?
@@ -24,8 +25,14 @@ final class WorkspaceState {
   var isPresentingTabCreationSheet = false
   var isPresentingAgentLaunchSheet = false
   var isPresentingReviewAgentPicker = false
+  var isPresentingFinalizeAgentPicker = false
+  var isPresentingMergeBackOptions = false
   var reviewAgentCandidates: [WorkspaceTerminalTab] = []
+  var finalizeAgentCandidates: [WorkspaceTerminalTab] = []
+  var mergeBackOptions: [WorktreeFinalizeAction] = []
   var pendingReviewAgentTabID: UUID?
+  var pendingFinalizeAgentTabID: UUID?
+  var activeFinalizeAction: WorktreeFinalizeAction?
   var terminalTabsByWorktreePath: [String: [WorkspaceTerminalTab]] = [:]
   var selectedTerminalTabIDsByWorktreePath: [String: UUID] = [:]
   var terminalFocusRequestIDsByWorktreePath: [String: UUID] = [:]
@@ -123,6 +130,23 @@ final class WorkspaceState {
 
   var isPreparingReviewAgentLaunch: Bool {
     shouldLaunchReviewAfterNextAgentTab
+  }
+
+  var canFinalizeSelectedWorktree: Bool {
+    guard let selectedWorktree, !selectedWorktree.isBaseWorktree else { return false }
+    return selectedReviewTarget?.mode == .branch
+  }
+
+  var canRebaseSelectedWorktree: Bool {
+    canFinalizeSelectedWorktree && (selectedBranchTopology?.needsRebase ?? false)
+  }
+
+  var canMergeBackSelectedWorktree: Bool {
+    canFinalizeSelectedWorktree && ((selectedBranchTopology?.aheadCount ?? 0) > 0)
+  }
+
+  var canOpenPullRequestForSelectedWorktree: Bool {
+    canFinalizeSelectedWorktree && ((selectedBranchTopology?.aheadCount ?? 0) > 0)
   }
 
   var selectedTerminalTab: WorkspaceTerminalTab? {
@@ -423,6 +447,8 @@ final class WorkspaceState {
   func dismissAgentLaunchSheet() {
     isPresentingAgentLaunchSheet = false
     shouldLaunchReviewAfterNextAgentTab = false
+    activeFinalizeAction = nil
+    dismissMergeBackOptions()
   }
 
   func beginReviewLaunchFlow() {
@@ -439,6 +465,64 @@ final class WorkspaceState {
     }
   }
 
+  func beginRebaseFlow() {
+    guard canRebaseSelectedWorktree else { return }
+    beginFinalizeFlow(.rebaseOntoBase)
+  }
+
+  func beginMergeBackFlow() {
+    guard canMergeBackSelectedWorktree, let selectedBranchTopology else { return }
+
+    if selectedBranchTopology.canFastForwardBase && selectedBranchTopology.aheadCount == 1 {
+      beginFinalizeFlow(.fastForwardToBase)
+      return
+    }
+
+    let options = mergeBackOptions(for: selectedBranchTopology)
+    guard !options.isEmpty else { return }
+
+    if options.count == 1 {
+      beginFinalizeFlow(options[0])
+      return
+    }
+
+    mergeBackOptions = options
+    isPresentingMergeBackOptions = true
+  }
+
+  func chooseMergeBackAction(_ action: WorktreeFinalizeAction) {
+    dismissMergeBackOptions()
+    beginFinalizeFlow(action)
+  }
+
+  func dismissMergeBackOptions() {
+    isPresentingMergeBackOptions = false
+    mergeBackOptions = []
+  }
+
+  func beginOpenPullRequestFlow() {
+    guard canOpenPullRequestForSelectedWorktree else { return }
+    beginFinalizeFlow(.openPullRequest)
+  }
+
+  func beginFinalizeFlow(_ action: WorktreeFinalizeAction) {
+    guard selectedWorktree != nil else { return }
+
+    dismissMergeBackOptions()
+    activeFinalizeAction = action
+    let candidates = eligibleFinalizeAgentTabs(for: action)
+
+    switch candidates.count {
+    case 0:
+      presentAgentLaunchSheet()
+    case 1:
+      pendingFinalizeAgentTabID = candidates[0].id
+    default:
+      finalizeAgentCandidates = candidates
+      isPresentingFinalizeAgentPicker = true
+    }
+  }
+
   func chooseReviewAgentTab(_ tabID: UUID) {
     pendingReviewAgentTabID = tabID
     dismissReviewAgentPicker()
@@ -449,8 +533,49 @@ final class WorkspaceState {
     reviewAgentCandidates = []
   }
 
+  func chooseFinalizeAgentTab(_ tabID: UUID) {
+    pendingFinalizeAgentTabID = tabID
+    dismissFinalizeAgentPicker(resetAction: false)
+  }
+
+  func dismissFinalizeAgentPicker(resetAction: Bool = true) {
+    isPresentingFinalizeAgentPicker = false
+    finalizeAgentCandidates = []
+    if resetAction {
+      activeFinalizeAction = nil
+    }
+  }
+
+  func finishFinalizeFlow() {
+    pendingFinalizeAgentTabID = nil
+    finalizeAgentCandidates = []
+    isPresentingFinalizeAgentPicker = false
+    activeFinalizeAction = nil
+    dismissMergeBackOptions()
+  }
+
   func launchAgent(using options: WorkspaceAgentLaunchOptions) async throws {
     guard shouldLaunchReviewAfterNextAgentTab else {
+      if let finalizeAction = activeFinalizeAction {
+        let prompt = try finalizePrompt(for: finalizeAction)
+        let additionalWritableRoots =
+          finalizeAction.requiresBaseRepoWriteAccess ? [target.repoRoot] : []
+        guard
+          openAgentTab(
+            options.buildRequest(
+              prompt: prompt,
+              additionalWritableRoots: additionalWritableRoots
+            ))
+            != nil
+        else {
+          throw GitService.GitError.commandFailed(
+            "Open a worktree before launching a finalize agent."
+          )
+        }
+        finishFinalizeFlow()
+        return
+      }
+
       _ = openAgentTab(options.buildRequest())
       return
     }
@@ -514,7 +639,8 @@ final class WorkspaceState {
           writableRoots: [worktree.path]
         )
         : TerminalLaunchConfiguration.shell(currentDirectory: worktree.path),
-      isSandboxed: sandboxed
+      isSandboxed: sandboxed,
+      writableRoots: sandboxed ? [normalizedPath(worktree.path)] : []
     )
 
     insertTerminalTab(tab, for: worktreePath)
@@ -532,16 +658,21 @@ final class WorkspaceState {
       return false
     }
 
+    let writableRoots =
+      request.sandboxEnabled
+      ? uniqueWritableRoots(
+        primaryRoot: worktree.path,
+        additionalRoots: request.additionalWritableRoots
+      )
+      : []
     let launch =
-      if request.sandboxEnabled {
-        TerminalLaunchConfiguration.sandboxedCommand(
-          request.command,
-          currentDirectory: worktree.path,
-          writableRoots: [worktree.path]
-        )
-      } else {
-        TerminalLaunchConfiguration.command(request.command, currentDirectory: worktree.path)
-      }
+      request.sandboxEnabled
+      ? TerminalLaunchConfiguration.sandboxedCommand(
+        request.command,
+        currentDirectory: worktree.path,
+        writableRoots: writableRoots
+      )
+      : TerminalLaunchConfiguration.command(request.command, currentDirectory: worktree.path)
 
     let tab = WorkspaceTerminalTab(
       worktreePath: worktreePath,
@@ -550,7 +681,8 @@ final class WorkspaceState {
       commandDescription: request.command,
       kind: .agent(profileName: request.displayName, icon: request.icon),
       launch: launch,
-      isSandboxed: request.sandboxEnabled
+      isSandboxed: request.sandboxEnabled,
+      writableRoots: writableRoots.map(normalizedPath)
     )
 
     insertTerminalTab(tab, for: worktreePath)
@@ -613,6 +745,7 @@ final class WorkspaceState {
           selectedDiffStat = details.diffStat
           selectedPullRequestURL = details.pullRequestURL
           selectedReviewTarget = details.reviewTarget
+          selectedBranchTopology = details.branchTopology
           selectedUpdatedAt = Date()
           isLoadingSelectionDetails = false
         }
@@ -665,7 +798,8 @@ final class WorkspaceState {
       selectedFiles: details.files,
       selectedDiffStat: details.diffStat,
       selectedPullRequestURL: details.pullRequestURL,
-      selectedReviewTarget: details.reviewTarget
+      selectedReviewTarget: details.reviewTarget,
+      selectedBranchTopology: details.branchTopology
     )
   }
 
@@ -691,6 +825,7 @@ final class WorkspaceState {
     summary: WorktreeDiffSummary? = nil
   ) -> SelectionDetails {
     let files = GitService.diffFiles(repoRoot: path)
+    let reviewTarget = GitService.autoDetectTarget(repoRoot: path)
     let resolvedSummary =
       summary
       ?? (files.isEmpty
@@ -705,7 +840,7 @@ final class WorkspaceState {
       summary: resolvedSummary,
       files: files,
       diffStat: GitService.formatDiffStat(files: files),
-      pullRequestURL: GitService.autoDetectTarget(repoRoot: path).flatMap { target in
+      pullRequestURL: reviewTarget.flatMap { target in
         GitService.pullRequestCompareURL(
           repoRoot: path,
           mode: target.mode,
@@ -713,7 +848,15 @@ final class WorkspaceState {
           headRef: target.headRef
         )
       },
-      reviewTarget: GitService.autoDetectTarget(repoRoot: path)
+      reviewTarget: reviewTarget,
+      branchTopology: reviewTarget.flatMap { target in
+        guard target.mode == .branch else { return nil }
+        return GitService.branchTopology(
+          repoRoot: path,
+          baseRef: target.baseRef,
+          headRef: target.headRef
+        )
+      }
     )
   }
 
@@ -725,6 +868,7 @@ final class WorkspaceState {
       diffStat: details.diffStat,
       pullRequestURL: details.pullRequestURL,
       reviewTarget: details.reviewTarget,
+      branchTopology: details.branchTopology,
       hasConflicts: GitService.hasConflicts(repoRoot: path)
     )
   }
@@ -759,6 +903,7 @@ final class WorkspaceState {
     selectedDiffStat = data.selectedDiffStat
     selectedPullRequestURL = data.selectedPullRequestURL
     selectedReviewTarget = data.selectedReviewTarget
+    selectedBranchTopology = data.selectedBranchTopology
     selectedUpdatedAt = Date()
     selectionLoadRequestID = nil
     isLoadingSelectionDetails = false
@@ -821,6 +966,7 @@ final class WorkspaceState {
     selectedDiffStat = refreshedWorktree.diffStat
     selectedPullRequestURL = refreshedWorktree.pullRequestURL
     selectedReviewTarget = refreshedWorktree.reviewTarget
+    selectedBranchTopology = refreshedWorktree.branchTopology
     selectedUpdatedAt = Date()
   }
 
@@ -832,6 +978,7 @@ final class WorkspaceState {
     selectedDiffStat = ""
     selectedPullRequestURL = nil
     selectedReviewTarget = nil
+    selectedBranchTopology = nil
     selectedUpdatedAt = nil
     isLoadingSelectionDetails = true
   }
@@ -974,6 +1121,97 @@ final class WorkspaceState {
     }
   }
 
+  private func eligibleFinalizeAgentTabs(for action: WorktreeFinalizeAction)
+    -> [WorkspaceTerminalTab]
+  {
+    let requiredRoots = requiredWritableRoots(for: action).map(normalizedPath)
+
+    return selectedTerminalTabs.filter { tab in
+      guard tab.isRunning else { return false }
+      guard case .agent = tab.kind else { return false }
+      guard tab.isSandboxed else { return true }
+      let allowedRoots = Set(tab.writableRoots.map(normalizedPath))
+      return Set(requiredRoots).isSubset(of: allowedRoots)
+    }
+  }
+
+  func finalizePrompt(for action: WorktreeFinalizeAction) throws -> String {
+    guard let selectedWorktree else {
+      throw GitService.GitError.commandFailed("Select a worktree before finalizing it.")
+    }
+    guard !selectedWorktree.isBaseWorktree else {
+      throw GitService.GitError.commandFailed("The base worktree cannot be finalized this way.")
+    }
+    guard let branchName = selectedWorktree.branchName, !branchName.isEmpty else {
+      throw GitService.GitError.commandFailed("Finalize actions require a branch-backed worktree.")
+    }
+    guard let target = selectedReviewTarget, target.mode == .branch else {
+      throw GitService.GitError.commandFailed(
+        "Finalize actions require a branch-based worktree target."
+      )
+    }
+
+    return action.prompt(
+      repoRoot: self.target.repoRoot,
+      worktreePath: selectedWorktree.path,
+      branchName: branchName,
+      baseRef: target.baseRef,
+      compareURL: selectedPullRequestURL
+    )
+  }
+
+  private func mergeBackOptions(for topology: BranchTopology) -> [WorktreeFinalizeAction] {
+    let preferredStrategy = WorktreeMergeStrategySettings.strategy(for: target.repoRoot)
+
+    var options: [WorktreeFinalizeAction]
+    if topology.needsRebase {
+      options = [
+        .mergeCommitToBase,
+        .rebaseAndMergeToBase,
+        .squashAndMergeToBase,
+      ]
+    } else if topology.canFastForwardBase {
+      options = [
+        .fastForwardToBase,
+        .mergeCommitToBase,
+      ]
+    } else {
+      options = [.mergeCommitToBase]
+    }
+
+    if let preferredIndex = options.firstIndex(of: preferredStrategy.finalizeAction) {
+      let preferredAction = options.remove(at: preferredIndex)
+      options.insert(preferredAction, at: 0)
+    }
+
+    return options
+  }
+
+  private func requiredWritableRoots(for action: WorktreeFinalizeAction) -> [String] {
+    guard let selectedWorktree else { return [target.repoRoot] }
+    if action.requiresBaseRepoWriteAccess {
+      return [selectedWorktree.path, target.repoRoot]
+    }
+    return [selectedWorktree.path]
+  }
+
+  private func uniqueWritableRoots(
+    primaryRoot: String,
+    additionalRoots: [String]
+  ) -> [String] {
+    var roots: [String] = []
+    var seen = Set<String>()
+
+    for root in [primaryRoot] + additionalRoots {
+      let normalized = normalizedPath(root)
+      if seen.insert(normalized).inserted {
+        roots.append(normalized)
+      }
+    }
+
+    return roots
+  }
+
   private func slugifiedBranchName(_ branchName: String) -> String {
     branchName
       .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1039,6 +1277,7 @@ struct RefreshedWorktree: Sendable {
   let diffStat: String
   let pullRequestURL: String?
   let reviewTarget: ResolvedTarget?
+  let branchTopology: BranchTopology?
   let hasConflicts: Bool
 }
 
@@ -1053,6 +1292,7 @@ private struct LoadedWorkspace: Sendable {
   let selectedDiffStat: String
   let selectedPullRequestURL: String?
   let selectedReviewTarget: ResolvedTarget?
+  let selectedBranchTopology: BranchTopology?
 }
 
 private struct SelectionDetails: Sendable {
@@ -1061,6 +1301,7 @@ private struct SelectionDetails: Sendable {
   let diffStat: String
   let pullRequestURL: String?
   let reviewTarget: ResolvedTarget?
+  let branchTopology: BranchTopology?
 }
 
 private struct StagedReviewLaunch {

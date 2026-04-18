@@ -56,6 +56,10 @@ struct ArgonApp: App {
         commandContext: commandContext,
         workspaceWindowRegistry: workspaceWindowRegistry
       )
+      WorkspaceWorktreeCommands(
+        commandContext: commandContext,
+        reviewWindowRegistry: reviewWindowRegistry
+      )
 
       // Find menu
       CommandGroup(replacing: .textEditing) {
@@ -170,27 +174,11 @@ private struct WorkspaceFileCommands: Commands {
       Divider()
 
       Button {
-        commandContext.activeWorkspaceState?.presentAgentLaunchSheet()
+        commandContext.activeWorkspaceState?.presentTabCreationSheet()
       } label: {
-        Label("New Agent Tab…", systemImage: "sparkles.rectangle.stack")
+        Label("New Tab…", systemImage: "plus")
       }
       .keyboardShortcut("t", modifiers: .command)
-      .disabled(commandContext.activeWorkspaceState?.selectedWorktree == nil)
-
-      Button {
-        commandContext.activeWorkspaceState?.openShellTab()
-      } label: {
-        Label("New Shell Tab", systemImage: "terminal")
-      }
-      .keyboardShortcut("t", modifiers: [.command, .shift])
-      .disabled(commandContext.activeWorkspaceState?.selectedWorktree == nil)
-
-      Button {
-        commandContext.activeWorkspaceState?.openShellTab(sandboxed: false)
-      } label: {
-        Label("New Privileged Shell Tab", systemImage: "lock.open")
-      }
-      .keyboardShortcut("t", modifiers: [.command, .shift, .option])
       .disabled(commandContext.activeWorkspaceState?.selectedWorktree == nil)
     }
   }
@@ -231,6 +219,55 @@ private struct WorkspaceFileCommands: Commands {
     alert.messageText = "Unable to Open Repository"
     alert.informativeText = error.localizedDescription
     alert.runModal()
+  }
+}
+
+private struct WorkspaceWorktreeCommands: Commands {
+  let commandContext: CommandContext
+  let reviewWindowRegistry: ReviewWindowRegistry
+
+  var body: some Commands {
+    CommandMenu("Worktree") {
+      Button("Start Review") {
+        startReview()
+      }
+      .keyboardShortcut("r", modifiers: [.command, .shift])
+      .disabled(commandContext.activeWorkspaceState?.selectedWorktree == nil)
+
+      Button("Rebase onto Base") {
+        commandContext.activeWorkspaceState?.beginRebaseFlow()
+      }
+      .keyboardShortcut("r", modifiers: [.command, .option])
+      .disabled(!(commandContext.activeWorkspaceState?.canRebaseSelectedWorktree ?? false))
+
+      Button("Merge Back") {
+        commandContext.activeWorkspaceState?.beginMergeBackFlow()
+      }
+      .keyboardShortcut("m", modifiers: [.command, .shift])
+      .disabled(!(commandContext.activeWorkspaceState?.canMergeBackSelectedWorktree ?? false))
+
+      Button("Open Pull Request") {
+        commandContext.activeWorkspaceState?.beginOpenPullRequestFlow()
+      }
+      .keyboardShortcut("p", modifiers: [.command, .shift])
+      .disabled(
+        !(commandContext.activeWorkspaceState?.canOpenPullRequestForSelectedWorktree ?? false))
+    }
+  }
+
+  private func startReview() {
+    guard let workspaceState = commandContext.activeWorkspaceState,
+      let worktreePath = workspaceState.selectedWorktree?.path
+    else {
+      return
+    }
+
+    if reviewWindowRegistry.bringToFront(repoRoot: worktreePath) {
+      return
+    }
+
+    guard reviewWindowRegistry.state(for: worktreePath) != .opening else { return }
+    workspaceState.beginReviewLaunchFlow()
   }
 }
 

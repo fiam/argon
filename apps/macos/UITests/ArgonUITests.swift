@@ -198,6 +198,31 @@ final class ArgonUITests: XCTestCase {
   }
 
   @MainActor
+  func testLinkedWorktreeShowsFinalizeActions() throws {
+    let target = try Self.createLinkedWorkspace()
+    let app = XCUIApplication()
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.fixtureRoot)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--workspace-repo-root", target.repoRoot,
+      "--workspace-common-dir", target.repoCommonDir,
+      "--selected-worktree-path", target.selectedWorktreePath,
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+    XCTAssertTrue(app.buttons["workspace-merge-back-button"].waitForExistence(timeout: 15))
+    XCTAssertTrue(app.buttons["workspace-merge-style-button"].exists)
+    XCTAssertTrue(app.buttons["workspace-open-pr-button"].exists)
+  }
+
+  @MainActor
   func testWorkspaceReviewExternalLaunchOpensManualPasteState() throws {
     let target = try Self.createWorkspace()
     let app = XCUIApplication()
@@ -420,6 +445,47 @@ final class ArgonUITests: XCTestCase {
       repoRoot: repoRoot.path,
       repoCommonDir: repoRoot.appendingPathComponent(".git", isDirectory: true).path,
       selectedWorktreePath: repoRoot.path,
+      argonHome: argonHome.path
+    )
+  }
+
+  private static func createLinkedWorkspace() throws -> WorkspaceLaunchTarget {
+    let fixtureRoot = FileManager.default.temporaryDirectory
+      .appendingPathComponent("argon-ui-tests", isDirectory: true)
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let repoRoot = fixtureRoot.appendingPathComponent("repo", isDirectory: true)
+    let worktreeRoot =
+      fixtureRoot
+      .appendingPathComponent("worktrees", isDirectory: true)
+      .appendingPathComponent("feature-finalize", isDirectory: true)
+    let argonHome = fixtureRoot.appendingPathComponent("argon-home", isDirectory: true)
+
+    try FileManager.default.createDirectory(at: repoRoot, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+      at: worktreeRoot.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(at: argonHome, withIntermediateDirectories: true)
+
+    try git(repoRoot, ["init"])
+    try git(repoRoot, ["config", "user.name", "Argon UI Test"])
+    try git(repoRoot, ["config", "user.email", "argon-ui-test@example.com"])
+
+    try "initial\n".write(
+      to: repoRoot.appendingPathComponent("README.md"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repoRoot, ["add", "README.md"])
+    try git(repoRoot, ["commit", "-m", "Initial commit"])
+    try git(repoRoot, ["branch", "-M", "main"])
+    try git(repoRoot, ["worktree", "add", "-b", "feature/finalize", worktreeRoot.path, "HEAD"])
+
+    return WorkspaceLaunchTarget(
+      fixtureRoot: fixtureRoot.path,
+      repoRoot: repoRoot.path,
+      repoCommonDir: repoRoot.appendingPathComponent(".git", isDirectory: true).path,
+      selectedWorktreePath: worktreeRoot.path,
       argonHome: argonHome.path
     )
   }

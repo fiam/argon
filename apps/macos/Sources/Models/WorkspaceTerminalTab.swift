@@ -25,19 +25,22 @@ struct WorkspaceAgentLaunchRequest: Sendable {
   let icon: String
   let sandboxEnabled: Bool
   let useHashedDuplicateSuffix: Bool
+  let additionalWritableRoots: [String]
 
   init(
     displayName: String,
     command: String,
     icon: String,
     sandboxEnabled: Bool,
-    useHashedDuplicateSuffix: Bool = false
+    useHashedDuplicateSuffix: Bool = false,
+    additionalWritableRoots: [String] = []
   ) {
     self.displayName = displayName
     self.command = command
     self.icon = icon
     self.sandboxEnabled = sandboxEnabled
     self.useHashedDuplicateSuffix = useHashedDuplicateSuffix
+    self.additionalWritableRoots = additionalWritableRoots
   }
 }
 
@@ -50,7 +53,10 @@ struct WorkspaceAgentLaunchOptions: Sendable {
   let source: WorkspaceAgentLaunchSource
   let sandboxEnabled: Bool
 
-  func buildRequest(prompt: String? = nil) -> WorkspaceAgentLaunchRequest {
+  func buildRequest(
+    prompt: String? = nil,
+    additionalWritableRoots: [String] = []
+  ) -> WorkspaceAgentLaunchRequest {
     switch source {
     case .savedProfile(let profile, let yoloMode):
       return WorkspaceAgentLaunchRequest(
@@ -62,7 +68,8 @@ struct WorkspaceAgentLaunchOptions: Sendable {
         ),
         icon: profile.icon,
         sandboxEnabled: sandboxEnabled,
-        useHashedDuplicateSuffix: false
+        useHashedDuplicateSuffix: false,
+        additionalWritableRoots: additionalWritableRoots
       )
     case .custom(let displayName, let command, let icon):
       return WorkspaceAgentLaunchRequest(
@@ -74,7 +81,8 @@ struct WorkspaceAgentLaunchOptions: Sendable {
         ),
         icon: icon,
         sandboxEnabled: sandboxEnabled,
-        useHashedDuplicateSuffix: true
+        useHashedDuplicateSuffix: true,
+        additionalWritableRoots: additionalWritableRoots
       )
     }
   }
@@ -92,6 +100,7 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
   let launch: TerminalLaunchConfiguration
   let createdAt: Date
   let isSandboxed: Bool
+  let writableRoots: [String]
   var isRunning: Bool
 
   init(
@@ -104,6 +113,7 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
     launch: TerminalLaunchConfiguration,
     createdAt: Date = Date(),
     isSandboxed: Bool = false,
+    writableRoots: [String] = [],
     isRunning: Bool = true
   ) {
     self.id = id
@@ -115,6 +125,7 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
     self.launch = launch
     self.createdAt = createdAt
     self.isSandboxed = isSandboxed
+    self.writableRoots = writableRoots
     self.isRunning = isRunning
   }
 }

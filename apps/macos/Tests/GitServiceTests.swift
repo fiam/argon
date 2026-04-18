@@ -148,6 +148,54 @@ struct GitServiceTests {
     #expect(target.selectedWorktreePath == worktree.path)
   }
 
+  @Test("branchTopology reports ahead and behind commit counts")
+  func branchTopologyReportsAheadAndBehindCounts() throws {
+    let repo = try makeRepo()
+    defer { try? FileManager.default.removeItem(at: repo) }
+
+    try git(repo, ["init"])
+    try git(repo, ["config", "user.name", "Argon Test"])
+    try git(repo, ["config", "user.email", "argon-test@example.com"])
+
+    try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    try git(repo, ["add", "a.txt"])
+    try git(repo, ["commit", "-m", "init"])
+    try git(repo, ["branch", "-M", "main"])
+
+    try git(repo, ["checkout", "-b", "feature/topic"])
+    try "one\nfeature 1\n".write(
+      to: repo.appendingPathComponent("a.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repo, ["commit", "-am", "feature 1"])
+    try "one\nfeature 1\nfeature 2\n".write(
+      to: repo.appendingPathComponent("a.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repo, ["commit", "-am", "feature 2"])
+
+    try git(repo, ["checkout", "main"])
+    try "one\nmain 1\n".write(
+      to: repo.appendingPathComponent("a.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repo, ["commit", "-am", "main 1"])
+
+    let topology = GitService.branchTopology(
+      repoRoot: repo.path,
+      baseRef: "main",
+      headRef: "feature/topic"
+    )
+
+    #expect(topology?.aheadCount == 2)
+    #expect(topology?.behindCount == 1)
+    #expect(topology?.needsRebase == true)
+    #expect(topology?.canFastForwardBase == false)
+  }
+
   @Test("discoverWorktrees returns base and linked worktrees")
   func discoverWorktreesIncludesBaseAndLinkedWorktrees() throws {
     let fixture = try makeFixtureDirectory()

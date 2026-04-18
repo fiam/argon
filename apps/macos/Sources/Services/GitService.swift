@@ -7,6 +7,19 @@ struct ResolvedTarget: Sendable {
   let mergeBaseSha: String
 }
 
+struct BranchTopology: Hashable, Sendable {
+  let aheadCount: Int
+  let behindCount: Int
+
+  var needsRebase: Bool {
+    behindCount > 0
+  }
+
+  var canFastForwardBase: Bool {
+    aheadCount > 0 && behindCount == 0
+  }
+}
+
 struct DiscoveredWorktree: Identifiable, Hashable, Sendable {
   var id: String { path }
 
@@ -163,6 +176,31 @@ enum GitService {
 
     guard let count = Int(output) else { return true }
     return count > 0
+  }
+
+  static func branchTopology(
+    repoRoot: String,
+    baseRef: String,
+    headRef: String
+  ) -> BranchTopology? {
+    let output = runGit([
+      "-C", repoRoot,
+      "rev-list", "--left-right", "--count", "\(baseRef)...\(headRef)",
+    ]).trimmingCharacters(in: .whitespacesAndNewlines)
+
+    let parts =
+      output
+      .split(whereSeparator: \.isWhitespace)
+      .map(String.init)
+
+    guard parts.count == 2,
+      let behindCount = Int(parts[0]),
+      let aheadCount = Int(parts[1])
+    else {
+      return nil
+    }
+
+    return BranchTopology(aheadCount: aheadCount, behindCount: behindCount)
   }
 
   static func preferredBranchDeletionBaseRef(

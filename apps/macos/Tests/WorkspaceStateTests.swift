@@ -165,6 +165,189 @@ struct WorkspaceStateTests {
     #expect(state.isPresentingAgentLaunchSheet == true)
   }
 
+  @Test("finalize flow auto-selects a single eligible running agent tab")
+  @MainActor
+  func finalizeFlowAutoSelectsSingleEligibleRunningAgentTab() throws {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+
+    let tab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          sandboxEnabled: false
+        ))
+    )
+
+    state.beginFinalizeFlow(.rebaseAndMergeToBase)
+
+    #expect(state.activeFinalizeAction == .rebaseAndMergeToBase)
+    #expect(state.pendingFinalizeAgentTabID == tab.id)
+    #expect(state.isPresentingFinalizeAgentPicker == false)
+    #expect(state.isPresentingAgentLaunchSheet == false)
+  }
+
+  @Test("finalize flow launches a new agent when running tabs lack required writable roots")
+  @MainActor
+  func finalizeFlowLaunchesNewAgentWhenRunningTabsLackRequiredWritableRoots() {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+    state.openAgentTab(
+      WorkspaceAgentLaunchRequest(
+        displayName: "Codex",
+        command: "codex",
+        icon: "codex",
+        sandboxEnabled: true
+      ))
+
+    state.beginFinalizeFlow(.mergeCommitToBase)
+
+    #expect(state.activeFinalizeAction == .mergeCommitToBase)
+    #expect(state.pendingFinalizeAgentTabID == nil)
+    #expect(state.isPresentingFinalizeAgentPicker == false)
+    #expect(state.isPresentingAgentLaunchSheet == true)
+  }
+
+  @Test("finalize flow asks when multiple eligible running agent tabs exist")
+  @MainActor
+  func finalizeFlowAsksWhenMultipleEligibleRunningAgentTabsExist() {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+    _ = state.openAgentTab(
+      WorkspaceAgentLaunchRequest(
+        displayName: "Codex",
+        command: "codex",
+        icon: "codex",
+        sandboxEnabled: false
+      )
+    )
+    let second = state.openAgentTab(
+      WorkspaceAgentLaunchRequest(
+        displayName: "Claude Code",
+        command: "claude",
+        icon: "claude",
+        sandboxEnabled: false
+      )
+    )
+
+    state.beginFinalizeFlow(.mergeCommitToBase)
+
+    #expect(state.pendingFinalizeAgentTabID == nil)
+    #expect(state.isPresentingFinalizeAgentPicker == true)
+    #expect(state.finalizeAgentCandidates.count == 2)
+
+    if let second {
+      state.chooseFinalizeAgentTab(second.id)
+      #expect(state.pendingFinalizeAgentTabID == second.id)
+      #expect(state.isPresentingFinalizeAgentPicker == false)
+      #expect(state.finalizeAgentCandidates.isEmpty)
+    }
+  }
+
+  @Test("rebase only enables when the selected worktree is behind base")
+  @MainActor
+  func rebaseOnlyEnablesWhenSelectedWorktreeIsBehindBase() {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+
+    state.selectedBranchTopology = BranchTopology(aheadCount: 2, behindCount: 0)
+    #expect(state.canRebaseSelectedWorktree == false)
+
+    state.selectedBranchTopology = BranchTopology(aheadCount: 2, behindCount: 3)
+    #expect(state.canRebaseSelectedWorktree == true)
+  }
+
+  @Test("merge back fast-forwards a single ahead commit without showing strategy choices")
+  @MainActor
+  func mergeBackFastForwardsSingleAheadCommitWithoutShowingStrategyChoices() {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+    state.selectedBranchTopology = BranchTopology(aheadCount: 1, behindCount: 0)
+
+    state.beginMergeBackFlow()
+
+    #expect(state.activeFinalizeAction == .fastForwardToBase)
+    #expect(state.isPresentingMergeBackOptions == false)
+    #expect(state.mergeBackOptions.isEmpty)
+    #expect(state.isPresentingAgentLaunchSheet == true)
+  }
+
+  @Test("merge back offers fast-forward and merge commit when branch is linearly ahead")
+  @MainActor
+  func mergeBackOffersFastForwardAndMergeCommitWhenBranchIsLinearlyAhead() {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+    state.selectedBranchTopology = BranchTopology(aheadCount: 3, behindCount: 0)
+
+    state.beginMergeBackFlow()
+
+    #expect(state.isPresentingMergeBackOptions == true)
+    #expect(state.mergeBackOptions == [.mergeCommitToBase, .fastForwardToBase])
+    #expect(state.activeFinalizeAction == nil)
+  }
+
+  @Test("merge back offers merge, rebase-and-merge, and squash when base moved ahead")
+  @MainActor
+  func mergeBackOffersMergeRebaseAndSquashWhenBaseMovedAhead() {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+    state.selectedBranchTopology = BranchTopology(aheadCount: 3, behindCount: 2)
+
+    state.beginMergeBackFlow()
+
+    #expect(state.isPresentingMergeBackOptions == true)
+    #expect(
+      state.mergeBackOptions == [.mergeCommitToBase, .rebaseAndMergeToBase, .squashAndMergeToBase]
+    )
+    #expect(state.activeFinalizeAction == nil)
+  }
+
+  @Test("launching a merge finalizer widens sandbox roots to include the base repo")
+  @MainActor
+  func launchingMergeFinalizerWidensSandboxRootsToIncludeBaseRepo() async throws {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+    state.activeFinalizeAction = .mergeCommitToBase
+
+    try await state.launchAgent(
+      using: WorkspaceAgentLaunchOptions(
+        source: .custom(displayName: "codex", command: "codex", icon: "terminal"),
+        sandboxEnabled: true
+      ))
+
+    let tab = try #require(state.selectedTerminalTab)
+    #expect(tab.isSandboxed == true)
+    #expect(Set(tab.writableRoots) == Set(["/tmp/repo/feature", "/tmp/repo"]))
+    #expect(
+      tab.commandDescription.contains(
+        "Task: Merge this worktree back into the base branch with a merge commit."
+      ))
+    #expect(state.activeFinalizeAction == nil)
+  }
+
+  @Test("finalize prompts include action, worktree, branch, and base branch context")
+  @MainActor
+  func finalizePromptIncludesActionContext() throws {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+    state.selectedPullRequestURL =
+      "https://github.com/example/repo/compare/main...feature/window?expand=1"
+
+    let prompt = try state.finalizePrompt(for: .openPullRequest)
+
+    #expect(prompt.contains("Task: Open an upstream pull request for this worktree."))
+    #expect(prompt.contains("Base worktree: /tmp/repo"))
+    #expect(prompt.contains("Linked worktree: /tmp/repo/feature"))
+    #expect(prompt.contains("Feature branch: feature/window"))
+    #expect(prompt.contains("Base branch: origin/main"))
+    #expect(
+      prompt.contains(
+        "Suggested compare URL: https://github.com/example/repo/compare/main...feature/window?expand=1"
+      ))
+  }
+
   @Test("staged review launches activate after the agent sheet dismisses")
   @MainActor
   func stagedReviewLaunchesActivateAfterTheAgentSheetDismisses() {
@@ -471,6 +654,7 @@ struct WorkspaceStateTests {
         headRef: "feature/window",
         mergeBaseSha: "abc123"
       ),
+      branchTopology: BranchTopology(aheadCount: 2, behindCount: 1),
       hasConflicts: true
     )
 
@@ -556,6 +740,7 @@ struct WorkspaceStateTests {
       diffStat: "1 file changed",
       pullRequestURL: nil,
       reviewTarget: nil,
+      branchTopology: nil,
       hasConflicts: false
     )
 
@@ -628,6 +813,7 @@ struct WorkspaceStateTests {
       repoCommonDir: "/tmp/repo/.git",
       selectedWorktreePath: "/tmp/repo"
     )
+    WorktreeMergeStrategySettings.setStrategy(.mergeCommit, for: target.repoRoot)
     let state = WorkspaceState(target: target) { worktreeRootPath }
     state.worktrees = [
       DiscoveredWorktree(
@@ -647,6 +833,18 @@ struct WorkspaceStateTests {
     ]
     state.selectedWorktreePath = "/tmp/repo"
     return state
+  }
+
+  @MainActor
+  private func selectFeatureWorktree(in state: WorkspaceState) {
+    state.selectedWorktreePath = "/tmp/repo/feature"
+    state.selectedReviewTarget = ResolvedTarget(
+      mode: .branch,
+      baseRef: "origin/main",
+      headRef: "feature/window",
+      mergeBaseSha: "abc123"
+    )
+    state.selectedBranchTopology = BranchTopology(aheadCount: 2, behindCount: 0)
   }
 
   private func makeReviewSession(
