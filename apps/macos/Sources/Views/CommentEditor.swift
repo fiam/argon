@@ -2,6 +2,8 @@ import AppKit
 import SwiftUI
 
 struct CommentEditorPopover: View {
+  @AppStorage(CommentFontSettings.storageKey)
+  private var commentFontSize = CommentFontSettings.defaultSize
   let title: String
   @Binding var commentText: String
   let onSubmit: () -> Void
@@ -24,6 +26,7 @@ struct CommentEditorPopover: View {
       // Text editor with auto-focus
       FocusedTextEditor(
         text: $commentText,
+        fontSize: CGFloat(CommentFontSettings.clamped(commentFontSize)),
         onCommandReturn: {
           guard !isEmpty else { return }
           onSubmit()
@@ -66,6 +69,7 @@ struct CommentEditorPopover: View {
 /// NSTextView wrapper that reliably gains focus in popovers and handles Cmd-Return.
 struct FocusedTextEditor: NSViewRepresentable {
   @Binding var text: String
+  var fontSize: CGFloat = NSFont.systemFontSize
   var onCommandReturn: (() -> Void)?
   var accessibilityIdentifier: String? = nil
 
@@ -83,7 +87,7 @@ struct FocusedTextEditor: NSViewRepresentable {
     let textView = CommandReturnTextView()
     textView.isRichText = false
     textView.allowsUndo = true
-    textView.font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+    textView.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
     textView.backgroundColor = NSColor.textBackgroundColor
     textView.textColor = NSColor.labelColor
     textView.isEditable = true
@@ -120,6 +124,9 @@ struct FocusedTextEditor: NSViewRepresentable {
     guard let textView = scrollView.documentView as? CommandReturnTextView else { return }
     if textView.string != text {
       textView.string = text
+    }
+    if textView.font?.pointSize != fontSize {
+      textView.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
     }
     textView.onCommandReturn = onCommandReturn
     if let accessibilityIdentifier {

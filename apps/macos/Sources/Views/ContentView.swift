@@ -339,7 +339,17 @@ struct ThreadsSidebar: View {
 
 struct DraftRow: View {
   @Environment(AppState.self) private var appState
+  @AppStorage(CommentFontSettings.storageKey)
+  private var commentFontSize = CommentFontSettings.defaultSize
   let draft: DraftComment
+
+  private var bodyTextSize: CGFloat {
+    CGFloat(CommentFontSettings.clamped(commentFontSize))
+  }
+
+  private var metaTextSize: CGFloat {
+    max(bodyTextSize - 2, 10)
+  }
 
   var body: some View {
     HStack(alignment: .top, spacing: 4) {
@@ -347,17 +357,17 @@ struct DraftRow: View {
         if let file = draft.anchor.filePath {
           HStack(spacing: 2) {
             Text(file)
-              .font(.caption2)
+              .font(.system(size: metaTextSize))
               .foregroundStyle(.secondary)
             if let line = draft.anchor.lineNew ?? draft.anchor.lineOld {
               Text(":\(line)")
-                .font(.caption2)
+                .font(.system(size: metaTextSize))
                 .foregroundStyle(.secondary)
             }
           }
         }
         Text(draft.body)
-          .font(.caption2)
+          .font(.system(size: bodyTextSize))
           .lineLimit(2)
       }
       Spacer()
@@ -377,7 +387,17 @@ struct DraftRow: View {
 }
 
 struct SidebarThreadRow: View {
+  @AppStorage(CommentFontSettings.storageKey)
+  private var commentFontSize = CommentFontSettings.defaultSize
   let thread: ReviewThread
+
+  private var bodyTextSize: CGFloat {
+    CGFloat(CommentFontSettings.clamped(commentFontSize))
+  }
+
+  private var metaTextSize: CGFloat {
+    max(bodyTextSize - 2, 10)
+  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 3) {
@@ -387,18 +407,18 @@ struct SidebarThreadRow: View {
           let file = anchor.filePath
         {
           Text(URL(fileURLWithPath: file).lastPathComponent)
-            .font(.caption2)
+            .font(.system(size: metaTextSize))
             .foregroundStyle(.secondary)
             .lineLimit(1)
           if let line = anchor.lineNew ?? anchor.lineOld {
             Text(":\(line)")
-              .font(.caption2)
+              .font(.system(size: metaTextSize))
               .foregroundStyle(.tertiary)
           }
         }
         Spacer()
         Text("\(thread.comments.count)")
-          .font(.caption2)
+          .font(.system(size: metaTextSize))
           .foregroundStyle(.quaternary)
       }
       // Show only first and last comment for brevity
@@ -407,7 +427,7 @@ struct SidebarThreadRow: View {
       }
       if thread.comments.count > 2 {
         Text("···  \(thread.comments.count - 2) more")
-          .font(.caption2)
+          .font(.system(size: metaTextSize))
           .foregroundStyle(.quaternary)
       }
       if thread.comments.count > 1, let last = thread.comments.last {
@@ -422,11 +442,10 @@ struct SidebarThreadRow: View {
   private func sidebarCommentRow(_ comment: ReviewComment) -> some View {
     HStack(alignment: .top, spacing: 4) {
       Text(commentAuthorLabel(comment))
-        .font(.caption2)
-        .fontWeight(.medium)
+        .font(.system(size: metaTextSize, weight: .medium))
         .foregroundStyle(authorColor(comment))
       Text(comment.body)
-        .font(.caption2)
+        .font(.system(size: bodyTextSize))
         .lineLimit(1)
         .foregroundStyle(.secondary)
     }

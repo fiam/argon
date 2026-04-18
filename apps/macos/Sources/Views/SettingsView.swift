@@ -50,11 +50,21 @@ struct AgentIconView: View {
 }
 
 struct SettingsView: View {
+  fileprivate static let tabHorizontalPadding: CGFloat = 12
+  fileprivate static let tabTopPadding: CGFloat = 10
+  fileprivate static let tabBottomPadding: CGFloat = 10
+  fileprivate static let formLikeVStackHorizontalPadding: CGFloat = 40
+  fileprivate static let formLikeVStackTopPadding: CGFloat = 22
+
+  @Environment(\.colorScheme) private var colorScheme
   @Environment(SavedAgentProfiles.self) private var savedAgents
   @Environment(AgentAvailability.self) private var agentAvailability
   @AppStorage("defaultDiffViewMode") private var defaultDiffViewMode = "unified"
   @AppStorage("diffFontSize") private var diffFontSize = 13.0
+  @AppStorage(CommentFontSettings.storageKey)
+  private var commentFontSize = CommentFontSettings.defaultSize
   @AppStorage("terminalFontSize") private var terminalFontSize = 12.0
+  @AppStorage(GhosttyConfigurationSettings.storageKey) private var ghosttyConfigurationOverride = ""
   @AppStorage(WorktreeRootSettings.storageKey)
   private var worktreeRootPath = WorktreeRootSettings.defaultRootPath()
   @AppStorage(WorkspaceFinishedTerminalBehavior.storageKey)
@@ -63,6 +73,11 @@ struct SettingsView: View {
   private var defaultWorktreeMergeStrategy = WorktreeMergeStrategy.mergeCommit.rawValue
   @State private var selectedAgentId: String?
   @State private var editingNewAgent = false
+  @State private var ghosttyConfigurationDraft = ""
+  @State private var appliedGhosttyConfigurationText = ""
+  @State private var didLoadGhosttyConfigurationDraft = false
+  @State private var terminalPreviewAppearance: TerminalPreviewAppearance = .dark
+  @State private var didInitializeTerminalPreviewAppearance = false
 
   var body: some View {
     TabView {
@@ -72,6 +87,8 @@ struct SettingsView: View {
         .tabItem { Label("Agents", systemImage: "person.2") }
       appearanceTab
         .tabItem { Label("Appearance", systemImage: "textformat.size") }
+      terminalTab
+        .tabItem { Label("Terminal", systemImage: "terminal") }
     }
     .frame(width: 550, height: 400)
   }
@@ -122,7 +139,7 @@ struct SettingsView: View {
       }
     }
     .formStyle(.grouped)
-    .padding()
+    .settingsTabInsets()
   }
 
   // MARK: - Agents Tab
@@ -189,7 +206,7 @@ struct SettingsView: View {
       }
       .padding(8)
     }
-    .padding()
+    .formLikeVStackInsets()
     .sheet(isPresented: $editingNewAgent) {
       AgentEditorSheet(
         profile: SavedAgentProfile(
@@ -220,18 +237,118 @@ struct SettingsView: View {
           .foregroundStyle(.secondary)
       }
 
-      Section("Terminal") {
+      Section("Comments") {
         HStack {
-          Text("Font size: \(Int(terminalFontSize))pt")
-          Slider(value: $terminalFontSize, in: 10...24, step: 1)
+          Text("Font size: \(Int(effectiveCommentFontSize))pt")
+          Slider(value: $commentFontSize, in: CommentFontSettings.range, step: 1)
         }
-        Text("$ argon review --mode uncommitted")
-          .font(.system(size: terminalFontSize, design: .monospaced))
-          .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Reviewer")
+            .font(.system(size: max(effectiveCommentFontSize - 2, 10), weight: .semibold))
+            .foregroundStyle(.secondary)
+          Text("This comment text uses your configured comment size.")
+            .font(.system(size: effectiveCommentFontSize))
+            .foregroundStyle(.secondary)
+        }
       }
     }
     .formStyle(.grouped)
-    .padding()
+    .settingsTabInsets()
+  }
+
+  // MARK: - Terminal Tab
+
+  private var terminalTab: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HStack(spacing: 10) {
+        Text("Preview")
+          .font(.headline)
+          .fontWeight(.semibold)
+        Spacer(minLength: 0)
+        Toggle(isOn: terminalPreviewDarkModeBinding) {
+          Text("Dark")
+            .foregroundStyle(.secondary)
+        }
+        .toggleStyle(.switch)
+        .controlSize(.small)
+      }
+
+      GroupBox {
+        TerminalPreview(
+          terminalFontSize: effectiveTerminalPreviewFontSize,
+          appearance: terminalPreviewAppearance
+        )
+        .frame(maxWidth: .infinity)
+        .frame(height: 80)
+      }
+
+      HStack(spacing: 10) {
+        Text("Ghostty Config")
+          .font(.headline)
+          .fontWeight(.semibold)
+        Link("Docs", destination: GhosttyConfigurationSettings.docsURL)
+          .font(.subheadline)
+          .pointingHandCursorOnHover()
+        Spacer(minLength: 0)
+        Text("Argon uses Ghostty to render terminals.")
+          .foregroundStyle(.secondary)
+          .font(.subheadline)
+          .lineLimit(1)
+          .truncationMode(.tail)
+      }
+
+      GroupBox {
+        VStack(alignment: .leading, spacing: 8) {
+          if hasUnsavedGhosttyConfigurationChanges {
+            HStack {
+              Spacer()
+              Text("Unsaved changes")
+                .font(.caption)
+                .foregroundStyle(.orange)
+            }
+          }
+
+          ZStack(alignment: .topLeading) {
+            TextEditor(text: $ghosttyConfigurationDraft)
+              .font(.system(.body, design: .monospaced))
+              .frame(height: 170)
+              .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                  .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+              )
+
+            if ghosttyConfigurationDraft.isEmpty {
+              Text("# Optional Ghostty overrides")
+                .font(.system(.body, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 10)
+                .allowsHitTesting(false)
+            }
+          }
+
+          HStack(spacing: 10) {
+            Spacer()
+            Button("Revert") {
+              ghosttyConfigurationDraft = appliedGhosttyConfigurationText
+            }
+            .disabled(!hasUnsavedGhosttyConfigurationChanges)
+
+            Button("Save & Apply") {
+              saveAndApplyGhosttyConfiguration()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!hasUnsavedGhosttyConfigurationChanges)
+          }
+        }
+      }
+    }
+    .formLikeVStackInsets()
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .onAppear {
+      loadGhosttyConfigurationDraftIfNeeded()
+      initializeTerminalPreviewAppearanceIfNeeded()
+    }
   }
 
   private var selectedFinishedTerminalBehavior: WorkspaceFinishedTerminalBehavior {
@@ -263,6 +380,196 @@ struct SettingsView: View {
 
     guard panel.runModal() == .OK, let url = panel.url else { return }
     worktreeRootPath = url.standardizedFileURL.path
+  }
+
+  private var effectiveCommentFontSize: Double {
+    CommentFontSettings.clamped(commentFontSize)
+  }
+
+  private var effectiveTerminalPreviewFontSize: Double {
+    if let draftValue = GhosttyConfigurationSettings.fontSize(from: ghosttyConfigurationDraft) {
+      return draftValue
+    }
+    if let appliedValue = GhosttyConfigurationSettings.fontSize(
+      from: appliedGhosttyConfigurationText)
+    {
+      return appliedValue
+    }
+    return terminalFontSize
+  }
+
+  private var hasUnsavedGhosttyConfigurationChanges: Bool {
+    ghosttyConfigurationDraft != appliedGhosttyConfigurationText
+  }
+
+  private var terminalPreviewDarkModeBinding: Binding<Bool> {
+    Binding(
+      get: { terminalPreviewAppearance == .dark },
+      set: { isDark in
+        terminalPreviewAppearance = isDark ? .dark : .light
+      }
+    )
+  }
+
+  private func loadGhosttyConfigurationDraftIfNeeded() {
+    guard !didLoadGhosttyConfigurationDraft else { return }
+    didLoadGhosttyConfigurationDraft = true
+
+    let overrideValue = ghosttyConfigurationOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !overrideValue.isEmpty {
+      ghosttyConfigurationDraft = ghosttyConfigurationOverride
+      appliedGhosttyConfigurationText = ghosttyConfigurationOverride
+      return
+    }
+
+    let resolved = GhosttyConfigurationSettings.resolvedConfigText() ?? ""
+    ghosttyConfigurationDraft = resolved
+    appliedGhosttyConfigurationText = resolved
+  }
+
+  private func saveAndApplyGhosttyConfiguration() {
+    let value =
+      ghosttyConfigurationDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      ? ""
+      : ghosttyConfigurationDraft
+    ghosttyConfigurationDraft = value
+    ghosttyConfigurationOverride = value
+    appliedGhosttyConfigurationText = value
+  }
+
+  private func initializeTerminalPreviewAppearanceIfNeeded() {
+    guard !didInitializeTerminalPreviewAppearance else { return }
+    didInitializeTerminalPreviewAppearance = true
+    terminalPreviewAppearance = colorScheme == .dark ? .dark : .light
+  }
+}
+
+private struct PointingHandCursorOnHoverModifier: ViewModifier {
+  @State private var isHovering = false
+
+  func body(content: Content) -> some View {
+    content
+      .onHover { hovering in
+        if hovering {
+          guard !isHovering else { return }
+          NSCursor.pointingHand.push()
+          isHovering = true
+        } else if isHovering {
+          NSCursor.pop()
+          isHovering = false
+        }
+      }
+      .onDisappear {
+        if isHovering {
+          NSCursor.pop()
+          isHovering = false
+        }
+      }
+  }
+}
+
+extension View {
+  fileprivate func settingsTabInsets() -> some View {
+    self
+      .padding(.horizontal, SettingsView.tabHorizontalPadding)
+      .padding(.top, SettingsView.tabTopPadding)
+      .padding(.bottom, SettingsView.tabBottomPadding)
+  }
+
+  fileprivate func formLikeVStackInsets() -> some View {
+    self
+      .padding(.horizontal, SettingsView.formLikeVStackHorizontalPadding)
+      .padding(.top, SettingsView.formLikeVStackTopPadding)
+      .padding(.bottom, SettingsView.tabBottomPadding)
+  }
+
+  fileprivate func pointingHandCursorOnHover() -> some View {
+    modifier(PointingHandCursorOnHoverModifier())
+  }
+}
+
+private enum TerminalPreviewAppearance: String, CaseIterable, Identifiable {
+  case dark
+  case light
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .dark:
+      "Dark"
+    case .light:
+      "Light"
+    }
+  }
+}
+
+private struct TerminalPreview: View {
+  let terminalFontSize: Double
+  let appearance: TerminalPreviewAppearance
+
+  private var backgroundColor: Color {
+    switch appearance {
+    case .dark:
+      Color(red: 0.11, green: 0.12, blue: 0.14)
+    case .light:
+      Color(red: 0.97, green: 0.97, blue: 0.98)
+    }
+  }
+
+  private var borderColor: Color {
+    switch appearance {
+    case .dark:
+      Color.white.opacity(0.14)
+    case .light:
+      Color.black.opacity(0.12)
+    }
+  }
+
+  private var primaryColor: Color {
+    switch appearance {
+    case .dark:
+      Color(red: 0.90, green: 0.92, blue: 0.95)
+    case .light:
+      Color(red: 0.17, green: 0.20, blue: 0.26)
+    }
+  }
+
+  private var secondaryColor: Color {
+    switch appearance {
+    case .dark:
+      Color(red: 0.64, green: 0.69, blue: 0.76)
+    case .light:
+      Color(red: 0.42, green: 0.47, blue: 0.55)
+    }
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 8) {
+        Circle().fill(Color.red.opacity(0.9)).frame(width: 9, height: 9)
+        Circle().fill(Color.yellow.opacity(0.9)).frame(width: 9, height: 9)
+        Circle().fill(Color.green.opacity(0.9)).frame(width: 9, height: 9)
+      }
+
+      VStack(alignment: .leading, spacing: 4) {
+        Text("$ argon review --mode uncommitted")
+          .foregroundStyle(primaryColor)
+        Text("Awaiting reviewer feedback...")
+          .foregroundStyle(secondaryColor)
+        Text("[ok] 3 comments addressed")
+          .foregroundStyle(Color.green.opacity(0.85))
+      }
+      .font(.system(size: terminalFontSize, design: .monospaced))
+      .textSelection(.enabled)
+    }
+    .padding(12)
+    .background(backgroundColor)
+    .clipShape(RoundedRectangle(cornerRadius: 8))
+    .overlay(
+      RoundedRectangle(cornerRadius: 8)
+        .stroke(borderColor, lineWidth: 1)
+    )
   }
 }
 

@@ -523,6 +523,11 @@ final class WorkspaceState {
     }
   }
 
+  func worktreeNeedsAttention(for worktreePath: String) -> Bool {
+    let tabs = terminalTabsByWorktreePath[normalizedPath(worktreePath)] ?? []
+    return tabs.contains { $0.hasAttention }
+  }
+
   func defaultNewWorktreeStartPoint() -> String {
     selectedReviewTarget?.baseRef
       ?? GitService.inferBaseRef(repoRoot: target.repoRoot)
@@ -803,8 +808,39 @@ final class WorkspaceState {
 
   func selectTerminalTab(_ tabID: UUID) {
     guard let worktreePath = normalizedSelectedWorktreePath else { return }
+    guard let tab = terminalTabsByWorktreePath[worktreePath]?.first(where: { $0.id == tabID })
+    else { return }
     selectedTerminalTabIDsByWorktreePath[worktreePath] = tabID
+    tab.hasAttention = false
     requestTerminalFocus(in: worktreePath)
+    notifyRestorableStateChanged()
+  }
+
+  @discardableResult
+  func focusTerminal(tabID: UUID, in worktreePath: String) -> Bool {
+    let normalizedWorktreePath = normalizedPath(worktreePath)
+    guard
+      terminalTabsByWorktreePath[normalizedWorktreePath]?.contains(where: { $0.id == tabID })
+        == true
+    else {
+      return false
+    }
+    if normalizedSelectedWorktreePath != normalizedWorktreePath {
+      selectWorktree(path: normalizedWorktreePath)
+    }
+    selectedTerminalTabIDsByWorktreePath[normalizedWorktreePath] = tabID
+    if let tab = terminalTab(for: tabID) {
+      tab.hasAttention = false
+    }
+    requestTerminalFocus(in: normalizedWorktreePath)
+    notifyRestorableStateChanged()
+    return true
+  }
+
+  func markTerminalNeedsAttention(_ tabID: UUID) {
+    guard let tab = terminalTab(for: tabID) else { return }
+    guard !tab.hasAttention else { return }
+    tab.hasAttention = true
     notifyRestorableStateChanged()
   }
 

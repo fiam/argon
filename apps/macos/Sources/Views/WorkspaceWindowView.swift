@@ -412,10 +412,11 @@ private struct WorkspaceSidebarRow: View {
           HStack(spacing: 10) {
             WorkspaceCompactDiffSummary(summary: summary)
 
-            if let reviewSnapshot, reviewSnapshot.status != .approved {
+            if needsAttention {
               WorkspaceSidebarMetadataItem(
-                label: sidebarReviewLabel(for: reviewSnapshot.status),
-                symbolTint: sidebarReviewTint(for: reviewSnapshot.status)
+                label: "Needs attention",
+                symbolTint: .orange,
+                accessibilityIdentifier: "workspace-sidebar-needs-attention"
               )
             }
 
@@ -477,42 +478,16 @@ private struct WorkspaceSidebarRow: View {
     return isHovering ? Color.primary.opacity(0.05) : .clear
   }
 
-  private func sidebarReviewLabel(for status: SessionStatus) -> String {
-    switch status {
-    case .awaitingReviewer:
-      "Needs review"
-    case .awaitingAgent:
-      "Needs agent"
-    case .approved:
-      "Approved"
-    case .closed:
-      "Closed"
-    }
-  }
-
-  private func sidebarReviewTint(for status: SessionStatus) -> Color {
-    switch status {
-    case .awaitingReviewer:
-      .orange
-    case .awaitingAgent:
-      Color(nsColor: .controlAccentColor)
-    case .approved:
-      Color(nsColor: .systemGreen)
-    case .closed:
-      .secondary
-    }
-  }
-
   private var summary: WorktreeDiffSummary {
     workspaceState.summary(for: worktree.path)
   }
 
-  private var reviewSnapshot: WorkspaceReviewSnapshot? {
-    workspaceState.reviewSnapshot(for: worktree.path)
-  }
-
   private var hasConflicts: Bool {
     workspaceState.hasConflicts(for: worktree.path)
+  }
+
+  private var needsAttention: Bool {
+    workspaceState.worktreeNeedsAttention(for: worktree.path)
   }
 
   private var activeAgentCount: Int {
@@ -910,7 +885,7 @@ private struct WorkspaceTerminalTabItem: View {
           }
 
           Circle()
-            .fill(tab.isRunning ? Color(nsColor: .systemGreen) : Color.secondary)
+            .fill(attentionIndicatorColor)
             .frame(width: 6, height: 6)
 
           Text(tab.title)
@@ -951,6 +926,13 @@ private struct WorkspaceTerminalTabItem: View {
 
   private var tabHelp: String {
     "\(tab.title) in \(tab.worktreeLabel)\n\(tab.commandDescription)"
+  }
+
+  private var attentionIndicatorColor: Color {
+    if tab.hasAttention {
+      return .orange
+    }
+    return tab.isRunning ? Color(nsColor: .systemGreen) : .secondary
   }
 
   private var resolvedAgentTabIconName: String {
@@ -1044,7 +1026,9 @@ private struct WorkspaceDecisionPill: View {
 
 private struct WorkspaceTerminalStage: View {
   @Environment(WorkspaceState.self) private var workspaceState
-  @AppStorage("terminalFontSize") private var terminalFontSize = 12.0
+  @Environment(WorkspaceTerminalAttentionNotifier.self) private var terminalAttentionNotifier
+  @AppStorage("terminalFontSize") private var terminalFontSizeFallback = 12.0
+  @AppStorage(GhosttyConfigurationSettings.storageKey) private var ghosttyConfigurationText = ""
   @AppStorage(WorkspaceFinishedTerminalBehavior.storageKey) private var finishedTerminalBehavior =
     WorkspaceFinishedTerminalBehavior.autoClose.rawValue
 
@@ -1056,12 +1040,21 @@ private struct WorkspaceTerminalStage: View {
           controller: tab,
           launch: tab.launch,
           terminalID: tab.id,
-          terminalFontSize: terminalFontSize,
+          terminalFontSize: effectiveTerminalFontSize,
+          ghosttyConfigurationText: ghosttyConfigurationText,
           waitAfterCommand: waitAfterCommand(for: tab),
           onProcessExit: {
             workspaceState.handleTerminalExit(
               tab.id,
               exitBehavior: selectedFinishedTerminalBehavior
+            )
+          },
+          onAttention: { event in
+            workspaceState.markTerminalNeedsAttention(tab.id)
+            terminalAttentionNotifier.postAttentionNotification(
+              event: event,
+              repoRoot: workspaceState.target.repoRoot,
+              tab: tab
             )
           },
           focusRequestID: isSelected ? workspaceState.selectedTerminalFocusRequestID : nil
@@ -1091,6 +1084,11 @@ private struct WorkspaceTerminalStage: View {
 
   private var selectedFinishedTerminalBehavior: WorkspaceFinishedTerminalBehavior {
     WorkspaceFinishedTerminalBehavior(rawValue: finishedTerminalBehavior) ?? .autoClose
+  }
+
+  private var effectiveTerminalFontSize: Double {
+    GhosttyConfigurationSettings.fontSize(from: ghosttyConfigurationText)
+      ?? terminalFontSizeFallback
   }
 
   private var selectedTerminalTab: WorkspaceTerminalTab? {

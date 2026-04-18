@@ -439,6 +439,50 @@ struct WorkspaceStateTests {
     #expect(state.selectedTerminalFocusRequestID != secondFocusRequest)
   }
 
+  @Test("terminal attention marks tabs and clears when selected")
+  @MainActor
+  func terminalAttentionMarksTabsAndClearsWhenSelected() throws {
+    let state = makeState()
+    state.openShellTab()
+    let tab = try #require(state.selectedTerminalTab)
+
+    #expect(state.worktreeNeedsAttention(for: "/tmp/repo") == false)
+    #expect(tab.hasAttention == false)
+
+    state.markTerminalNeedsAttention(tab.id)
+
+    #expect(tab.hasAttention == true)
+    #expect(state.worktreeNeedsAttention(for: "/tmp/repo") == true)
+
+    state.selectTerminalTab(tab.id)
+
+    #expect(tab.hasAttention == false)
+    #expect(state.worktreeNeedsAttention(for: "/tmp/repo") == false)
+  }
+
+  @Test("focusTerminal switches worktree, focuses tab, and clears attention")
+  @MainActor
+  func focusTerminalSwitchesWorktreeFocusesTabAndClearsAttention() throws {
+    let state = makeState()
+    state.openShellTab()
+    let baseTab = try #require(state.selectedTerminalTab)
+
+    selectFeatureWorktree(in: state)
+    state.openShellTab()
+    let featureTab = try #require(state.selectedTerminalTab)
+
+    state.markTerminalNeedsAttention(baseTab.id)
+    state.markTerminalNeedsAttention(featureTab.id)
+
+    state.focusTerminal(tabID: baseTab.id, in: "/tmp/repo")
+
+    #expect(state.selectedWorktreePath == "/tmp/repo")
+    #expect(state.selectedTerminalTab?.id == baseTab.id)
+    #expect(baseTab.hasAttention == false)
+    #expect(state.worktreeNeedsAttention(for: "/tmp/repo") == false)
+    #expect(state.worktreeNeedsAttention(for: "/tmp/repo/feature") == true)
+  }
+
   @Test("default shell tabs use sandbox exec and expose sandbox identity")
   @MainActor
   func defaultShellTabsUseSandboxExecAndExposeSandboxIdentity() {

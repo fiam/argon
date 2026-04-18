@@ -32,9 +32,14 @@ enum AgentReviewState {
 struct AgentTerminalView: View {
   let agent: ReviewerAgentInstance
   var terminalFontSize: CGFloat = 12
+  var ghosttyConfigurationText = ""
 
   var body: some View {
-    GhosttyTerminalView(agent: agent, terminalFontSize: terminalFontSize)
+    GhosttyTerminalView(
+      agent: agent,
+      terminalFontSize: terminalFontSize,
+      ghosttyConfigurationText: ghosttyConfigurationText
+    )
   }
 }
 
@@ -42,7 +47,8 @@ struct AgentTerminalView: View {
 
 struct ReviewerAgentTabsView: View {
   @Environment(AppState.self) private var appState
-  @AppStorage("terminalFontSize") private var terminalFontSize = 12.0
+  @AppStorage("terminalFontSize") private var terminalFontSizeFallback = 12.0
+  @AppStorage(GhosttyConfigurationSettings.storageKey) private var ghosttyConfigurationText = ""
   @State private var selectedAgentId: UUID?
 
   var body: some View {
@@ -77,12 +83,16 @@ struct ReviewerAgentTabsView: View {
         ZStack {
           ForEach(appState.reviewerAgents) { agent in
             let isSelected = effectiveSelectedId == agent.id
-            AgentTerminalView(agent: agent, terminalFontSize: terminalFontSize)
-              .id(agent.id)
-              .zIndex(isSelected ? 1 : 0)
-              .opacity(isSelected ? 1 : 0)
-              .allowsHitTesting(isSelected)
-              .accessibilityHidden(!isSelected)
+            AgentTerminalView(
+              agent: agent,
+              terminalFontSize: effectiveTerminalFontSize,
+              ghosttyConfigurationText: ghosttyConfigurationText
+            )
+            .id(agent.id)
+            .zIndex(isSelected ? 1 : 0)
+            .opacity(isSelected ? 1 : 0)
+            .allowsHitTesting(isSelected)
+            .accessibilityHidden(!isSelected)
           }
         }
       }
@@ -103,6 +113,11 @@ struct ReviewerAgentTabsView: View {
       return sel
     }
     return appState.reviewerAgents.first?.id
+  }
+
+  private var effectiveTerminalFontSize: Double {
+    GhosttyConfigurationSettings.fontSize(from: ghosttyConfigurationText)
+      ?? terminalFontSizeFallback
   }
 }
 

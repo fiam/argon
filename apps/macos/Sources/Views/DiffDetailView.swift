@@ -685,6 +685,8 @@ extension Color {
 
 struct InlineThreadView: View {
   @Environment(AppState.self) private var appState
+  @AppStorage(CommentFontSettings.storageKey)
+  private var commentFontSize = CommentFontSettings.defaultSize
   let thread: ReviewThread
   let isOutdated: Bool
   @State private var isCollapsed: Bool
@@ -700,6 +702,14 @@ struct InlineThreadView: View {
   private var isSessionActive: Bool {
     guard let session = appState.session else { return false }
     return session.status != .approved && session.status != .closed
+  }
+
+  private var bodyTextSize: CGFloat {
+    CGFloat(CommentFontSettings.clamped(commentFontSize))
+  }
+
+  private var metaTextSize: CGFloat {
+    max(bodyTextSize - 2, 10)
   }
 
   var body: some View {
@@ -738,7 +748,7 @@ struct InlineThreadView: View {
           }
           if let first = thread.comments.first {
             Text(first.body)
-              .font(.caption)
+              .font(.system(size: metaTextSize))
               .foregroundStyle(.secondary)
               .lineLimit(1)
           }
@@ -801,6 +811,7 @@ struct InlineThreadView: View {
             VStack(alignment: .leading, spacing: 6) {
               FocusedTextEditor(
                 text: $replyText,
+                fontSize: bodyTextSize,
                 onCommandReturn: { submitReply() }
               )
               .frame(height: 60)
@@ -879,23 +890,36 @@ struct InlineThreadView: View {
 
 struct InlineCommentBubble: View {
   @Environment(AppState.self) private var appState
+  @AppStorage(CommentFontSettings.storageKey)
+  private var commentFontSize = CommentFontSettings.defaultSize
   let comment: ReviewComment
+
+  private var bodyTextSize: CGFloat {
+    CGFloat(CommentFontSettings.clamped(commentFontSize))
+  }
+
+  private var metaTextSize: CGFloat {
+    max(bodyTextSize - 2, 10)
+  }
+
+  private var microTextSize: CGFloat {
+    max(metaTextSize - 1, 9)
+  }
 
   var body: some View {
     HStack(alignment: .top, spacing: 8) {
       Image(systemName: authorIcon)
         .foregroundStyle(authorColor)
-        .font(.callout)
+        .font(.system(size: bodyTextSize))
 
       VStack(alignment: .leading, spacing: 2) {
         HStack(spacing: 4) {
           Text(authorLabel)
-            .font(.caption)
-            .fontWeight(.semibold)
+            .font(.system(size: metaTextSize, weight: .semibold))
             .foregroundStyle(authorColor)
           if let focus = agentFocus {
             Text(focus)
-              .font(.caption2)
+              .font(.system(size: microTextSize))
               .padding(.horizontal, 4)
               .padding(.vertical, 1)
               .background(authorColor.opacity(0.1))
@@ -903,11 +927,11 @@ struct InlineCommentBubble: View {
               .clipShape(RoundedRectangle(cornerRadius: 3))
           }
           Text(timeAgo(comment.createdAt))
-            .font(.caption2)
+            .font(.system(size: microTextSize))
             .foregroundStyle(.tertiary)
         }
         Text(comment.body)
-          .font(.callout)
+          .font(.system(size: bodyTextSize))
           .textSelection(.enabled)
       }
     }
@@ -980,21 +1004,30 @@ func colorFromName(_ name: String) -> Color {
 
 struct InlineDraftView: View {
   @Environment(AppState.self) private var appState
+  @AppStorage(CommentFontSettings.storageKey)
+  private var commentFontSize = CommentFontSettings.defaultSize
   let draft: DraftComment
+
+  private var bodyTextSize: CGFloat {
+    CGFloat(CommentFontSettings.clamped(commentFontSize))
+  }
+
+  private var metaTextSize: CGFloat {
+    max(bodyTextSize - 2, 10)
+  }
 
   var body: some View {
     HStack(alignment: .top, spacing: 8) {
       Image(systemName: "pencil.circle.fill")
         .foregroundStyle(.purple)
-        .font(.callout)
+        .font(.system(size: bodyTextSize))
 
       VStack(alignment: .leading, spacing: 2) {
         Text("Pending")
-          .font(.caption)
-          .fontWeight(.semibold)
+          .font(.system(size: metaTextSize, weight: .semibold))
           .foregroundStyle(.purple)
         Text(draft.body)
-          .font(.callout)
+          .font(.system(size: bodyTextSize))
           .textSelection(.enabled)
       }
 
@@ -1022,6 +1055,8 @@ struct InlineDraftView: View {
 
 struct InlineCommentEditor: View {
   @Environment(AppState.self) private var appState
+  @AppStorage(CommentFontSettings.storageKey)
+  private var commentFontSize = CommentFontSettings.defaultSize
   let filePath: String
   let line: DiffLine
 
@@ -1053,6 +1088,7 @@ struct InlineCommentEditor: View {
 
       FocusedTextEditor(
         text: $state.activeCommentText,
+        fontSize: CGFloat(CommentFontSettings.clamped(commentFontSize)),
         onCommandReturn: {
           submitImmediate()
         }

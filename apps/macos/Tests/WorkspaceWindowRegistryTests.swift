@@ -105,6 +105,54 @@ struct WorkspaceWindowRegistryTests {
     #expect(openedTargets[0].selectedWorktreePath == state.selectedWorktreePath)
   }
 
+  @Test("focusTerminal brings a workspace tab to the front")
+  @MainActor
+  func focusTerminalBringsWorkspaceTabToFront() {
+    let registry = WorkspaceWindowRegistry()
+    let target = makeTarget(selectedWorktreePath: "/tmp/repo")
+    let state = registry.workspaceState(for: target)
+    let window = NSWindow()
+
+    state.worktrees = [
+      DiscoveredWorktree(
+        path: "/tmp/repo",
+        branchName: "main",
+        headSHA: "abc123",
+        isBaseWorktree: true,
+        isDetached: false
+      ),
+      DiscoveredWorktree(
+        path: "/tmp/repo-worktrees/feature-b",
+        branchName: "feature/b",
+        headSHA: "def456",
+        isBaseWorktree: false,
+        isDetached: false
+      ),
+    ]
+
+    let featureTab = makeShellTab(
+      id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+      worktreePath: "/tmp/repo-worktrees/feature-b",
+      title: "Shell 1",
+      sandboxed: true
+    )
+    featureTab.hasAttention = true
+    state.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"] = [featureTab]
+
+    registry.register(window: window, workspaceState: state, repoRoot: target.repoRoot)
+
+    let focused = registry.focusTerminal(
+      repoRoot: target.repoRoot,
+      worktreePath: "/tmp/repo-worktrees/feature-b",
+      tabID: featureTab.id
+    )
+
+    #expect(focused == true)
+    #expect(state.selectedWorktreePath == "/tmp/repo-worktrees/feature-b")
+    #expect(state.selectedTerminalTab?.id == featureTab.id)
+    #expect(featureTab.hasAttention == false)
+  }
+
   @Test("cold restore reopens the selected worktree and restores its tabs lazily")
   @MainActor
   func coldRestoreReopensTheSelectedWorktreeAndRestorableTerminalTabs() async {

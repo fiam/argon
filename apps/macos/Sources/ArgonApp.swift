@@ -12,6 +12,7 @@ struct ArgonApp: App {
   @State private var commandContext = CommandContext()
   @State private var reviewWindowRegistry = ReviewWindowRegistry()
   @State private var workspaceWindowRegistry = WorkspaceWindowRegistry()
+  @State private var terminalAttentionNotifier = WorkspaceTerminalAttentionNotifier()
 
   init() {
     AppSignalHandling.installEmbeddedTerminalHandlers()
@@ -29,9 +30,13 @@ struct ArgonApp: App {
         .environment(commandContext)
         .environment(reviewWindowRegistry)
         .environment(workspaceWindowRegistry)
+        .environment(terminalAttentionNotifier)
         .preferredColorScheme(Self.launchAppearance.colorScheme)
         .task(id: savedAgents.profiles) {
           agentAvailability.refresh(for: savedAgents.profiles)
+        }
+        .task {
+          terminalAttentionNotifier.bind(workspaceWindowRegistry: workspaceWindowRegistry)
         }
     }
     .defaultSize(width: Self.cliLaunchRequest == nil ? 560 : 300, height: 420)
@@ -139,12 +144,16 @@ struct ArgonApp: App {
     .environment(commandContext)
     .environment(reviewWindowRegistry)
     .environment(workspaceWindowRegistry)
+    .environment(terminalAttentionNotifier)
     .preferredColorScheme(Self.launchAppearance.colorScheme)
     .task {
       recentProjects.add(repoRoot: target.repoRoot)
     }
     .task(id: savedAgents.profiles) {
       agentAvailability.refresh(for: savedAgents.profiles)
+    }
+    .task {
+      terminalAttentionNotifier.bind(workspaceWindowRegistry: workspaceWindowRegistry)
     }
   }
 

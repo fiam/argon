@@ -119,6 +119,26 @@ private enum GhosttyHostRegistry {
   }
 }
 
+enum GhosttyAppShortcutPassthrough {
+  static func shouldPassThrough(
+    charactersIgnoringModifiers: String?,
+    modifierFlags: NSEvent.ModifierFlags
+  ) -> Bool {
+    guard let characters = charactersIgnoringModifiers?.lowercased() else { return false }
+    let relevantModifiers = modifierFlags.intersection([.command, .shift, .option, .control])
+
+    switch (characters, relevantModifiers) {
+    case (",", [.command]):
+      // Keep macOS Settings shortcut working while terminal has focus.
+      return true
+    case ("t", [.command]), ("t", [.command, .shift]), ("t", [.command, .shift, .option]):
+      return true
+    default:
+      return false
+    }
+  }
+}
+
 private func ghosttyWakeupCallback(_ userdata: UnsafeMutableRawPointer?) {
   GhosttyTerminalHostView.wakeup(userdata)
 }
@@ -176,16 +196,23 @@ struct GhosttyTerminalView: NSViewRepresentable {
   let launch: TerminalLaunchConfiguration
   let terminalID: UUID?
   var terminalFontSize: CGFloat = 12
+  var ghosttyConfigurationText = ""
   var waitAfterCommand = true
   var onProcessExit: (() -> Void)?
+  var onAttention: ((TerminalAttentionEvent) -> Void)?
   var focusRequestID: UUID?
 
   @MainActor
-  init(agent: ReviewerAgentInstance, terminalFontSize: CGFloat = 12) {
+  init(
+    agent: ReviewerAgentInstance,
+    terminalFontSize: CGFloat = 12,
+    ghosttyConfigurationText: String = ""
+  ) {
     self.controller = agent
     self.launch = .forReviewerAgent(agent)
     self.terminalID = nil
     self.terminalFontSize = terminalFontSize
+    self.ghosttyConfigurationText = ghosttyConfigurationText
   }
 
   init(
@@ -193,16 +220,20 @@ struct GhosttyTerminalView: NSViewRepresentable {
     launch: TerminalLaunchConfiguration,
     terminalID: UUID? = nil,
     terminalFontSize: CGFloat = 12,
+    ghosttyConfigurationText: String = "",
     waitAfterCommand: Bool = true,
     onProcessExit: (() -> Void)? = nil,
+    onAttention: ((TerminalAttentionEvent) -> Void)? = nil,
     focusRequestID: UUID? = nil
   ) {
     self.controller = controller
     self.launch = launch
     self.terminalID = terminalID
     self.terminalFontSize = terminalFontSize
+    self.ghosttyConfigurationText = ghosttyConfigurationText
     self.waitAfterCommand = waitAfterCommand
     self.onProcessExit = onProcessExit
+    self.onAttention = onAttention
     self.focusRequestID = focusRequestID
   }
 
@@ -225,15 +256,19 @@ struct GhosttyTerminalView: NSViewRepresentable {
       launch: launch,
       terminalID: terminalID,
       terminalFontSize: terminalFontSize,
+      ghosttyConfigurationText: ghosttyConfigurationText,
       waitAfterCommand: waitAfterCommand,
       onProcessExit: onProcessExit,
+      onAttention: onAttention,
       focusRequestID: focusRequestID
     )
   }
 
   func updateNSView(_ nsView: GhosttyTerminalHostView, context: Context) {
     nsView.updateTerminalFontSize(terminalFontSize)
+    nsView.updateGhosttyConfigurationText(ghosttyConfigurationText)
     nsView.updateProcessExitHandler(onProcessExit)
+    nsView.updateAttentionHandler(onAttention)
     nsView.updateFocusRequestID(focusRequestID)
   }
 
@@ -299,8 +334,10 @@ final class GhosttyTerminalHostView: NSView {
   private let launch: TerminalLaunchConfiguration
   let terminalID: UUID?
   private var terminalFontSize: CGFloat
+  private var ghosttyConfigurationText: String
   private let waitAfterCommand: Bool
   private var onProcessExit: (() -> Void)?
+  private var onAttention: ((TerminalAttentionEvent) -> Void)?
   private var pendingFocusRequestID: UUID?
   private var appliedFocusRequestID: UUID?
   private var callbackUserdata: UnsafeMutableRawPointer?
@@ -331,16 +368,20 @@ final class GhosttyTerminalHostView: NSView {
     launch: TerminalLaunchConfiguration,
     terminalID: UUID?,
     terminalFontSize: CGFloat,
+    ghosttyConfigurationText: String,
     waitAfterCommand: Bool,
     onProcessExit: (() -> Void)?,
+    onAttention: ((TerminalAttentionEvent) -> Void)?,
     focusRequestID: UUID?
   ) {
     self.controller = controller
     self.launch = launch
     self.terminalID = terminalID
     self.terminalFontSize = terminalFontSize
+    self.ghosttyConfigurationText = ghosttyConfigurationText
     self.waitAfterCommand = waitAfterCommand
     self.onProcessExit = onProcessExit
+    self.onAttention = onAttention
     self.pendingFocusRequestID = focusRequestID
     super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
     self.callbackUserdata = GhosttyHostRegistry.register(self, terminalID: terminalID)
@@ -396,8 +437,18 @@ final class GhosttyTerminalHostView: NSView {
     terminalFontSize = newValue
   }
 
+  func updateGhosttyConfigurationText(_ newValue: String) {
+    guard ghosttyConfigurationText != newValue else { return }
+    ghosttyConfigurationText = newValue
+    reloadGhosttyConfiguration()
+  }
+
   func updateProcessExitHandler(_ onProcessExit: (() -> Void)?) {
     self.onProcessExit = onProcessExit
+  }
+
+  func updateAttentionHandler(_ onAttention: ((TerminalAttentionEvent) -> Void)?) {
+    self.onAttention = onAttention
   }
 
   func updateFocusRequestID(_ focusRequestID: UUID?) {
@@ -725,13 +776,10 @@ final class GhosttyTerminalHostView: NSView {
       return
     }
 
-    guard let config = ghostty_config_new() else {
-      showMessage("Ghostty failed to create its default configuration.")
+    guard let config = loadGhosttyConfiguration() else {
+      showMessage("Ghostty failed to load terminal configuration.")
       return
     }
-    ghostty_config_load_default_files(config)
-    ghostty_config_load_recursive_files(config)
-    ghostty_config_finalize(config)
     self.config = config
 
     var runtimeConfig = ghostty_runtime_config_s(
@@ -767,6 +815,51 @@ final class GhosttyTerminalHostView: NSView {
     startProcessPollTimer()
     updateTrackingAreas()
     updateSurfaceMetrics()
+  }
+
+  private func reloadGhosttyConfiguration() {
+    guard let app, let surface else { return }
+    guard let newConfig = loadGhosttyConfiguration() else {
+      showMessage("Ghostty failed to reload terminal configuration.")
+      return
+    }
+
+    ghostty_app_update_config(app, newConfig)
+    ghostty_surface_update_config(surface, newConfig)
+
+    if let config {
+      ghostty_config_free(config)
+    }
+    config = newConfig
+  }
+
+  private func loadGhosttyConfiguration() -> ghostty_config_t? {
+    guard let config = ghostty_config_new() else { return nil }
+
+    ghostty_config_load_default_files(config)
+    ghostty_config_load_recursive_files(config)
+
+    if !ghosttyConfigurationText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      let fileURL = Self.inlineConfigurationFileURL()
+      do {
+        try ghosttyConfigurationText.write(to: fileURL, atomically: true, encoding: .utf8)
+      } catch {
+        ghostty_config_free(config)
+        return nil
+      }
+
+      fileURL.path.withCString { pathPointer in
+        ghostty_config_load_file(config, pathPointer)
+      }
+    }
+
+    ghostty_config_finalize(config)
+    return config
+  }
+
+  private static func inlineConfigurationFileURL() -> URL {
+    FileManager.default.temporaryDirectory
+      .appendingPathComponent("argon-ghostty-inline.conf", isDirectory: false)
   }
 
   private func createSurface(for app: ghostty_app_t) -> ghostty_surface_t? {
@@ -869,6 +962,13 @@ final class GhosttyTerminalHostView: NSView {
         onProcessExit()
       }
     }
+  }
+
+  private func handleAttention(_ event: TerminalAttentionEvent) {
+    if case .bell = event {
+      NSSound.beep()
+    }
+    onAttention?(event)
   }
 
   private func applyPendingFocusRequestIfNeeded() {
@@ -986,16 +1086,10 @@ final class GhosttyTerminalHostView: NSView {
   }
 
   private func shouldPassThroughAppShortcut(_ event: NSEvent) -> Bool {
-    guard let characters = event.charactersIgnoringModifiers?.lowercased() else { return false }
-    guard characters == "t" else { return false }
-
-    let relevantModifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
-    switch relevantModifiers {
-    case [.command], [.command, .shift], [.command, .shift, .option]:
-      return true
-    default:
-      return false
-    }
+    GhosttyAppShortcutPassthrough.shouldPassThrough(
+      charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+      modifierFlags: event.modifierFlags
+    )
   }
 
   private func syncPreedit(clearIfNeeded: Bool = true) {
@@ -1033,7 +1127,13 @@ final class GhosttyTerminalHostView: NSView {
     target: ghostty_target_s,
     action: ghostty_action_s
   ) -> Bool {
-    false
+    guard let event = attentionEvent(from: action) else { return false }
+    let userdataBox = UnsafeRawPointerBox(value: userdata(from: app, target: target))
+    MainActorDispatch.async {
+      guard let host = host(from: userdataBox.value) else { return }
+      host.handleAttention(event)
+    }
+    return true
   }
 
   nonisolated fileprivate static func readClipboard(
@@ -1098,6 +1198,48 @@ final class GhosttyTerminalHostView: NSView {
         guard let host = host(from: userdataBox.value) else { return }
         host.markProcessExited()
       }
+    }
+  }
+
+  nonisolated private static func userdata(from app: ghostty_app_t, target: ghostty_target_s)
+    -> UnsafeMutableRawPointer?
+  {
+    switch target.tag {
+    case GHOSTTY_TARGET_SURFACE:
+      guard let surface = target.target.surface else { return nil }
+      return ghostty_surface_userdata(surface)
+    case GHOSTTY_TARGET_APP:
+      return ghostty_app_userdata(app)
+    default:
+      return nil
+    }
+  }
+
+  nonisolated private static func attentionEvent(from action: ghostty_action_s)
+    -> TerminalAttentionEvent?
+  {
+    switch action.tag {
+    case GHOSTTY_ACTION_RING_BELL:
+      return .bell
+    case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
+      let title =
+        action.action.desktop_notification.title.flatMap {
+          String(cString: $0, encoding: .utf8)
+        } ?? ""
+      let body =
+        action.action.desktop_notification.body.flatMap {
+          String(cString: $0, encoding: .utf8)
+        } ?? ""
+      return .desktopNotification(title: title, body: body)
+    case GHOSTTY_ACTION_COMMAND_FINISHED:
+      let rawExitCode = Int(action.action.command_finished.exit_code)
+      let exitCode = rawExitCode >= 0 ? rawExitCode : nil
+      return .commandFinished(
+        exitCode: exitCode,
+        durationNanoseconds: action.action.command_finished.duration
+      )
+    default:
+      return nil
     }
   }
 }

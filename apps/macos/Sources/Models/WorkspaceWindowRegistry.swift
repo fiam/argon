@@ -186,6 +186,26 @@ final class WorkspaceWindowRegistry {
     schedulePersistAfterUnregister()
   }
 
+  @discardableResult
+  func focusTerminal(repoRoot: String, worktreePath: String, tabID: UUID) -> Bool {
+    let normalizedRepoRoot = normalizedPath(repoRoot)
+    guard let workspaceState = workspaceStatesByRepoRoot[normalizedRepoRoot] else {
+      return false
+    }
+
+    guard workspaceState.focusTerminal(tabID: tabID, in: worktreePath) else {
+      return false
+    }
+
+    guard let registration = registrationsByRepoRoot[normalizedRepoRoot] else { return false }
+    guard let window = registration.window else {
+      registrationsByRepoRoot.removeValue(forKey: normalizedRepoRoot)
+      return false
+    }
+    bringToFront(window)
+    return true
+  }
+
   private func configureWorkspaceState(_ workspaceState: WorkspaceState, repoRoot: String) {
     workspaceState.onRestorableStateChange = { [weak self] in
       guard let self else { return }

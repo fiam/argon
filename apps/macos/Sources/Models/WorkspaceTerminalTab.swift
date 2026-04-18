@@ -108,6 +108,8 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
   let writableRoots: [String]
   let isRestorableAfterRelaunch: Bool
   var isRunning: Bool
+  var hasAttention: Bool
+  var lastDeselectedAt: Date?
 
   init(
     id: UUID = UUID(),
@@ -121,7 +123,9 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
     isSandboxed: Bool = false,
     writableRoots: [String] = [],
     isRestorableAfterRelaunch: Bool = true,
-    isRunning: Bool = true
+    isRunning: Bool = true,
+    hasAttention: Bool = false,
+    lastDeselectedAt: Date? = nil
   ) {
     self.id = id
     self.worktreePath = worktreePath
@@ -135,6 +139,8 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
     self.writableRoots = writableRoots
     self.isRestorableAfterRelaunch = isRestorableAfterRelaunch
     self.isRunning = isRunning
+    self.hasAttention = hasAttention
+    self.lastDeselectedAt = lastDeselectedAt
   }
 }
 
