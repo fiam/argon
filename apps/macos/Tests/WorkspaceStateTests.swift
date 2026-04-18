@@ -1076,7 +1076,7 @@ struct WorkspaceStateTests {
     #expect(state.reviewSnapshot(for: "/tmp/repo")?.status == .closed)
   }
 
-  @Test("lazy restore maps legacy Codex tabs to distinct sessions in one worktree")
+  @Test("lazy restore maps Codex tabs to distinct sessions in one worktree")
   @MainActor
   func lazyRestoreMapsMultipleCodexTabsToDistinctSessions() async {
     WorkspaceState.sessionRecordsProvider = {

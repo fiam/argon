@@ -126,7 +126,7 @@ enum DiffParser {
     }
   }
 
-  // MARK: - Legacy Raw Diff Parsing (fallback)
+  // MARK: - Raw Diff Parsing
 
   static func parse(_ raw: String) -> [FileDiff] {
     var files: [FileDiff] = []

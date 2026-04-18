@@ -198,22 +198,13 @@ final class WorkspaceState {
       showsLinkedWorktreeWarning: false
     )
 
-    let pendingTabsByWorktreePath = pendingRestorableTabsByWorktreePath.reduce(
-      into: [String: [PersistedWorkspaceTerminalTab]]()
-    ) { partialResult, entry in
-      let migratedTabs = entry.value.map(Self.persistedTabByInferringResumeTemplate(from:))
-      if !migratedTabs.isEmpty {
-        partialResult[entry.key] = migratedTabs
-      }
-    }
+    let pendingTabsByWorktreePath = pendingRestorableTabsByWorktreePath.filter { !$0.value.isEmpty }
 
     let terminalTabsByWorktreePath =
       pendingTabsByWorktreePath.merging(
         terminalTabsByWorktreePath.reduce(into: [String: [PersistedWorkspaceTerminalTab]]()) {
           partialResult, entry in
-          let persistedTabs = entry.value.compactMap(Self.persistedTerminalTab(from:)).map(
-            Self.persistedTabByInferringResumeTemplate(from:)
-          )
+          let persistedTabs = entry.value.compactMap(Self.persistedTerminalTab(from:))
 
           if !persistedTabs.isEmpty {
             partialResult[entry.key] = persistedTabs
@@ -237,13 +228,17 @@ final class WorkspaceState {
   }
 
   func applyPersistedWindowSnapshot(_ snapshot: PersistedWorkspaceWindowSnapshot) {
+    let resumeTemplatesByProfileName = Self.resumeTemplatesByProfileName(
+      savedProfiles: SavedAgentProfiles().profiles
+    )
+
     selectedWorktreePath = normalizedPath(snapshot.target.selectedWorktreePath ?? target.repoRoot)
     terminalTabsByWorktreePath = [:]
     pendingRestorableTabsByWorktreePath = snapshot.terminalTabsByWorktreePath.reduce(
       into: [String: [PersistedWorkspaceTerminalTab]]()
     ) { partialResult, entry in
       partialResult[normalizedPath(entry.key)] = entry.value.map { tab in
-        Self.persistedTabByInferringResumeTemplate(
+        Self.persistedTabByResolvingResumeTemplate(
           from: PersistedWorkspaceTerminalTab(
             id: tab.id,
             worktreePath: normalizedPath(tab.worktreePath),
@@ -257,7 +252,9 @@ final class WorkspaceState {
             resumeArgumentTemplate: tab.resumeArgumentTemplate,
             resumeSessionID: tab.resumeSessionID,
             resumeCommandDescription: tab.resumeCommandDescription
-          ))
+          ),
+          using: resumeTemplatesByProfileName
+        )
       }
     }
 
@@ -1426,16 +1423,13 @@ final class WorkspaceState {
     )
   }
 
-  nonisolated private static func persistedTabByInferringResumeTemplate(
-    from tab: PersistedWorkspaceTerminalTab
+  nonisolated private static func persistedTabByResolvingResumeTemplate(
+    from tab: PersistedWorkspaceTerminalTab,
+    using resumeTemplatesByProfileName: [String: String]
   ) -> PersistedWorkspaceTerminalTab {
-    guard case .agent = tab.kind else { return tab }
-    guard tab.resumeArgumentTemplate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-      return tab
-    }
-
-    let inferredTemplate = defaultResumeArgumentTemplate(forCommand: tab.commandDescription)
-    guard !inferredTemplate.isEmpty else { return tab }
+    guard case .agent(let profileName, _) = tab.kind else { return tab }
+    let resumeArgumentTemplate = resumeTemplatesByProfileName[profileName] ?? ""
+    guard resumeArgumentTemplate != tab.resumeArgumentTemplate else { return tab }
 
     return PersistedWorkspaceTerminalTab(
       id: tab.id,
@@ -1447,25 +1441,27 @@ final class WorkspaceState {
       createdAt: tab.createdAt,
       isSandboxed: tab.isSandboxed,
       writableRoots: tab.writableRoots,
-      resumeArgumentTemplate: inferredTemplate,
+      resumeArgumentTemplate: resumeArgumentTemplate,
       resumeSessionID: tab.resumeSessionID,
       resumeCommandDescription: tab.resumeCommandDescription
     )
   }
 
-  nonisolated private static func defaultResumeArgumentTemplate(forCommand command: String)
-    -> String
+  private static func resumeTemplatesByProfileName(savedProfiles: [SavedAgentProfile])
+    -> [String: String]
   {
-    switch commandExecutableName(from: command).lowercased() {
-    case "codex":
-      return "resume {{session_id}}"
-    case "claude":
-      return "-c"
-    case "gemini":
-      return "--resume latest"
-    default:
-      return ""
+    var templates: [String: String] = [:]
+
+    for profile in SavedAgentProfiles.builtinDefaults where !profile.resumeArgumentTemplate.isEmpty
+    {
+      templates[profile.name] = profile.resumeArgumentTemplate
     }
+
+    for profile in savedProfiles where !profile.resumeArgumentTemplate.isEmpty {
+      templates[profile.name] = profile.resumeArgumentTemplate
+    }
+
+    return templates
   }
 
   nonisolated private static func normalizedPath(_ path: String) -> String {

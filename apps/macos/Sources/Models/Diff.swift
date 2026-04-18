@@ -130,12 +130,12 @@ struct DiffLine: Identifiable {
     }
   }
 
-  /// Backward-compatible plain-text content derived from spans.
+  /// Plain-text content derived from spans.
   var content: String {
     spans.map(\.text).joined()
   }
 
-  /// Legacy initializer for plain-text lines (used by DiffParser.parse fallback).
+  /// Plain-text initializer used by raw diff parsing.
   init(
     anchor: DiffAnchor = DiffAnchor(id: UUID().uuidString),
     kind: DiffLineKind,

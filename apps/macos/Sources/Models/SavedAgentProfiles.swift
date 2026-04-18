@@ -17,16 +17,6 @@ struct SavedAgentProfile: Codable, Identifiable, Hashable, Sendable {
   /// Leave empty to disable session-resume restoration for this profile.
   var resumeArgumentTemplate: String
 
-  private enum CodingKeys: String, CodingKey {
-    case id
-    case name
-    case command
-    case icon
-    case yoloFlag
-    case promptArgumentTemplate
-    case resumeArgumentTemplate
-  }
-
   init(
     id: String,
     name: String,
@@ -43,19 +33,6 @@ struct SavedAgentProfile: Codable, Identifiable, Hashable, Sendable {
     self.yoloFlag = yoloFlag
     self.promptArgumentTemplate = promptArgumentTemplate
     self.resumeArgumentTemplate = resumeArgumentTemplate
-  }
-
-  init(from decoder: any Decoder) throws {
-    let container = try decoder.container(keyedBy: CodingKeys.self)
-    id = try container.decode(String.self, forKey: .id)
-    name = try container.decode(String.self, forKey: .name)
-    command = try container.decode(String.self, forKey: .command)
-    icon = try container.decode(String.self, forKey: .icon)
-    yoloFlag = try container.decode(String.self, forKey: .yoloFlag)
-    promptArgumentTemplate =
-      try container.decodeIfPresent(String.self, forKey: .promptArgumentTemplate) ?? ""
-    resumeArgumentTemplate =
-      try container.decodeIfPresent(String.self, forKey: .resumeArgumentTemplate) ?? ""
   }
 
   /// Build the full command, optionally with yolo flags.
@@ -100,11 +77,6 @@ struct SavedAgentProfile: Codable, Identifiable, Hashable, Sendable {
 @Observable
 final class SavedAgentProfiles {
   private static let key = "savedAgentProfiles"
-  nonisolated private static let legacyBuiltinResumeTemplatesByID: [String: String] = [
-    "claude-code": "-c",
-    "codex": "resume {{session_id}}",
-    "gemini": "--resume latest",
-  ]
 
   var profiles: [SavedAgentProfile] = []
 
@@ -170,54 +142,13 @@ final class SavedAgentProfiles {
     guard let data = UserDefaults.standard.data(forKey: Self.key),
       let decoded = try? JSONDecoder().decode([SavedAgentProfile].self, from: data)
     else { return }
-    let migrated = Self.applyingLegacyResumeDefaults(
-      to: decoded,
-      missingResumeFieldProfileIDs: Self.missingResumeFieldProfileIDs(from: data) ?? []
-    )
-    profiles = migrated
-    if migrated != decoded {
-      save()
-    }
+    profiles = decoded
   }
 
   private func save() {
     if let data = try? JSONEncoder().encode(profiles) {
       UserDefaults.standard.set(data, forKey: Self.key)
     }
-  }
-
-  nonisolated static func applyingLegacyResumeDefaults(
-    to decodedProfiles: [SavedAgentProfile],
-    missingResumeFieldProfileIDs: Set<String>
-  ) -> [SavedAgentProfile] {
-    guard !missingResumeFieldProfileIDs.isEmpty else { return decodedProfiles }
-
-    var migrated = decodedProfiles
-    for index in migrated.indices {
-      let id = migrated[index].id
-      guard missingResumeFieldProfileIDs.contains(id) else { continue }
-      guard migrated[index].resumeArgumentTemplate.isEmpty else { continue }
-      guard
-        let template = legacyBuiltinResumeTemplatesByID[id],
-        !template.isEmpty
-      else { continue }
-      migrated[index].resumeArgumentTemplate = template
-    }
-    return migrated
-  }
-
-  nonisolated static func missingResumeFieldProfileIDs(from encodedProfiles: Data) -> Set<String>? {
-    guard
-      let json = try? JSONSerialization.jsonObject(with: encodedProfiles) as? [[String: Any]]
-    else { return nil }
-
-    var ids = Set<String>()
-    for profile in json {
-      guard let id = profile["id"] as? String else { continue }
-      guard profile["resumeArgumentTemplate"] == nil else { continue }
-      ids.insert(id)
-    }
-    return ids
   }
 }
 

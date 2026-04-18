@@ -1071,18 +1071,10 @@ fn run_start(args: StartArgs, runtime: &RuntimeOptions) -> Result<()> {
         Some(ReviewMode::Commit) => resolve_commit_target(&repo_root, None)?,
         Some(ReviewMode::Uncommitted) => resolve_uncommitted_target(&repo_root)?,
         None => {
-            // Backward compat: if base/head provided, use branch mode
             if args.base.is_some() || args.head.is_some() {
-                let base = args.base.as_deref();
-                let head = args.head.as_deref();
-                if base.is_none() || head.is_none() {
-                    bail!("both --base and --head are required for branch mode");
-                }
-                resolve_branch_target(&repo_root, base, head)?
-            } else {
-                // Auto-detect
-                auto_detect_review_target(&repo_root)?
+                bail!("--base and --head require --mode branch");
             }
+            auto_detect_review_target(&repo_root)?
         }
     };
 

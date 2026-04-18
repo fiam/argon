@@ -54,8 +54,8 @@ struct SavedAgentProfilesTests {
     )
   }
 
-  @Test("saved profiles default missing prompt templates during decoding")
-  func savedProfilesDefaultMissingPromptTemplatesDuringDecoding() throws {
+  @Test("saved profiles require explicit prompt and resume templates when decoding")
+  func savedProfilesRequireExplicitPromptAndResumeTemplatesWhenDecoding() {
     let data = """
       [
         {
@@ -68,71 +68,9 @@ struct SavedAgentProfilesTests {
       ]
       """.data(using: .utf8)!
 
-    let decoded = try JSONDecoder().decode([SavedAgentProfile].self, from: data)
-
-    #expect(decoded.count == 1)
-    #expect(decoded[0].promptArgumentTemplate == "")
-    #expect(decoded[0].resumeArgumentTemplate == "")
-  }
-
-  @Test("legacy built-in profiles get resume defaults only when field was missing")
-  func legacyBuiltinsGetResumeDefaultsWhenFieldWasMissing() throws {
-    let legacyData = """
-      [
-        {
-          "id": "codex",
-          "name": "Codex",
-          "command": "codex",
-          "icon": "codex",
-          "yoloFlag": "--yolo"
-        },
-        {
-          "id": "custom",
-          "name": "Custom",
-          "command": "custom-agent",
-          "icon": "terminal",
-          "yoloFlag": ""
-        }
-      ]
-      """.data(using: .utf8)!
-
-    let decoded = try JSONDecoder().decode([SavedAgentProfile].self, from: legacyData)
-    let missingIDs = SavedAgentProfiles.missingResumeFieldProfileIDs(from: legacyData) ?? []
-    let migrated = SavedAgentProfiles.applyingLegacyResumeDefaults(
-      to: decoded,
-      missingResumeFieldProfileIDs: missingIDs
-    )
-
-    #expect(
-      migrated.first(where: { $0.id == "codex" })?.resumeArgumentTemplate == "resume {{session_id}}"
-    )
-    #expect(migrated.first(where: { $0.id == "custom" })?.resumeArgumentTemplate == "")
-  }
-
-  @Test("explicitly empty resume templates are preserved")
-  func explicitlyEmptyResumeTemplatesArePreserved() throws {
-    let currentData = """
-      [
-        {
-          "id": "codex",
-          "name": "Codex",
-          "command": "codex",
-          "icon": "codex",
-          "yoloFlag": "--yolo",
-          "resumeArgumentTemplate": ""
-        }
-      ]
-      """.data(using: .utf8)!
-
-    let decoded = try JSONDecoder().decode([SavedAgentProfile].self, from: currentData)
-    let missingIDs = SavedAgentProfiles.missingResumeFieldProfileIDs(from: currentData) ?? []
-    let migrated = SavedAgentProfiles.applyingLegacyResumeDefaults(
-      to: decoded,
-      missingResumeFieldProfileIDs: missingIDs
-    )
-
-    #expect(missingIDs.isEmpty)
-    #expect(migrated[0].resumeArgumentTemplate == "")
+    #expect(throws: DecodingError.self) {
+      try JSONDecoder().decode([SavedAgentProfile].self, from: data)
+    }
   }
 
   @Test("resume templates render with optional session placeholders")
