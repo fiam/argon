@@ -179,7 +179,7 @@ struct WelcomeView: View {
 
       Spacer()
 
-      Button("Open Directory...") {
+      Button("Open…") {
         pickDirectory()
       }
       .buttonStyle(.borderedProminent)

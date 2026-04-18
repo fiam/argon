@@ -196,11 +196,11 @@ private struct WorkspaceFileCommands: Commands {
       Button {
         pickDirectory()
       } label: {
-        Label("Open Directory…", systemImage: "folder")
+        Label("Open…", systemImage: "folder")
       }
       .keyboardShortcut("o", modifiers: .command)
 
-      Menu("Open Recent") {
+      Menu {
         if recentProjects.projects.isEmpty {
           Text("No Recent Projects")
         } else {
@@ -216,9 +216,18 @@ private struct WorkspaceFileCommands: Commands {
             recentProjects.clear()
           }
         }
+      } label: {
+        Label("Open Recent", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90")
       }
 
       Divider()
+
+      Button {
+        commandContext.activeWorkspaceState?.presentTabCreationSheet()
+      } label: {
+        Label("New Tab…", systemImage: "plus")
+      }
+      .disabled(commandContext.activeWorkspaceState?.selectedWorktree == nil)
 
       Button {
         commandContext.activeWorkspaceState?.presentAgentLaunchSheet()
@@ -226,13 +235,6 @@ private struct WorkspaceFileCommands: Commands {
         Label("New Agent Tab…", systemImage: "sparkles.rectangle.stack")
       }
       .keyboardShortcut("t", modifiers: .command)
-      .disabled(commandContext.activeWorkspaceState?.selectedWorktree == nil)
-
-      Button {
-        commandContext.activeWorkspaceState?.presentTabCreationSheet()
-      } label: {
-        Label("New Tab…", systemImage: "plus")
-      }
       .disabled(commandContext.activeWorkspaceState?.selectedWorktree == nil)
 
       Button {
