@@ -481,9 +481,9 @@ struct WorkspaceStateTests {
     #expect(state.windowTitle == "Argon — repo — feature/window")
   }
 
-  @Test("persisted snapshots restore the selected worktree and its selected tab")
+  @Test("persisted snapshots restore tabs lazily for the selected worktree")
   @MainActor
-  func persistedSnapshotsRestoreSelectedWorktreeAndSelectedTab() throws {
+  func persistedSnapshotsRestoreTabsLazilyForSelectedWorktree() async throws {
     let state = makeState()
     state.openShellTab()
 
@@ -492,12 +492,12 @@ struct WorkspaceStateTests {
       state.openAgentTab(
         WorkspaceAgentLaunchRequest(
           displayName: "Codex",
-          command: "codex --yolo",
+          command: "/bin/sh -lc 'printf restored\\n'",
           icon: "codex",
           sandboxEnabled: true
         ))
     )
-    _ = state.openShellTab(sandboxed: false)
+    state.openShellTab(sandboxed: false)
     state.selectTerminalTab(codexTab.id)
 
     let snapshot = state.persistedWindowSnapshot
@@ -507,12 +507,124 @@ struct WorkspaceStateTests {
     restoredState.applyPersistedWindowSnapshot(snapshot)
 
     #expect(restoredState.selectedWorktreePath == "/tmp/repo/feature")
+    #expect(restoredState.selectedTerminalTabs.isEmpty)
+    #expect(restoredState.allTerminalTabs.isEmpty)
+
+    restoredState.prepareSelectionLoading(for: "/tmp/repo/feature")
+    #expect(await waitUntil { !restoredState.selectedTerminalTabs.isEmpty })
+
     #expect(restoredState.selectedTerminalTabs.map(\.title) == ["Codex", "Privileged Shell 1"])
     #expect(restoredState.selectedTerminalTab?.id == codexTab.id)
     #expect(
       restoredState.selectedTerminalTabs.allSatisfy { $0.worktreePath == "/tmp/repo/feature" })
+    #expect(restoredState.terminalTabsByWorktreePath["/tmp/repo"] == nil)
+
+    restoredState.prepareSelectionLoading(for: "/tmp/repo")
+    #expect(await waitUntil { restoredState.terminalTabsByWorktreePath["/tmp/repo"] != nil })
+
     #expect(restoredState.terminalTabsByWorktreePath["/tmp/repo"]?.map(\.title) == ["Shell 1"])
     #expect(restoredState.launchWarningMessage == nil)
+  }
+
+  @Test("lazy restore skips missing agent commands and shows a restore toast")
+  @MainActor
+  func lazyRestoreSkipsMissingAgentCommandsAndShowsRestoreToast() async {
+    let snapshot = PersistedWorkspaceWindowSnapshot(
+      target: WorkspaceTarget(
+        repoRoot: "/tmp/repo",
+        repoCommonDir: "/tmp/repo/.git",
+        selectedWorktreePath: "/tmp/repo/feature"
+      ),
+      terminalTabsByWorktreePath: [
+        "/tmp/repo/feature": [
+          PersistedWorkspaceTerminalTab(
+            id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Shell 1",
+            commandDescription: "Sandboxed /bin/zsh",
+            kind: .shell,
+            createdAt: Date(timeIntervalSince1970: 1),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"]
+          ),
+          PersistedWorkspaceTerminalTab(
+            id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Missing Agent",
+            commandDescription: "/definitely/missing/agent --yolo",
+            kind: .agent(profileName: "Missing Agent", icon: "terminal"),
+            createdAt: Date(timeIntervalSince1970: 2),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"]
+          ),
+        ]
+      ],
+      selectedTerminalTabIDsByWorktreePath: [
+        "/tmp/repo/feature": UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+      ]
+    )
+
+    let state = makeState()
+    state.applyPersistedWindowSnapshot(snapshot)
+
+    state.prepareSelectionLoading(for: "/tmp/repo/feature")
+    #expect(
+      await waitUntil { !state.selectedTerminalTabs.isEmpty || state.restoreFailureMessage != nil })
+
+    #expect(state.selectedTerminalTabs.map(\.title) == ["Shell 1"])
+    #expect(state.selectedTerminalTab?.title == "Shell 1")
+    #expect(state.restoreFailureMessage?.contains("1 agent tab") == true)
+    #expect(state.restoreFailureMessage?.contains("feature/window") == true)
+  }
+
+  @Test("opening a tab while lazy restore is in flight preserves the new tab")
+  @MainActor
+  func openingTabDuringLazyRestorePreservesNewTab() async {
+    let snapshot = PersistedWorkspaceWindowSnapshot(
+      target: WorkspaceTarget(
+        repoRoot: "/tmp/repo",
+        repoCommonDir: "/tmp/repo/.git",
+        selectedWorktreePath: "/tmp/repo/feature"
+      ),
+      terminalTabsByWorktreePath: [
+        "/tmp/repo/feature": [
+          PersistedWorkspaceTerminalTab(
+            id: UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Restored Shell",
+            commandDescription: "Sandboxed /bin/zsh",
+            kind: .shell,
+            createdAt: Date(timeIntervalSince1970: 1),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"]
+          )
+        ]
+      ],
+      selectedTerminalTabIDsByWorktreePath: [
+        "/tmp/repo/feature": UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!
+      ]
+    )
+
+    let state = makeState()
+    state.applyPersistedWindowSnapshot(snapshot)
+
+    WorkspaceState.tabRestoreTestDelay = .milliseconds(150)
+    defer { WorkspaceState.tabRestoreTestDelay = nil }
+
+    state.prepareSelectionLoading(for: "/tmp/repo/feature")
+    state.openShellTab(sandboxed: false)
+
+    #expect(state.selectedTerminalTab?.title == "Privileged Shell 1")
+    #expect(
+      await waitUntil(timeout: .seconds(2)) {
+        state.selectedTerminalTabs.count == 2
+      }
+    )
+    #expect(state.selectedTerminalTabs.map(\.title) == ["Restored Shell", "Privileged Shell 1"])
+    #expect(state.selectedTerminalTab?.title == "Privileged Shell 1")
   }
 
   @Test("suggested worktree path uses configured root and repo subtree")
@@ -668,6 +780,52 @@ struct WorkspaceStateTests {
     #expect(restoredState.selectedTerminalTabs.isEmpty)
     #expect(restoredState.allTerminalTabs.isEmpty)
     #expect(restoredState.worktrees.map(\.path) == ["/tmp/repo"])
+  }
+
+  @Test("deleted worktrees drop cached tabs so a reused path does not resurrect old state")
+  @MainActor
+  func deletedWorktreesDropCachedTabsForReusedPaths() async {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+    state.openShellTab()
+
+    let snapshot = state.persistedWindowSnapshot
+    let restoredState = makeState()
+    restoredState.applyPersistedWindowSnapshot(snapshot)
+
+    restoredState.applyDiscoveredWorktreeInventory([
+      DiscoveredWorktree(
+        path: "/tmp/repo",
+        branchName: "main",
+        headSHA: "abc123",
+        isBaseWorktree: true,
+        isDetached: false
+      )
+    ])
+
+    #expect(restoredState.allTerminalTabs.isEmpty)
+
+    restoredState.applyDiscoveredWorktreeInventory([
+      DiscoveredWorktree(
+        path: "/tmp/repo",
+        branchName: "main",
+        headSHA: "abc123",
+        isBaseWorktree: true,
+        isDetached: false
+      ),
+      DiscoveredWorktree(
+        path: "/tmp/repo/feature",
+        branchName: "feature/window",
+        headSHA: "def456",
+        isBaseWorktree: false,
+        isDetached: false
+      ),
+    ])
+    restoredState.prepareSelectionLoading(for: "/tmp/repo/feature")
+
+    #expect(await waitUntil { restoredState.normalizedSelectedWorktreePath == "/tmp/repo/feature" })
+    #expect(restoredState.selectedTerminalTabs.isEmpty)
+    #expect(restoredState.allTerminalTabs.isEmpty)
   }
 
   @Test("prepareWorktreeRemoval rejects the base worktree")
@@ -943,5 +1101,22 @@ struct WorkspaceStateTests {
     encoder.dateEncodingStrategy = .iso8601
     let data = try encoder.encode(session)
     try data.write(to: url)
+  }
+
+  private func waitUntil(
+    timeout: Duration = .seconds(2),
+    condition: @escaping @MainActor () -> Bool
+  ) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now + timeout
+
+    while clock.now < deadline {
+      if await condition() {
+        return true
+      }
+      try? await Task.sleep(for: .milliseconds(20))
+    }
+
+    return await condition()
   }
 }

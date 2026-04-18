@@ -4,6 +4,7 @@ import XCTest
 final class ArgonUITests: XCTestCase {
   private static let autoReviewerCommandEnvironmentKey = "ARGON_UI_TEST_AUTO_REVIEWER_COMMAND"
   private static let signalFileEnvironmentKey = "ARGON_UI_TEST_SIGNAL_FILE"
+  private static let workspaceSnapshotEnvironmentKey = "ARGON_UI_TEST_WORKSPACE_SNAPSHOT_FILE"
   private static let disableStateRestorationArguments = [
     "-ApplePersistenceIgnoreState", "YES",
   ]
@@ -14,6 +15,14 @@ final class ArgonUITests: XCTestCase {
   ]
   private static let ghosttyCrashDirectory = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent(".local/state/ghostty/crash", isDirectory: true)
+
+  private static func workspaceSidebarAccessibilityIdentifier(for path: String) -> String {
+    let hash = path.utf8.reduce(UInt64(14_695_981_039_346_656_037)) { partial, byte in
+      (partial ^ UInt64(byte)) &* 1_099_511_628_211
+    }
+    let lastComponent = URL(fileURLWithPath: path).lastPathComponent
+    return "workspace-sidebar-row-\(lastComponent)-\(String(hash, radix: 16))"
+  }
 
   override func setUpWithError() throws {
     continueAfterFailure = false
@@ -271,6 +280,64 @@ final class ArgonUITests: XCTestCase {
   }
 
   @MainActor
+  func testWorkspaceRestoreLoadsTabsLazilyAndShowsToastForMissingAgents() throws {
+    let target = try Self.createLazyRestoreWorkspace()
+    let app = XCUIApplication()
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.fixtureRoot)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launchEnvironment[Self.signalFileEnvironmentKey] = target.signalFile
+    app.launchEnvironment[Self.workspaceSnapshotEnvironmentKey] = target.snapshotFile
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+    XCTAssertTrue(
+      waitForSignalCount(
+        "ghostty-terminal-host-created",
+        at: URL(fileURLWithPath: target.signalFile),
+        expectedCount: 1,
+        timeout: 20
+      )
+    )
+    XCTAssertEqual(
+      signalCount(
+        "ghostty-terminal-host-created",
+        at: URL(fileURLWithPath: target.signalFile)
+      ),
+      1
+    )
+
+    let featureRow = app.buttons[
+      Self.workspaceSidebarAccessibilityIdentifier(for: target.featureWorktreePath)
+    ]
+    XCTAssertTrue(featureRow.waitForExistence(timeout: 10))
+    featureRow.click()
+
+    XCTAssertTrue(
+      waitForSignalCount(
+        "ghostty-terminal-host-created",
+        at: URL(fileURLWithPath: target.signalFile),
+        expectedCount: 2,
+        timeout: 10
+      )
+    )
+    XCTAssertTrue(
+      waitForSignal(
+        "workspace-restore-failure-toast-shown",
+        at: URL(fileURLWithPath: target.signalFile),
+        timeout: 5
+      )
+    )
+  }
+
+  @MainActor
   func testSubmitReviewSheetAcceptsCommandReturn() throws {
     let target = try Self.createSession()
     let app = XCUIApplication()
@@ -322,6 +389,14 @@ final class ArgonUITests: XCTestCase {
     let repoCommonDir: String
     let selectedWorktreePath: String
     let argonHome: String
+  }
+
+  private struct RestoredWorkspaceLaunchTarget {
+    let fixtureRoot: String
+    let featureWorktreePath: String
+    let argonHome: String
+    let snapshotFile: String
+    let signalFile: String
   }
 
   private static func createSession() throws -> ReviewTarget {
@@ -490,6 +565,116 @@ final class ArgonUITests: XCTestCase {
     )
   }
 
+  private static func createLazyRestoreWorkspace() throws -> RestoredWorkspaceLaunchTarget {
+    let fixtureRoot = FileManager.default.temporaryDirectory
+      .appendingPathComponent("argon-ui-tests", isDirectory: true)
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let repoRoot = fixtureRoot.appendingPathComponent("repo", isDirectory: true)
+    let worktreeRoot =
+      fixtureRoot
+      .appendingPathComponent("worktrees", isDirectory: true)
+      .appendingPathComponent("feature-lazy", isDirectory: true)
+    let argonHome = fixtureRoot.appendingPathComponent("argon-home", isDirectory: true)
+    let signalFile = fixtureRoot.appendingPathComponent("signal.txt")
+    let snapshotFile = fixtureRoot.appendingPathComponent("workspace-snapshots.json")
+
+    try FileManager.default.createDirectory(at: repoRoot, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+      at: worktreeRoot.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(at: argonHome, withIntermediateDirectories: true)
+
+    try git(repoRoot, ["init"])
+    try git(repoRoot, ["config", "user.name", "Argon UI Test"])
+    try git(repoRoot, ["config", "user.email", "argon-ui-test@example.com"])
+
+    try "initial\n".write(
+      to: repoRoot.appendingPathComponent("README.md"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repoRoot, ["add", "README.md"])
+    try git(repoRoot, ["commit", "-m", "Initial commit"])
+    try git(repoRoot, ["branch", "-M", "main"])
+    try git(repoRoot, ["worktree", "add", "-b", "feature/lazy", worktreeRoot.path, "HEAD"])
+
+    let snapshotPayload: [[String: Any]] = [
+      [
+        "target": [
+          "repoRoot": repoRoot.path,
+          "repoCommonDir": repoRoot.appendingPathComponent(".git", isDirectory: true).path,
+          "selectedWorktreePath": repoRoot.path,
+        ],
+        "terminalTabsByWorktreePath": [
+          repoRoot.path: [
+            [
+              "id": "11111111-1111-1111-1111-111111111111",
+              "worktreePath": repoRoot.path,
+              "worktreeLabel": "main",
+              "title": "Base Shell",
+              "commandDescription": "Sandboxed /bin/zsh",
+              "kind": [
+                "discriminator": "shell"
+              ],
+              "createdAt": 0,
+              "isSandboxed": true,
+              "writableRoots": [repoRoot.path],
+            ]
+          ],
+          worktreeRoot.path: [
+            [
+              "id": "22222222-2222-2222-2222-222222222222",
+              "worktreePath": worktreeRoot.path,
+              "worktreeLabel": "feature/lazy",
+              "title": "Feature Shell",
+              "commandDescription": "Sandboxed /bin/zsh",
+              "kind": [
+                "discriminator": "shell"
+              ],
+              "createdAt": 1,
+              "isSandboxed": true,
+              "writableRoots": [worktreeRoot.path],
+            ],
+            [
+              "id": "33333333-3333-3333-3333-333333333333",
+              "worktreePath": worktreeRoot.path,
+              "worktreeLabel": "feature/lazy",
+              "title": "Missing Agent",
+              "commandDescription": "/definitely/missing/agent --yolo",
+              "kind": [
+                "discriminator": "agent",
+                "profileName": "Missing Agent",
+                "icon": "terminal",
+              ],
+              "createdAt": 2,
+              "isSandboxed": true,
+              "writableRoots": [worktreeRoot.path],
+            ],
+          ],
+        ],
+        "selectedTerminalTabIDsByWorktreePath": [
+          repoRoot.path: "11111111-1111-1111-1111-111111111111",
+          worktreeRoot.path: "22222222-2222-2222-2222-222222222222",
+        ],
+      ]
+    ]
+
+    let snapshotData = try JSONSerialization.data(
+      withJSONObject: snapshotPayload,
+      options: [.prettyPrinted]
+    )
+    try snapshotData.write(to: snapshotFile, options: .atomic)
+
+    return RestoredWorkspaceLaunchTarget(
+      fixtureRoot: fixtureRoot.path,
+      featureWorktreePath: worktreeRoot.path,
+      argonHome: argonHome.path,
+      snapshotFile: snapshotFile.path,
+      signalFile: signalFile.path
+    )
+  }
+
   private static func repositoryRoot(filePath: StaticString = #filePath) -> String {
     var url = URL(fileURLWithPath: "\(filePath)")
     for _ in 0..<4 {
@@ -628,6 +813,31 @@ final class ArgonUITests: XCTestCase {
       RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     }
     return false
+  }
+
+  private func waitForSignalCount(
+    _ expected: String,
+    at url: URL,
+    expectedCount: Int,
+    timeout: TimeInterval
+  ) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+      if signalCount(expected, at: url) >= expectedCount {
+        return true
+      }
+      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    return false
+  }
+
+  private func signalCount(_ expected: String, at url: URL) -> Int {
+    guard let contents = try? String(contentsOf: url, encoding: .utf8) else { return 0 }
+    return
+      contents
+      .split(separator: "\n")
+      .filter { $0 == expected }
+      .count
   }
 
   private func waitForNonExistence(_ element: XCUIElement, timeout: TimeInterval) -> Bool {

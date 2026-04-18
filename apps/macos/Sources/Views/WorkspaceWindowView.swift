@@ -2,6 +2,14 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+private func workspaceSidebarAccessibilityIdentifier(for path: String) -> String {
+  let hash = path.utf8.reduce(UInt64(14_695_981_039_346_656_037)) { partial, byte in
+    (partial ^ UInt64(byte)) &* 1_099_511_628_211
+  }
+  let lastComponent = URL(fileURLWithPath: path).lastPathComponent
+  return "workspace-sidebar-row-\(lastComponent)-\(String(hash, radix: 16))"
+}
+
 struct WorkspaceWindowView: View {
   @Environment(CommandContext.self) private var commandContext
   @Environment(WorkspaceWindowRegistry.self) private var workspaceWindowRegistry
@@ -87,19 +95,34 @@ private struct WorkspaceContentView: View {
       }
     }
     .overlay(alignment: .top) {
-      if let launchWarningMessage = workspaceState.launchWarningMessage {
-        WorkspaceToast(
-          message: launchWarningMessage,
-          symbolName: "arrow.turn.up.left.circle.fill",
-          tint: .orange
-        ) {
-          withAnimation(.easeInOut(duration: 0.2)) {
-            workspaceState.launchWarningMessage = nil
+      VStack(spacing: 8) {
+        if let launchWarningMessage = workspaceState.launchWarningMessage {
+          WorkspaceToast(
+            message: launchWarningMessage,
+            symbolName: "arrow.turn.up.left.circle.fill",
+            tint: .orange,
+            accessibilityIdentifier: "workspace-launch-warning-toast"
+          ) {
+            withAnimation(.easeInOut(duration: 0.2)) {
+              workspaceState.launchWarningMessage = nil
+            }
           }
         }
-        .padding(.top, 10)
-        .transition(.move(edge: .top).combined(with: .opacity))
+        if let restoreFailureMessage = workspaceState.restoreFailureMessage {
+          WorkspaceToast(
+            message: restoreFailureMessage,
+            symbolName: "terminal.fill",
+            tint: .orange,
+            accessibilityIdentifier: "workspace-restore-failure-toast"
+          ) {
+            withAnimation(.easeInOut(duration: 0.2)) {
+              workspaceState.restoreFailureMessage = nil
+            }
+          }
+        }
       }
+      .padding(.top, 10)
+      .transition(.move(edge: .top).combined(with: .opacity))
     }
     .task(id: workspaceState.launchWarningMessage) {
       guard let launchWarningMessage = workspaceState.launchWarningMessage else { return }
@@ -111,7 +134,25 @@ private struct WorkspaceContentView: View {
         }
       }
     }
-    .animation(.easeInOut(duration: 0.2), value: workspaceState.launchWarningMessage != nil)
+    .task(id: workspaceState.restoreFailureMessage) {
+      guard let restoreFailureMessage = workspaceState.restoreFailureMessage else { return }
+      UITestAutomationSignal.write(
+        "workspace-restore-failure-toast-shown",
+        to: UITestAutomationConfig.current().signalFilePath
+      )
+      try? await Task.sleep(for: .seconds(4))
+      guard !Task.isCancelled else { return }
+      if workspaceState.restoreFailureMessage == restoreFailureMessage {
+        withAnimation(.easeInOut(duration: 0.2)) {
+          workspaceState.restoreFailureMessage = nil
+        }
+      }
+    }
+    .animation(
+      .easeInOut(duration: 0.2),
+      value: workspaceState.launchWarningMessage != nil
+        || workspaceState.restoreFailureMessage != nil
+    )
     .toolbar {
       if workspaceState.selectedWorktree != nil {
         WorkspaceToolbarItems(
@@ -411,6 +452,7 @@ private struct WorkspaceSidebarRow: View {
         .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
       }
       .buttonStyle(.plain)
+      .accessibilityIdentifier(workspaceSidebarAccessibilityIdentifier(for: worktree.path))
 
       WorkspaceSidebarHoverActions(
         worktree: worktree,
@@ -859,10 +901,11 @@ private struct WorkspaceTerminalTabItem: View {
     HStack(spacing: 6) {
       Button(action: onSelect) {
         HStack(spacing: 5) {
-          if case .agent(_, let icon) = tab.kind {
-            AgentIconView(icon: icon, size: 12)
+          if case .agent = tab.kind {
+            AgentIconView(icon: resolvedAgentTabIconName, size: 12)
+              .foregroundStyle(.primary)
           } else {
-            Image(systemName: tab.isSandboxed ? "lock.shield" : "terminal")
+            Image(systemName: tab.isSandboxed ? "terminal" : "lock.open")
               .font(.system(size: 11, weight: .medium))
           }
 
@@ -908,6 +951,16 @@ private struct WorkspaceTerminalTabItem: View {
 
   private var tabHelp: String {
     "\(tab.title) in \(tab.worktreeLabel)\n\(tab.commandDescription)"
+  }
+
+  private var resolvedAgentTabIconName: String {
+    guard case .agent(_, let icon) = tab.kind else { return "agent" }
+    switch icon {
+    case "claude", "codex", "gemini":
+      return icon
+    default:
+      return "agent"
+    }
   }
 }
 
@@ -1491,7 +1544,7 @@ private struct WorkspaceAgentTabSheet: View {
         source: .custom(
           displayName: commandExecutableName(from: command),
           command: command,
-          icon: "terminal"
+          icon: "agent"
         ),
         sandboxEnabled: sandboxEnabled
       )
@@ -1977,6 +2030,7 @@ private struct WorkspaceToast: View {
   let message: String
   let symbolName: String
   let tint: Color
+  let accessibilityIdentifier: String?
   let onDismiss: () -> Void
 
   var body: some View {
@@ -1992,6 +2046,8 @@ private struct WorkspaceToast: View {
     }
     .font(.caption)
     .foregroundStyle(tint)
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel(message)
     .padding(.horizontal, 14)
     .padding(.vertical, 9)
     .background(.regularMaterial, in: Capsule())
@@ -2001,6 +2057,7 @@ private struct WorkspaceToast: View {
     )
     .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
     .padding(.horizontal, 16)
+    .accessibilityIdentifier(accessibilityIdentifier ?? "workspace-toast")
   }
 }
 
@@ -2239,11 +2296,13 @@ private struct WorkspaceRevealInFinderButton: View {
           Circle()
             .fill(Color.primary.opacity(showButton ? 0.08 : 0))
         )
+        .contentShape(Circle())
     }
     .buttonStyle(.plain)
     .opacity(showButton ? 1 : 0)
     .allowsHitTesting(showButton)
-    .help("Reveal in Finder")
+    .help("Reveal worktree in Finder")
+    .accessibilityLabel("Reveal in Finder")
   }
 
   private var showButton: Bool {
@@ -2281,12 +2340,14 @@ private struct WorkspaceRemoveWorktreeButton: View {
         Circle()
           .fill(Color.red.opacity(showButton ? 0.12 : 0))
       )
+      .contentShape(Circle())
     }
     .buttonStyle(.plain)
     .disabled(isShowingProgress)
     .opacity(showButton ? 1 : 0)
     .allowsHitTesting(showButton)
     .help("Delete worktree")
+    .accessibilityLabel("Delete worktree")
     .sheet(isPresented: isPresentingRemovalSheet) {
       if let pendingRemoval {
         WorkspaceRemoveWorktreeConfirmationSheet(

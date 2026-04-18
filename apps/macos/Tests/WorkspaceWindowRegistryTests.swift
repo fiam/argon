@@ -105,9 +105,9 @@ struct WorkspaceWindowRegistryTests {
     #expect(openedTargets[0].selectedWorktreePath == state.selectedWorktreePath)
   }
 
-  @Test("cold restore reopens the selected worktree and restorable terminal tabs")
+  @Test("cold restore reopens the selected worktree and restores its tabs lazily")
   @MainActor
-  func coldRestoreReopensTheSelectedWorktreeAndRestorableTerminalTabs() {
+  func coldRestoreReopensTheSelectedWorktreeAndRestorableTerminalTabs() async {
     let suiteName = "WorkspaceWindowRegistryTests.coldRestore"
     let defaults = UserDefaults(suiteName: suiteName)!
     defaults.removePersistentDomain(forName: suiteName)
@@ -136,7 +136,7 @@ struct WorkspaceWindowRegistryTests {
           id: UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")!,
           worktreePath: "/tmp/repo-worktrees/feature-b",
           title: "Codex",
-          command: "codex --yolo",
+          command: "/bin/sh -lc 'printf restored\\n'",
           sandboxed: true
         ),
         makeAgentTab(
@@ -173,6 +173,15 @@ struct WorkspaceWindowRegistryTests {
         )
       ])
     #expect(restoredState.selectedWorktreePath == "/tmp/repo-worktrees/feature-b")
+    #expect(restoredState.allTerminalTabs.isEmpty)
+
+    restoredState.prepareSelectionLoading(for: "/tmp/repo-worktrees/feature-b")
+    #expect(
+      await waitUntil {
+        restoredState.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"] != nil
+      }
+    )
+
     let restoredTabs = restoredState.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"]
     #expect(
       restoredTabs?.map { $0.title } == [
@@ -181,8 +190,8 @@ struct WorkspaceWindowRegistryTests {
         "Codex",
       ])
     #expect(
-      restoredTabs?.first(where: { $0.title == "Codex" })?.commandDescription == "codex --yolo"
-    )
+      restoredTabs?.first(where: { $0.title == "Codex" })?.commandDescription
+        == "/bin/sh -lc 'printf restored\\n'")
     #expect(
       restoredTabs?.first(where: { $0.title == "Codex" })?.isSandboxed == true
     )
@@ -211,7 +220,7 @@ struct WorkspaceWindowRegistryTests {
           id: UUID(uuidString: "12121212-1212-1212-1212-121212121212")!,
           worktreePath: "/tmp/repo-worktrees/feature-b",
           title: "Codex",
-          command: "codex --yolo --sandbox workspace-write",
+          command: "/bin/sh -lc 'printf restored\\n'",
           sandboxed: true
         )
       ]
@@ -226,15 +235,7 @@ struct WorkspaceWindowRegistryTests {
       for: makeTarget(selectedWorktreePath: "/tmp/repo"))
 
     #expect(restoredState.selectedWorktreePath == "/tmp/repo-worktrees/feature-b")
-    let restoredTab = restoredState.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"]?
-      .first
-    #expect(restoredTab?.title == "Codex")
-    #expect(restoredTab?.commandDescription == "codex --yolo --sandbox workspace-write")
-    #expect(restoredTab?.isSandboxed == true)
-    #expect(restoredTab?.launch.currentDirectory == "/tmp/repo-worktrees/feature-b")
-    #expect(restoredTab?.writableRoots == ["/tmp/repo-worktrees/feature-b"])
-    #expect(
-      restoredTab?.launch.shellCommand.contains("codex --yolo --sandbox workspace-write") == true)
+    #expect(restoredState.allTerminalTabs.isEmpty)
 
     var openedTargets: [WorkspaceTarget] = []
     #expect(
@@ -247,7 +248,7 @@ struct WorkspaceWindowRegistryTests {
 
   @Test("persisted snapshots still apply when a system-restored scene creates state first")
   @MainActor
-  func persistedSnapshotsApplyWhenSystemRestoredSceneCreatesStateFirst() {
+  func persistedSnapshotsApplyWhenSystemRestoredSceneCreatesStateFirst() async {
     let suiteName = "WorkspaceWindowRegistryTests.sceneBeforeWelcomeRestore"
     let defaults = UserDefaults(suiteName: suiteName)!
     defaults.removePersistentDomain(forName: suiteName)
@@ -264,7 +265,7 @@ struct WorkspaceWindowRegistryTests {
           id: UUID(uuidString: "45454545-4545-4545-4545-454545454545")!,
           worktreePath: "/tmp/repo-worktrees/feature-b",
           title: "Codex",
-          command: "codex --yolo",
+          command: "/bin/sh -lc 'printf restored\\n'",
           sandboxed: true
         )
       ]
@@ -279,8 +280,16 @@ struct WorkspaceWindowRegistryTests {
     let stateCreatedByScene = restoredRegistry.workspaceState(for: systemRestoredTarget)
 
     #expect(stateCreatedByScene.selectedWorktreePath == "/tmp/repo-worktrees/feature-b")
+    #expect(stateCreatedByScene.selectedTerminalTab == nil)
+
+    stateCreatedByScene.prepareSelectionLoading(for: "/tmp/repo-worktrees/feature-b")
+    #expect(await waitUntil { stateCreatedByScene.selectedTerminalTab != nil })
+
     #expect(stateCreatedByScene.selectedTerminalTab?.title == "Codex")
-    #expect(stateCreatedByScene.selectedTerminalTab?.commandDescription == "codex --yolo")
+    #expect(
+      stateCreatedByScene.selectedTerminalTab?.commandDescription
+        == "/bin/sh -lc 'printf restored\\n'"
+    )
 
     var openedTargets: [WorkspaceTarget] = []
     #expect(
@@ -289,6 +298,71 @@ struct WorkspaceWindowRegistryTests {
       } == 0
     )
     #expect(openedTargets.isEmpty)
+  }
+
+  @Test("late snapshots do not overwrite a live workspace state")
+  @MainActor
+  func lateSnapshotsDoNotOverwriteLiveWorkspaceState() {
+    let suiteName = "WorkspaceWindowRegistryTests.lateSnapshot"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defaults.removePersistentDomain(forName: suiteName)
+
+    let registry = WorkspaceWindowRegistry(userDefaults: defaults, storageKey: suiteName)
+    let target = makeTarget(selectedWorktreePath: "/tmp/repo")
+    let state = registry.workspaceState(for: target)
+    state.worktrees = [
+      DiscoveredWorktree(
+        path: "/tmp/repo",
+        branchName: "main",
+        headSHA: "abc123",
+        isBaseWorktree: true,
+        isDetached: false
+      ),
+      DiscoveredWorktree(
+        path: "/tmp/repo-worktrees/feature-b",
+        branchName: "feature/window",
+        headSHA: "def456",
+        isBaseWorktree: false,
+        isDetached: false
+      ),
+    ]
+    state.selectedWorktreePath = "/tmp/repo-worktrees/feature-b"
+    state.openShellTab(sandboxed: false)
+
+    let staleSnapshot = PersistedWorkspaceWindowSnapshot(
+      target: WorkspaceTarget(
+        repoRoot: "/tmp/repo",
+        repoCommonDir: "/tmp/repo/.git",
+        selectedWorktreePath: "/tmp/repo"
+      ),
+      terminalTabsByWorktreePath: [
+        "/tmp/repo": [
+          PersistedWorkspaceTerminalTab(
+            id: UUID(uuidString: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")!,
+            worktreePath: "/tmp/repo",
+            worktreeLabel: "main",
+            title: "Shell 1",
+            commandDescription: "Sandboxed /bin/zsh",
+            kind: .shell,
+            createdAt: Date(timeIntervalSince1970: 1),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo"]
+          )
+        ]
+      ],
+      selectedTerminalTabIDsByWorktreePath: [
+        "/tmp/repo": UUID(uuidString: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")!
+      ]
+    )
+
+    let data = try! JSONEncoder().encode([staleSnapshot])
+    defaults.set(data, forKey: suiteName)
+
+    let resolvedState = registry.workspaceState(for: target)
+
+    #expect(resolvedState === state)
+    #expect(resolvedState.selectedWorktreePath == "/tmp/repo-worktrees/feature-b")
+    #expect(resolvedState.selectedTerminalTabs.map(\.title) == ["Privileged Shell 1"])
   }
 
   @Test("restore only runs once per registry instance")
@@ -364,7 +438,7 @@ struct WorkspaceWindowRegistryTests {
 
   @Test("app termination preserves cold-restore snapshots even after windows unregister")
   @MainActor
-  func appTerminationPreservesColdRestoreSnapshotsEvenAfterWindowsUnregister() {
+  func appTerminationPreservesColdRestoreSnapshotsEvenAfterWindowsUnregister() async {
     let suiteName = "WorkspaceWindowRegistryTests.appTermination"
     let defaults = UserDefaults(suiteName: suiteName)!
     defaults.removePersistentDomain(forName: suiteName)
@@ -393,7 +467,7 @@ struct WorkspaceWindowRegistryTests {
           id: UUID(uuidString: "ABABABAB-ABAB-ABAB-ABAB-ABABABABABAB")!,
           worktreePath: "/tmp/repo-worktrees/feature-b",
           title: "Codex",
-          command: "codex --yolo",
+          command: "/bin/sh -lc 'printf restored\\n'",
           sandboxed: true
         ),
       ]
@@ -425,6 +499,15 @@ struct WorkspaceWindowRegistryTests {
 
     let restoredState = restoredRegistry.workspaceState(for: target)
     #expect(restoredState.selectedWorktreePath == "/tmp/repo-worktrees/feature-b")
+    #expect(restoredState.allTerminalTabs.isEmpty)
+
+    restoredState.prepareSelectionLoading(for: "/tmp/repo-worktrees/feature-b")
+    #expect(
+      await waitUntil {
+        restoredState.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"] != nil
+      }
+    )
+
     #expect(
       restoredState.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"]?.map { $0.title }
         == [
@@ -433,9 +516,9 @@ struct WorkspaceWindowRegistryTests {
           "Codex",
         ])
     #expect(
-      restoredState.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"]?
-        .first(where: { $0.title == "Codex" })?.commandDescription == "codex --yolo"
-    )
+      restoredState.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"]?.first(where: {
+        $0.title == "Codex"
+      })?.commandDescription == "/bin/sh -lc 'printf restored\\n'")
     #expect(
       restoredState.selectedTerminalTabIDsByWorktreePath["/tmp/repo-worktrees/feature-b"]
         == UUID(uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")!
@@ -495,5 +578,22 @@ struct WorkspaceWindowRegistryTests {
       writableRoots: sandboxed ? [worktreePath] : [],
       isRestorableAfterRelaunch: isRestorableAfterRelaunch
     )
+  }
+
+  private func waitUntil(
+    timeout: Duration = .seconds(2),
+    condition: @escaping @MainActor () -> Bool
+  ) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now + timeout
+
+    while clock.now < deadline {
+      if await condition() {
+        return true
+      }
+      try? await Task.sleep(for: .milliseconds(20))
+    }
+
+    return await condition()
   }
 }

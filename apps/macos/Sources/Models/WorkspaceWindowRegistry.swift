@@ -16,6 +16,7 @@ final class WorkspaceWindowRegistry {
   }
 
   private static let defaultStorageKey = "persistedWorkspaceWindows"
+  private static let uiTestSnapshotEnvironmentKey = "ARGON_UI_TEST_WORKSPACE_SNAPSHOT_FILE"
 
   @ObservationIgnored
   private let userDefaults: UserDefaults
@@ -42,6 +43,8 @@ final class WorkspaceWindowRegistry {
   @ObservationIgnored
   private var persistedSnapshotsByRepoRoot: [String: PersistedWorkspaceWindowSnapshot]?
   @ObservationIgnored
+  private let uiTestSeededSnapshotsByRepoRoot: [String: PersistedWorkspaceWindowSnapshot]?
+  @ObservationIgnored
   private var registrationsByRepoRoot: [String: Registration] = [:]
   @ObservationIgnored
   private var workspaceStatesByRepoRoot: [String: WorkspaceState] = [:]
@@ -56,6 +59,7 @@ final class WorkspaceWindowRegistry {
     self.storageKey = storageKey
     self.unregisterPersistenceDelay = unregisterPersistenceDelay
     self.openRequestTimeout = openRequestTimeout
+    self.uiTestSeededSnapshotsByRepoRoot = Self.loadUITestSeededSnapshots()
     appWillTerminateObserver = NotificationCenter.default.addObserver(
       forName: NSApplication.willTerminateNotification,
       object: nil,
@@ -76,8 +80,13 @@ final class WorkspaceWindowRegistry {
   func workspaceState(for target: WorkspaceTarget) -> WorkspaceState {
     let repoRoot = normalizedPath(target.repoRoot)
     if let workspaceState = workspaceStatesByRepoRoot[repoRoot] {
-      if let snapshot = consumePersistedSnapshot(for: repoRoot) {
-        workspaceState.applyPersistedWindowSnapshot(snapshot)
+      if let snapshot = peekPersistedSnapshot(for: repoRoot) {
+        if workspaceState.canSeedFromPersistedWindowSnapshot {
+          _ = consumePersistedSnapshot(for: repoRoot)
+          workspaceState.applyPersistedWindowSnapshot(snapshot)
+        } else {
+          discardPersistedSnapshot(for: repoRoot)
+        }
       }
       return workspaceState
     }
@@ -95,7 +104,12 @@ final class WorkspaceWindowRegistry {
     guard !hasAttemptedRestore else { return 0 }
     hasAttemptedRestore = true
 
-    let snapshots = remainingPersistedSnapshots()
+    let snapshots = remainingPersistedSnapshots().filter { snapshot in
+      let repoRoot = normalizedPath(snapshot.target.repoRoot)
+      return registrationsByRepoRoot[repoRoot] == nil
+        && workspaceStatesByRepoRoot[repoRoot] == nil
+        && !openingRepoRoots.contains(repoRoot)
+    }
     guard !snapshots.isEmpty else { return 0 }
 
     for snapshot in snapshots {
@@ -239,8 +253,23 @@ final class WorkspaceWindowRegistry {
     return persistedSnapshotsByRepoRoot?.removeValue(forKey: repoRoot)
   }
 
+  private func peekPersistedSnapshot(for repoRoot: String) -> PersistedWorkspaceWindowSnapshot? {
+    loadPersistedSnapshotsIfNeeded()
+    return persistedSnapshotsByRepoRoot?[repoRoot]
+  }
+
+  private func discardPersistedSnapshot(for repoRoot: String) {
+    loadPersistedSnapshotsIfNeeded()
+    persistedSnapshotsByRepoRoot?.removeValue(forKey: repoRoot)
+  }
+
   private func loadPersistedSnapshotsIfNeeded() {
     guard persistedSnapshotsByRepoRoot == nil else { return }
+
+    if let uiTestSeededSnapshotsByRepoRoot {
+      persistedSnapshotsByRepoRoot = uiTestSeededSnapshotsByRepoRoot
+      return
+    }
 
     guard let data = userDefaults.data(forKey: storageKey),
       let snapshots = try? JSONDecoder().decode([PersistedWorkspaceWindowSnapshot].self, from: data)
@@ -254,6 +283,27 @@ final class WorkspaceWindowRegistry {
         (normalizedPath(snapshot.target.repoRoot), snapshot)
       }
     )
+  }
+
+  private static func loadUITestSeededSnapshots(
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> [String: PersistedWorkspaceWindowSnapshot]? {
+    guard let path = environment[uiTestSnapshotEnvironmentKey], !path.isEmpty else { return nil }
+    guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+      let snapshots = try? JSONDecoder().decode([PersistedWorkspaceWindowSnapshot].self, from: data)
+    else {
+      return nil
+    }
+
+    return Dictionary(
+      uniqueKeysWithValues: snapshots.map { snapshot in
+        (normalizedPath(snapshot.target.repoRoot), snapshot)
+      }
+    )
+  }
+
+  private static func normalizedPath(_ path: String) -> String {
+    URL(fileURLWithPath: path).standardizedFileURL.path
   }
 
   private func scheduleOpenRequestTimeout(for repoRoot: String) {
@@ -282,6 +332,6 @@ final class WorkspaceWindowRegistry {
   }
 
   private func normalizedPath(_ path: String) -> String {
-    URL(fileURLWithPath: path).standardizedFileURL.path
+    Self.normalizedPath(path)
   }
 }

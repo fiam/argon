@@ -183,6 +183,12 @@ private func shellQuote(_ value: String) -> String {
 }
 
 func commandExecutableName(from command: String) -> String {
+  let executable = commandExecutableToken(from: command)
+  let basename = URL(fileURLWithPath: executable).lastPathComponent
+  return basename.isEmpty ? "agent" : basename
+}
+
+func commandExecutableToken(from command: String) -> String {
   let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
   guard !trimmed.isEmpty else { return "agent" }
 
@@ -241,7 +247,5 @@ func commandExecutableName(from command: String) -> String {
     index = trimmed.index(after: index)
   }
 
-  let executable = token.isEmpty ? trimmed : token
-  let basename = URL(fileURLWithPath: executable).lastPathComponent
-  return basename.isEmpty ? "agent" : basename
+  return token.isEmpty ? trimmed : token
 }

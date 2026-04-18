@@ -79,5 +79,10 @@ struct SavedAgentProfilesTests {
     #expect(commandExecutableName(from: "codex --yolo") == "codex")
     #expect(commandExecutableName(from: "/opt/tools/claude --print") == "claude")
     #expect(commandExecutableName(from: "'/Applications/My Tool/bin/agent' --json") == "agent")
+    #expect(commandExecutableToken(from: "/opt/tools/claude --print") == "/opt/tools/claude")
+    #expect(
+      commandExecutableToken(from: "'/Applications/My Tool/bin/agent' --json")
+        == "/Applications/My Tool/bin/agent"
+    )
   }
 }

@@ -33,6 +33,16 @@ enum UserShell {
     )
   }
 
+  static func loginLaunchSpec(
+    command: String,
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> SandboxedProcessSpec {
+    SandboxedProcessSpec(
+      executable: resolvedPath(environment: environment),
+      args: ["-l", "-c", command]
+    )
+  }
+
   static func interactiveLaunchSpec(
     environment: [String: String] = ProcessInfo.processInfo.environment
   ) -> SandboxedProcessSpec {
@@ -52,6 +62,21 @@ enum UserShell {
   static func commandStatuses(
     _ commands: [String],
     environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> [String: Bool] {
+    commandStatuses(commands, environment: environment, launch: launchSpec)
+  }
+
+  static func loginCommandStatuses(
+    _ commands: [String],
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> [String: Bool] {
+    commandStatuses(commands, environment: environment, launch: loginLaunchSpec)
+  }
+
+  private static func commandStatuses(
+    _ commands: [String],
+    environment: [String: String],
+    launch: (String, [String: String]) -> SandboxedProcessSpec
   ) -> [String: Bool] {
     let uniqueCommands = Array(
       Set(
@@ -73,9 +98,9 @@ enum UserShell {
           """
       }
       .joined(separator: "\n")
-    let launch = launchSpec(command: script, environment: environment)
-    process.executableURL = URL(fileURLWithPath: launch.executable)
-    process.arguments = launch.args
+    let processLaunch = launch(script, environment)
+    process.executableURL = URL(fileURLWithPath: processLaunch.executable)
+    process.arguments = processLaunch.args
     process.environment = environment
     let stdout = Pipe()
     process.standardOutput = stdout

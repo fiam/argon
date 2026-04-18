@@ -3,6 +3,8 @@ import Foundation
 @MainActor
 @Observable
 final class WorkspaceState {
+  nonisolated(unsafe) static var tabRestoreTestDelay: Duration?
+
   var worktrees: [DiscoveredWorktree] = []
   var worktreeSummaries: [String: WorktreeDiffSummary] = [:]
   var reviewSnapshotsByWorktreePath: [String: WorkspaceReviewSnapshot] = [:]
@@ -17,6 +19,7 @@ final class WorkspaceState {
   var selectedUpdatedAt: Date?
   var errorMessage: String?
   var launchWarningMessage: String?
+  var restoreFailureMessage: String?
   var isLoadingSelectionDetails = false
   var isLoading = false
   var isLaunchingReview = false
@@ -45,6 +48,8 @@ final class WorkspaceState {
   private var worktreeWatchersByPath: [String: FileWatcher] = [:]
   private var workspaceReloadTask: Task<Void, Never>?
   private var worktreeRefreshTasksByPath: [String: Task<Void, Never>] = [:]
+  private var pendingRestorableTabsByWorktreePath: [String: [PersistedWorkspaceTerminalTab]] = [:]
+  private var pendingTabRestoreTasksByWorktreePath: [String: Task<Void, Never>] = [:]
   private var selectionLoadRequestID: UUID?
   private var shouldLaunchReviewAfterNextAgentTab = false
   private var stagedReviewLaunch: StagedReviewLaunch?
@@ -174,6 +179,16 @@ final class WorkspaceState {
     return terminalFocusRequestIDsByWorktreePath[path]
   }
 
+  var canSeedFromPersistedWindowSnapshot: Bool {
+    worktrees.isEmpty
+      && worktreeSummaries.isEmpty
+      && reviewSnapshotsByWorktreePath.isEmpty
+      && conflictStatesByWorktreePath.isEmpty
+      && terminalTabsByWorktreePath.isEmpty
+      && pendingRestorableTabsByWorktreePath.isEmpty
+      && pendingTabRestoreTasksByWorktreePath.isEmpty
+  }
+
   var persistedWindowSnapshot: PersistedWorkspaceWindowSnapshot {
     let target = WorkspaceTarget(
       repoRoot: target.repoRoot,
@@ -182,37 +197,41 @@ final class WorkspaceState {
       showsLinkedWorktreeWarning: false
     )
 
-    let terminalTabsByWorktreePath = terminalTabsByWorktreePath.reduce(
-      into: [String: [PersistedWorkspaceTerminalTab]]()
-    ) { partialResult, entry in
-      let persistedTabs = entry.value.compactMap { tab -> PersistedWorkspaceTerminalTab? in
-        guard tab.isRunning, tab.isRestorableAfterRelaunch else { return nil }
+    let terminalTabsByWorktreePath =
+      pendingRestorableTabsByWorktreePath.merging(
+        terminalTabsByWorktreePath.reduce(into: [String: [PersistedWorkspaceTerminalTab]]()) {
+          partialResult, entry in
+          let persistedTabs = entry.value.compactMap { tab -> PersistedWorkspaceTerminalTab? in
+            guard tab.isRunning, tab.isRestorableAfterRelaunch else { return nil }
 
-        let kind: PersistedWorkspaceTerminalTabKind
-        switch tab.kind {
-        case .shell:
-          kind = .shell
-        case .agent(let profileName, let icon):
-          kind = .agent(profileName: profileName, icon: icon)
+            let kind: PersistedWorkspaceTerminalTabKind
+            switch tab.kind {
+            case .shell:
+              kind = .shell
+            case .agent(let profileName, let icon):
+              kind = .agent(profileName: profileName, icon: icon)
+            }
+
+            return PersistedWorkspaceTerminalTab(
+              id: tab.id,
+              worktreePath: tab.worktreePath,
+              worktreeLabel: tab.worktreeLabel,
+              title: tab.title,
+              commandDescription: tab.commandDescription,
+              kind: kind,
+              createdAt: tab.createdAt,
+              isSandboxed: tab.isSandboxed,
+              writableRoots: tab.writableRoots
+            )
+          }
+
+          if !persistedTabs.isEmpty {
+            partialResult[entry.key] = persistedTabs
+          }
         }
-
-        return PersistedWorkspaceTerminalTab(
-          id: tab.id,
-          worktreePath: tab.worktreePath,
-          worktreeLabel: tab.worktreeLabel,
-          title: tab.title,
-          commandDescription: tab.commandDescription,
-          kind: kind,
-          createdAt: tab.createdAt,
-          isSandboxed: tab.isSandboxed,
-          writableRoots: tab.writableRoots
-        )
+      ) { _, materializedTabs in
+        materializedTabs
       }
-
-      if !persistedTabs.isEmpty {
-        partialResult[entry.key] = persistedTabs
-      }
-    }
 
     let selectedTerminalTabIDsByWorktreePath = selectedTerminalTabIDsByWorktreePath.filter {
       worktreePath,
@@ -229,56 +248,35 @@ final class WorkspaceState {
 
   func applyPersistedWindowSnapshot(_ snapshot: PersistedWorkspaceWindowSnapshot) {
     selectedWorktreePath = normalizedPath(snapshot.target.selectedWorktreePath ?? target.repoRoot)
-    terminalTabsByWorktreePath = snapshot.terminalTabsByWorktreePath.mapValues { tabs in
-      tabs.map { persistedTab in
-        let launch: TerminalLaunchConfiguration
-        let kind: WorkspaceTerminalKind
-
-        switch persistedTab.kind {
-        case .shell:
-          kind = .shell
-          launch =
-            persistedTab.isSandboxed
-            ? TerminalLaunchConfiguration.sandboxedShell(
-              currentDirectory: persistedTab.worktreePath,
-              writableRoots: persistedTab.writableRoots
-            )
-            : TerminalLaunchConfiguration.shell(currentDirectory: persistedTab.worktreePath)
-        case .agent(let profileName, let icon):
-          kind = .agent(profileName: profileName, icon: icon)
-          launch =
-            persistedTab.isSandboxed
-            ? TerminalLaunchConfiguration.sandboxedCommand(
-              persistedTab.commandDescription,
-              currentDirectory: persistedTab.worktreePath,
-              writableRoots: persistedTab.writableRoots
-            )
-            : TerminalLaunchConfiguration.command(
-              persistedTab.commandDescription,
-              currentDirectory: persistedTab.worktreePath
-            )
-        }
-
-        return WorkspaceTerminalTab(
-          id: persistedTab.id,
-          worktreePath: normalizedPath(persistedTab.worktreePath),
-          worktreeLabel: persistedTab.worktreeLabel,
-          title: persistedTab.title,
-          commandDescription: persistedTab.commandDescription,
-          kind: kind,
-          launch: launch,
-          createdAt: persistedTab.createdAt,
-          isSandboxed: persistedTab.isSandboxed,
-          writableRoots: persistedTab.writableRoots.map(normalizedPath),
-          isRestorableAfterRelaunch: true
+    terminalTabsByWorktreePath = [:]
+    pendingRestorableTabsByWorktreePath = snapshot.terminalTabsByWorktreePath.reduce(
+      into: [String: [PersistedWorkspaceTerminalTab]]()
+    ) { partialResult, entry in
+      partialResult[normalizedPath(entry.key)] = entry.value.map { tab in
+        PersistedWorkspaceTerminalTab(
+          id: tab.id,
+          worktreePath: normalizedPath(tab.worktreePath),
+          worktreeLabel: tab.worktreeLabel,
+          title: tab.title,
+          commandDescription: tab.commandDescription,
+          kind: tab.kind,
+          createdAt: tab.createdAt,
+          isSandboxed: tab.isSandboxed,
+          writableRoots: tab.writableRoots.map(normalizedPath)
         )
       }
     }
 
-    selectedTerminalTabIDsByWorktreePath = snapshot.selectedTerminalTabIDsByWorktreePath.filter {
+    selectedTerminalTabIDsByWorktreePath = snapshot.selectedTerminalTabIDsByWorktreePath.reduce(
+      into: [String: UUID]()
+    ) { partialResult, entry in
+      partialResult[normalizedPath(entry.key)] = entry.value
+    }.filter {
       worktreePath,
       tabID in
-      terminalTabsByWorktreePath[normalizedPath(worktreePath)]?.contains(where: { $0.id == tabID })
+      pendingRestorableTabsByWorktreePath[normalizedPath(worktreePath)]?.contains(where: {
+        $0.id == tabID
+      })
         == true
     }
   }
@@ -990,6 +988,83 @@ final class WorkspaceState {
     )
   }
 
+  nonisolated private static func restorePersistedTabs(
+    _ persistedTabs: [PersistedWorkspaceTerminalTab]
+  ) -> RestoredPersistedTabs {
+    let commandStatuses = UserShell.loginCommandStatuses(
+      persistedTabs.compactMap { persistedTab in
+        guard case .agent = persistedTab.kind else { return nil }
+        return commandExecutableToken(from: persistedTab.commandDescription)
+      }
+    )
+
+    var restorableTabs: [PersistedWorkspaceTerminalTab] = []
+    var missingAgentCount = 0
+
+    for persistedTab in persistedTabs {
+      if case .agent = persistedTab.kind {
+        let executable = commandExecutableToken(from: persistedTab.commandDescription)
+        guard commandStatuses[executable] == true else {
+          missingAgentCount += 1
+          continue
+        }
+      }
+
+      restorableTabs.append(persistedTab)
+    }
+
+    return RestoredPersistedTabs(
+      persistedTabs: restorableTabs,
+      missingAgentCount: missingAgentCount
+    )
+  }
+
+  private static func restoredTerminalTab(
+    from persistedTab: PersistedWorkspaceTerminalTab
+  ) -> WorkspaceTerminalTab {
+    let launch: TerminalLaunchConfiguration
+    let kind: WorkspaceTerminalKind
+
+    switch persistedTab.kind {
+    case .shell:
+      kind = .shell
+      launch =
+        persistedTab.isSandboxed
+        ? TerminalLaunchConfiguration.sandboxedShell(
+          currentDirectory: persistedTab.worktreePath,
+          writableRoots: persistedTab.writableRoots
+        )
+        : TerminalLaunchConfiguration.shell(currentDirectory: persistedTab.worktreePath)
+    case .agent(let profileName, let icon):
+      kind = .agent(profileName: profileName, icon: icon)
+      launch =
+        persistedTab.isSandboxed
+        ? TerminalLaunchConfiguration.sandboxedCommand(
+          persistedTab.commandDescription,
+          currentDirectory: persistedTab.worktreePath,
+          writableRoots: persistedTab.writableRoots
+        )
+        : TerminalLaunchConfiguration.command(
+          persistedTab.commandDescription,
+          currentDirectory: persistedTab.worktreePath
+        )
+    }
+
+    return WorkspaceTerminalTab(
+      id: persistedTab.id,
+      worktreePath: persistedTab.worktreePath,
+      worktreeLabel: persistedTab.worktreeLabel,
+      title: persistedTab.title,
+      commandDescription: persistedTab.commandDescription,
+      kind: kind,
+      launch: launch,
+      createdAt: persistedTab.createdAt,
+      isSandboxed: persistedTab.isSandboxed,
+      writableRoots: persistedTab.writableRoots,
+      isRestorableAfterRelaunch: true
+    )
+  }
+
   nonisolated private static func normalizedPath(_ path: String) -> String {
     URL(fileURLWithPath: path).standardizedFileURL.path
   }
@@ -1004,6 +1079,16 @@ final class WorkspaceState {
 
     return
       "Opened the original repository at \(normalizedRepoRoot) because \(normalizedWorktreePath) is a linked worktree."
+  }
+
+  nonisolated private static func formattedRestoreFailureMessage(
+    missingAgentCount: Int,
+    worktreeLabel: String
+  ) -> String {
+    let noun = missingAgentCount == 1 ? "agent tab" : "agent tabs"
+    let availability = missingAgentCount == 1 ? "its command is" : "their commands are"
+    return
+      "\(missingAgentCount) \(noun) couldn’t be restored for \(worktreeLabel) because \(availability) no longer available."
   }
 
   private func normalizedPath(_ path: String) -> String {
@@ -1028,6 +1113,7 @@ final class WorkspaceState {
     let validPaths = Set(data.worktrees.map { normalizedPath($0.path) })
     pruneWorktreeState(validPaths: validPaths)
     configureWatchers(validPaths: validPaths)
+    startPendingTabRestoreIfNeeded(for: normalizedPath(data.selectedWorktreePath))
     notifyRestorableStateChanged()
   }
 
@@ -1058,6 +1144,7 @@ final class WorkspaceState {
     ) {
       if nextSelection == preservedSelection {
         selectedWorktreePath = nextSelection
+        startPendingTabRestoreIfNeeded(for: nextSelection)
         notifyRestorableStateChanged()
       } else {
         prepareSelectionLoading(for: nextSelection)
@@ -1101,7 +1188,77 @@ final class WorkspaceState {
     selectedBranchTopology = nil
     selectedUpdatedAt = nil
     isLoadingSelectionDetails = true
+    startPendingTabRestoreIfNeeded(for: normalizedPath)
     notifyRestorableStateChanged()
+  }
+
+  private func startPendingTabRestoreIfNeeded(for worktreePath: String) {
+    let normalizedPath = normalizedPath(worktreePath)
+    guard pendingTabRestoreTasksByWorktreePath[normalizedPath] == nil,
+      let persistedTabs = pendingRestorableTabsByWorktreePath.removeValue(forKey: normalizedPath),
+      !persistedTabs.isEmpty
+    else {
+      return
+    }
+
+    pendingTabRestoreTasksByWorktreePath[normalizedPath] = Task { @MainActor [weak self] in
+      if let delay = Self.tabRestoreTestDelay {
+        try? await Task.sleep(for: delay)
+      }
+      let restored = await Task.detached {
+        Self.restorePersistedTabs(persistedTabs)
+      }.value
+
+      guard let self, !Task.isCancelled else { return }
+      self.pendingTabRestoreTasksByWorktreePath.removeValue(forKey: normalizedPath)
+      let restoredTabs = restored.persistedTabs.map(Self.restoredTerminalTab(from:))
+      let currentTabs = self.terminalTabsByWorktreePath[normalizedPath] ?? []
+      let currentTabsByID = Dictionary(uniqueKeysWithValues: currentTabs.map { ($0.id, $0) })
+      var mergedTabs: [WorkspaceTerminalTab] = []
+      var seenTabIDs = Set<UUID>()
+
+      for restoredTab in restoredTabs {
+        let tab = currentTabsByID[restoredTab.id] ?? restoredTab
+        guard seenTabIDs.insert(tab.id).inserted else { continue }
+        mergedTabs.append(tab)
+      }
+
+      for currentTab in currentTabs where seenTabIDs.insert(currentTab.id).inserted {
+        mergedTabs.append(currentTab)
+      }
+
+      self.terminalTabsByWorktreePath[normalizedPath] = mergedTabs
+
+      if let selectedTabID = self.selectedTerminalTabIDsByWorktreePath[normalizedPath],
+        !mergedTabs.contains(where: { $0.id == selectedTabID })
+      {
+        self.selectedTerminalTabIDsByWorktreePath[normalizedPath] = mergedTabs.first?.id
+      } else if self.selectedTerminalTabIDsByWorktreePath[normalizedPath] == nil {
+        self.selectedTerminalTabIDsByWorktreePath[normalizedPath] = mergedTabs.first?.id
+      }
+
+      if self.normalizedSelectedWorktreePath == normalizedPath {
+        if self.selectedTerminalTabIDsByWorktreePath[normalizedPath] != nil {
+          self.requestTerminalFocus(in: normalizedPath)
+        } else {
+          self.terminalFocusRequestIDsByWorktreePath.removeValue(forKey: normalizedPath)
+        }
+      }
+
+      if restored.missingAgentCount > 0 {
+        self.restoreFailureMessage = Self.formattedRestoreFailureMessage(
+          missingAgentCount: restored.missingAgentCount,
+          worktreeLabel: self.restoredWorktreeLabel(for: normalizedPath)
+        )
+      }
+
+      self.notifyRestorableStateChanged()
+    }
+  }
+
+  private func restoredWorktreeLabel(for worktreePath: String) -> String {
+    worktrees.first(where: { normalizedPath($0.path) == worktreePath })?.branchName
+      ?? URL(fileURLWithPath: worktreePath).lastPathComponent
   }
 
   private func insertTerminalTab(_ tab: WorkspaceTerminalTab, for worktreePath: String) {
@@ -1132,12 +1289,22 @@ final class WorkspaceState {
     terminalTabsByWorktreePath =
       terminalTabsByWorktreePath
       .filter { validPaths.contains($0.key) }
+    pendingRestorableTabsByWorktreePath =
+      pendingRestorableTabsByWorktreePath
+      .filter { validPaths.contains($0.key) }
     selectedTerminalTabIDsByWorktreePath =
       selectedTerminalTabIDsByWorktreePath
       .filter { validPaths.contains($0.key) }
     terminalFocusRequestIDsByWorktreePath =
       terminalFocusRequestIDsByWorktreePath
       .filter { validPaths.contains($0.key) }
+    let staleRestorePaths = pendingTabRestoreTasksByWorktreePath.keys.filter {
+      !validPaths.contains($0)
+    }
+    for path in staleRestorePaths {
+      pendingTabRestoreTasksByWorktreePath[path]?.cancel()
+      pendingTabRestoreTasksByWorktreePath.removeValue(forKey: path)
+    }
     notifyRestorableStateChanged()
   }
 
@@ -1440,6 +1607,11 @@ private struct SelectionDetails: Sendable {
   let pullRequestURL: String?
   let reviewTarget: ResolvedTarget?
   let branchTopology: BranchTopology?
+}
+
+private struct RestoredPersistedTabs: Sendable {
+  let persistedTabs: [PersistedWorkspaceTerminalTab]
+  let missingAgentCount: Int
 }
 
 private struct StagedReviewLaunch {

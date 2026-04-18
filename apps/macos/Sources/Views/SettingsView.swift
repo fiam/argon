@@ -6,12 +6,9 @@ struct AgentIconView: View {
   let icon: String
   var size: CGFloat = 16
 
-  /// Known asset catalog names that have custom images.
-  private static let assetNames: Set<String> = ["claude", "codex", "gemini"]
-
   var body: some View {
-    if Self.assetNames.contains(icon), let nsImage = NSImage(named: icon) {
-      Image(nsImage: nsImage)
+    if let customImage {
+      customImage
         .resizable()
         .aspectRatio(contentMode: .fit)
         .frame(width: size, height: size)
@@ -25,10 +22,29 @@ struct AgentIconView: View {
 
   private var sfSymbolFallback: String {
     switch icon {
-    case "claude": "brain"
-    case "codex": "terminal"
-    case "gemini": "sparkles"
-    default: "terminal"
+    case "claude":
+      return "brain"
+    case "codex":
+      return "rectangle.and.text.magnifyingglass"
+    case "gemini":
+      return "sparkles"
+    case "agent", "terminal":
+      return "sparkles.rectangle.stack"
+    default:
+      return "sparkles.rectangle.stack"
+    }
+  }
+
+  private var customImage: Image? {
+    switch icon {
+    case "claude":
+      return Image(.claude)
+    case "codex":
+      return Image(.codex)
+    case "gemini":
+      return Image(.gemini)
+    default:
+      return nil
     }
   }
 }
@@ -180,7 +196,7 @@ struct SettingsView: View {
           id: "custom-\(UUID().uuidString.prefix(8))",
           name: "",
           command: "",
-          icon: "terminal",
+          icon: "agent",
           yoloFlag: "",
           promptArgumentTemplate: ""
         )

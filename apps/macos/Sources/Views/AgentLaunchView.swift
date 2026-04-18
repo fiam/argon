@@ -212,7 +212,7 @@ struct AgentLaunchSheet: View {
         id: "custom-\(UUID().uuidString.prefix(8))",
         name: commandExecutableName(from: cmd),
         command: cmd,
-        icon: "terminal",
+        icon: "agent",
         isDetected: false,
         promptArgumentTemplate: ""
       )
