@@ -1,7 +1,7 @@
 mod builtins;
 mod parser;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Write};
@@ -255,6 +255,13 @@ enum PathKind {
     Root,
 }
 
+#[derive(Debug, Clone)]
+struct ResolvedPathValue {
+    path: PathBuf,
+    aliases: Vec<PathBuf>,
+    kind: PathKind,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingIntercept {
     command_name: String,
@@ -336,7 +343,7 @@ impl Default for EffectiveSandboxPolicy {
     fn default() -> Self {
         Self {
             fs_default: FsDefault::None,
-            exec_default: ExecDefault::Allow,
+            exec_default: ExecDefault::Deny,
             readable_paths: Vec::new(),
             readable_roots: Vec::new(),
             writable_paths: Vec::new(),
@@ -410,8 +417,6 @@ pub fn builtin_preview(
 ) -> Result<BuiltinPreview, SandboxError> {
     let vars = seed_variables(context)?;
     let resolved_name = resolve_builtin_request(request);
-    let builtin = builtins::find(&resolved_name)
-        .ok_or_else(|| SandboxError::UnknownBuiltin(resolved_name.clone()))?;
     let base_dir = context
         .repo_root
         .clone()
@@ -424,7 +429,7 @@ pub fn builtin_preview(
         warnings: Vec::new(),
         pending_exec_commands: Vec::new(),
         pending_intercepts: Vec::new(),
-        environment_default: EnvDefault::Inherit,
+        environment_default: EnvDefault::None,
         allowed_environment_patterns: Vec::new(),
         environment_overrides: BTreeMap::new(),
         removed_environment_keys: Vec::new(),
@@ -436,7 +441,7 @@ pub fn builtin_preview(
     Ok(BuiltinPreview {
         requested_name: request.to_string(),
         resolved_name: Some(resolved_name),
-        source: Some(builtin.source.to_string()),
+        source: Some(source_file.source.clone()),
         warnings: state.warnings,
     })
 }
@@ -530,7 +535,7 @@ pub fn build_execution_plan(
         warnings: Vec::new(),
         pending_exec_commands: Vec::new(),
         pending_intercepts: Vec::new(),
-        environment_default: EnvDefault::Inherit,
+        environment_default: EnvDefault::None,
         allowed_environment_patterns: Vec::new(),
         environment_overrides: BTreeMap::new(),
         removed_environment_keys: Vec::new(),
@@ -540,14 +545,6 @@ pub fn build_execution_plan(
 
     for source in load_config_sources(&paths)? {
         evaluate_source(&mut state, context, &source)?;
-    }
-
-    #[cfg(target_os = "macos")]
-    if !matches!(state.policy.fs_default, FsDefault::ReadWrite) {
-        state.warnings.push(
-            "macOS currently enforces write restrictions and exec mediation, but not general read denial"
-                .to_string(),
-        );
     }
 
     for root in extra_write_roots {
@@ -560,7 +557,7 @@ pub fn build_execution_plan(
         add_fs_allowance(
             &mut state.policy,
             FsAccess::Write,
-            normalize_absolute_path(root.clone()),
+            &normalize_absolute_path(root.clone()),
             PathKind::Root,
         );
     }
@@ -620,51 +617,74 @@ pub fn resolved_environment(
 }
 
 pub fn profile_source(policy: &EffectiveSandboxPolicy) -> String {
-    let mut lines = vec!["(version 1)".to_string(), "(allow default)".to_string()];
+    let mut lines = vec![
+        "(version 1)".to_string(),
+        "(deny default)".to_string(),
+        "(import \"system.sb\")".to_string(),
+        "(import \"com.apple.corefoundation.sb\")".to_string(),
+        "(corefoundation)".to_string(),
+        "(allow system-audit system-sched mach-task-name process-fork lsopen)".to_string(),
+        "(allow process-info* (target self) (target children) (target same-sandbox))".to_string(),
+        "(allow signal (target self) (target children) (target same-sandbox))".to_string(),
+        "(allow pseudo-tty)".to_string(),
+        "(allow file-read-data file-write-data file-ioctl (literal \"/dev/tty\"))".to_string(),
+        "(allow file-read* file-write* file-ioctl (literal \"/dev/ptmx\"))".to_string(),
+        "(allow file-read* file-write* file-ioctl (regex \"^/dev/ttys[0-9]*\"))".to_string(),
+    ];
+    let ancestor_literals = traversal_read_literals(policy);
 
     match policy.fs_default {
-        FsDefault::None | FsDefault::Read => lines.push("(deny file-write*)".to_string()),
-        FsDefault::ReadWrite => {}
+        FsDefault::None => {}
+        FsDefault::Read => lines.push("(allow file-read* file-test-existence)".to_string()),
+        FsDefault::ReadWrite => {
+            lines.push("(allow file-read* file-write* file-test-existence)".to_string())
+        }
     }
 
-    if matches!(policy.exec_default, ExecDefault::Deny) {
-        lines.push("(deny process-exec process-exec-interpreter file-map-executable)".to_string());
+    if matches!(policy.exec_default, ExecDefault::Allow) {
+        lines.push("(allow process-exec process-exec-interpreter file-map-executable)".to_string());
     }
 
+    for (index, path) in ancestor_literals.iter().enumerate() {
+        let _ = path;
+        lines.push(format!(
+            "(allow file-read* file-test-existence (literal (param \"READ_LITERAL_{index}\")))"
+        ));
+    }
     for (index, path) in policy.readable_paths.iter().enumerate() {
         let _ = path;
         lines.push(format!(
-            "(allow file-read* (literal (param \"READ_PATH_{index}\")))"
+            "(allow file-read* file-test-existence (literal (param \"READ_PATH_{index}\")))"
         ));
     }
     for (index, root) in policy.readable_roots.iter().enumerate() {
         let _ = root;
         lines.push(format!(
-            "(allow file-read* (subpath (param \"READ_ROOT_{index}\")))"
+            "(allow file-read* file-test-existence (subpath (param \"READ_ROOT_{index}\")))"
         ));
     }
     for (index, path) in policy.writable_paths.iter().enumerate() {
         let _ = path;
         lines.push(format!(
-            "(allow file-read* file-write* (literal (param \"WRITE_PATH_{index}\")))"
+            "(allow file-read* file-write* file-test-existence (literal (param \"WRITE_PATH_{index}\")))"
         ));
     }
     for (index, root) in policy.writable_roots.iter().enumerate() {
         let _ = root;
         lines.push(format!(
-            "(allow file-read* file-write* (subpath (param \"WRITE_ROOT_{index}\")))"
+            "(allow file-read* file-write* file-test-existence (subpath (param \"WRITE_ROOT_{index}\")))"
         ));
     }
     for (index, path) in policy.executable_paths.iter().enumerate() {
         let _ = path;
         lines.push(format!(
-            "(allow file-read* process-exec process-exec-interpreter file-map-executable (literal (param \"EXEC_PATH_{index}\")))"
+            "(allow file-read* file-test-existence process-exec process-exec-interpreter file-map-executable (literal (param \"EXEC_PATH_{index}\")))"
         ));
     }
     for (index, root) in policy.executable_roots.iter().enumerate() {
         let _ = root;
         lines.push(format!(
-            "(allow file-read* process-exec process-exec-interpreter file-map-executable (subpath (param \"EXEC_ROOT_{index}\")))"
+            "(allow file-read* file-test-existence process-exec process-exec-interpreter file-map-executable (subpath (param \"EXEC_ROOT_{index}\")))"
         ));
     }
 
@@ -673,6 +693,10 @@ pub fn profile_source(policy: &EffectiveSandboxPolicy) -> String {
 
 pub fn profile_parameters(policy: &EffectiveSandboxPolicy) -> Vec<String> {
     let mut parameters = Vec::new();
+    for (index, path) in traversal_read_literals(policy).iter().enumerate() {
+        parameters.push(format!("READ_LITERAL_{index}"));
+        parameters.push(path.to_string_lossy().into_owned());
+    }
     for (index, path) in policy.readable_paths.iter().enumerate() {
         parameters.push(format!("READ_PATH_{index}"));
         parameters.push(path.to_string_lossy().into_owned());
@@ -698,6 +722,39 @@ pub fn profile_parameters(policy: &EffectiveSandboxPolicy) -> Vec<String> {
         parameters.push(root.to_string_lossy().into_owned());
     }
     parameters
+}
+
+fn traversal_read_literals(policy: &EffectiveSandboxPolicy) -> Vec<PathBuf> {
+    let mut paths = BTreeSet::new();
+    for path in &policy.readable_paths {
+        collect_ancestor_literals(path.parent(), &mut paths);
+    }
+    for root in &policy.readable_roots {
+        collect_ancestor_literals(root.parent(), &mut paths);
+    }
+    for path in &policy.writable_paths {
+        collect_ancestor_literals(path.parent(), &mut paths);
+    }
+    for root in &policy.writable_roots {
+        collect_ancestor_literals(root.parent(), &mut paths);
+    }
+    for path in &policy.executable_paths {
+        collect_ancestor_literals(path.parent(), &mut paths);
+    }
+    for root in &policy.executable_roots {
+        collect_ancestor_literals(root.parent(), &mut paths);
+    }
+    paths.into_iter().collect()
+}
+
+fn collect_ancestor_literals(mut current: Option<&Path>, paths: &mut BTreeSet<PathBuf>) {
+    while let Some(path) = current {
+        if path.as_os_str().is_empty() {
+            break;
+        }
+        paths.insert(path.to_path_buf());
+        current = path.parent();
+    }
 }
 
 pub fn apply_current_process(policy: &EffectiveSandboxPolicy) -> Result<(), SandboxError> {
@@ -1148,12 +1205,12 @@ fn evaluate_source(
                         resolve_path_value(value, &state.vars, source, statement.line_number)?;
                     validate_fs_allowance(
                         *access,
-                        &resolved.0,
-                        resolved.1,
+                        &resolved.path,
+                        resolved.kind,
                         source,
                         statement.line_number,
                     )?;
-                    add_fs_allowance(&mut state.policy, *access, resolved.0, resolved.1);
+                    add_fs_allowances(&mut state.policy, *access, &resolved.aliases, resolved.kind);
                 }
                 StatementKind::ExecDefault { value } => {
                     state.policy.exec_default = *value;
@@ -1166,10 +1223,15 @@ fn evaluate_source(
                         statement.line_number,
                     )?;
                     if is_path_like(&expanded) {
-                        let (path, kind) =
+                        let resolved =
                             resolve_path_value(value, &state.vars, source, statement.line_number)?;
-                        validate_exec_allowance(&path, kind, source, statement.line_number)?;
-                        add_exec_allowance(&mut state.policy, path, kind);
+                        validate_exec_allowance(
+                            &resolved.path,
+                            resolved.kind,
+                            source,
+                            statement.line_number,
+                        )?;
+                        add_exec_allowances(&mut state.policy, &resolved.aliases, resolved.kind);
                     } else {
                         state.pending_exec_commands.push(PendingExecCommand {
                             command_name: expanded,
@@ -1182,11 +1244,11 @@ fn evaluate_source(
                     if command.contains('/') || command.is_empty() {
                         return Err(SandboxError::InvalidInterceptCommand(command.clone()));
                     }
-                    let (handler_path, _) =
+                    let resolved =
                         resolve_path_value(handler, &state.vars, source, statement.line_number)?;
                     validate_exec_allowance(
-                        &handler_path,
-                        PathKind::File,
+                        &resolved.path,
+                        resolved.kind,
                         source,
                         statement.line_number,
                     )?;
@@ -1195,16 +1257,16 @@ fn evaluate_source(
                         source_name: source_label(source),
                         line_number: statement.line_number,
                     });
-                    add_exec_allowance(&mut state.policy, handler_path.clone(), PathKind::File);
-                    add_fs_allowance(
+                    add_exec_allowances(&mut state.policy, &resolved.aliases, resolved.kind);
+                    add_fs_allowances(
                         &mut state.policy,
                         FsAccess::Read,
-                        handler_path.clone(),
-                        PathKind::File,
+                        &resolved.aliases,
+                        resolved.kind,
                     );
                     state.pending_intercepts.push(PendingIntercept {
                         command_name: command.clone(),
-                        handler_path,
+                        handler_path: resolved.path,
                         source_name: source_label(source),
                         line_number: statement.line_number,
                     });
@@ -1318,8 +1380,9 @@ fn resolve_pending_exec_commands(
             });
         } else {
             for path in paths {
-                add_exec_allowance(&mut state.policy, path.clone(), PathKind::File);
-                add_fs_allowance(&mut state.policy, FsAccess::Read, path, PathKind::File);
+                let aliases = path_aliases(&path);
+                add_exec_allowances(&mut state.policy, &aliases, PathKind::File);
+                add_fs_allowances(&mut state.policy, FsAccess::Read, &aliases, PathKind::File);
             }
         }
     }
@@ -1353,13 +1416,9 @@ fn resolve_pending_intercepts(
         let real_command_path =
             resolve_first_command_from_path(&intercept.command_name, &path_value);
         if let Some(path) = real_command_path.as_ref() {
-            add_exec_allowance(&mut state.policy, path.clone(), PathKind::File);
-            add_fs_allowance(
-                &mut state.policy,
-                FsAccess::Read,
-                path.clone(),
-                PathKind::File,
-            );
+            let aliases = path_aliases(path);
+            add_exec_allowances(&mut state.policy, &aliases, PathKind::File);
+            add_fs_allowances(&mut state.policy, FsAccess::Read, &aliases, PathKind::File);
         }
 
         intercepts.push(ResolvedIntercept {
@@ -1424,9 +1483,9 @@ fn prepare_intercept_environment(
         source,
     })?;
 
-    add_fs_allowance(policy, FsAccess::Read, runtime_dir.clone(), PathKind::Root);
-    add_exec_allowance(policy, bin_dir.clone(), PathKind::Root);
-    add_fs_allowance(policy, FsAccess::Read, bin_dir, PathKind::Root);
+    add_fs_allowance(policy, FsAccess::Read, &runtime_dir, PathKind::Root);
+    add_exec_allowance(policy, &bin_dir, PathKind::Root);
+    add_fs_allowance(policy, FsAccess::Read, &bin_dir, PathKind::Root);
 
     let mut environment = BTreeMap::new();
     environment.insert(
@@ -1628,7 +1687,7 @@ EXEC DEFAULT ALLOW # Allow running any command by default.
 FS ALLOW READ . # Allow reading files inside this repository.
 FS ALLOW WRITE . # Allow edits inside this repository.
 USE os # Allow access to the operating system's shared filesystem without exposing personal directories.
-USE shell # Load shell config and history when they apply.
+USE shell # Allow the current shell binary and shell history when they apply.
 USE agent # Load agent-specific config and state when they apply.
 IF TEST -f ./Sandboxfile.local # Check for an optional repo-local sandbox extension file.
     USE ./Sandboxfile.local
@@ -1793,7 +1852,7 @@ fn resolve_path_value(
     vars: &BTreeMap<String, String>,
     source: &SourceFile,
     line_number: usize,
-) -> Result<(PathBuf, PathKind), SandboxError> {
+) -> Result<ResolvedPathValue, SandboxError> {
     let source_name = source_label(source);
     let expanded = expand_variables(raw, vars, &source_name, line_number)?;
     if expanded.is_empty() {
@@ -1811,7 +1870,7 @@ fn resolve_path_value(
         expanded
     };
     let resolved = resolve_relative_path(Path::new(&trimmed), &source.base_dir);
-    let normalized = normalize_absolute_path(resolved);
+    let normalized = normalize_absolute_input_path(resolved);
     let kind = if forced_root {
         if !normalized.is_dir() {
             return Err(SandboxError::InvalidPath {
@@ -1828,7 +1887,11 @@ fn resolve_path_value(
         infer_existing_path_kind(&normalized)
     };
 
-    Ok((normalized, kind))
+    Ok(ResolvedPathValue {
+        aliases: path_aliases(&normalized),
+        path: normalized,
+        kind,
+    })
 }
 
 fn validate_fs_allowance(
@@ -1980,49 +2043,69 @@ fn resolve_test_path(
     )))
 }
 
+fn add_fs_allowances(
+    policy: &mut EffectiveSandboxPolicy,
+    access: FsAccess,
+    paths: &[PathBuf],
+    kind: PathKind,
+) {
+    for path in paths {
+        add_fs_allowance(policy, access, path, kind);
+    }
+}
+
 fn add_fs_allowance(
     policy: &mut EffectiveSandboxPolicy,
     access: FsAccess,
-    path: PathBuf,
+    path: &Path,
     kind: PathKind,
 ) {
     match kind {
         PathKind::File => {
-            push_unique_path(&mut policy.readable_paths, path.clone());
+            push_unique_path(&mut policy.readable_paths, path.to_path_buf());
             if matches!(access, FsAccess::Write) {
-                push_unique_path(&mut policy.writable_paths, path);
+                push_unique_path(&mut policy.writable_paths, path.to_path_buf());
             }
         }
         PathKind::Root => {
-            push_unique_path(&mut policy.readable_roots, path.clone());
+            push_unique_path(&mut policy.readable_roots, path.to_path_buf());
             if matches!(access, FsAccess::Write) {
-                push_unique_path(&mut policy.writable_roots, path);
+                push_unique_path(&mut policy.writable_roots, path.to_path_buf());
             }
         }
     }
 }
 
-fn add_exec_allowance(policy: &mut EffectiveSandboxPolicy, path: PathBuf, kind: PathKind) {
+fn add_exec_allowances(policy: &mut EffectiveSandboxPolicy, paths: &[PathBuf], kind: PathKind) {
+    for path in paths {
+        add_exec_allowance(policy, path, kind);
+    }
+}
+
+fn add_exec_allowance(policy: &mut EffectiveSandboxPolicy, path: &Path, kind: PathKind) {
     match kind {
-        PathKind::File => push_unique_path(&mut policy.executable_paths, path),
-        PathKind::Root => push_unique_path(&mut policy.executable_roots, path),
+        PathKind::File => push_unique_path(&mut policy.executable_paths, path.to_path_buf()),
+        PathKind::Root => push_unique_path(&mut policy.executable_roots, path.to_path_buf()),
     }
 }
 
 fn resolve_command_paths_from_path(command: &str, path_value: &str) -> Vec<PathBuf> {
     let candidate = Path::new(command);
     if candidate.components().count() > 1 {
-        return vec![normalize_absolute_path(resolve_relative_path(
+        return path_aliases(&normalize_absolute_input_path(resolve_relative_path(
             candidate,
             Path::new("."),
-        ))];
+        )));
     }
 
     let mut resolved = Vec::new();
     for root in std::env::split_paths(OsStr::new(path_value)) {
         let candidate = root.join(command);
         if candidate.is_file() {
-            push_unique_path(&mut resolved, normalize_absolute_path(candidate));
+            let candidate = normalize_absolute_input_path(candidate);
+            for path in path_aliases(&candidate) {
+                push_unique_path(&mut resolved, path);
+            }
         }
     }
     resolved
@@ -2092,6 +2175,38 @@ fn resolve_relative_path(path: &Path, base_dir: &Path) -> PathBuf {
         path.to_path_buf()
     } else {
         base_dir.join(path)
+    }
+}
+
+fn normalize_absolute_input_path(path: PathBuf) -> PathBuf {
+    use std::path::Component;
+
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        match std::env::current_dir() {
+            Ok(current_dir) => current_dir.join(path),
+            Err(_) => path,
+        }
+    };
+
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(Path::new("/")),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let _ = normalized.pop();
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+
+    if normalized.as_os_str().is_empty() {
+        PathBuf::from("/")
+    } else {
+        normalized
     }
 }
 
@@ -2197,6 +2312,16 @@ fn push_unique_string(values: &mut Vec<String>, value: String) {
     if !values.contains(&value) {
         values.push(value);
     }
+}
+
+fn path_aliases(path: &Path) -> Vec<PathBuf> {
+    let mut aliases = Vec::new();
+    push_unique_path(&mut aliases, path.to_path_buf());
+    let canonical = normalize_absolute_path(path.to_path_buf());
+    if canonical != path {
+        push_unique_path(&mut aliases, canonical);
+    }
+    aliases
 }
 
 fn current_active(control: &[ControlFrame]) -> bool {
@@ -2493,6 +2618,26 @@ mod tests {
     }
 
     #[test]
+    fn use_shell_does_not_grant_shell_startup_files() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        let home = repo_root.join("home");
+        let zshrc = home.join(".zshrc");
+        fs::create_dir_all(&repo_root).expect("repo");
+        fs::create_dir_all(&home).expect("home");
+        fs::write(&zshrc, "export DEMO=1\n").expect("zshrc");
+        fs::write(repo_root.join(REPO_SANDBOXFILE), "USE shell\n").expect("sandbox");
+
+        let mut context = context_for(&repo_root, &["/bin/zsh"]);
+        context
+            .env
+            .insert("HOME".to_string(), home.display().to_string());
+
+        let explain = explain(&context, &[]).expect("explain");
+        assert!(!explain.policy.readable_paths.contains(&zshrc));
+    }
+
+    #[test]
     fn use_agent_dispatches_to_agent_specific_module() {
         let temp = tempdir().expect("tempdir");
         let repo_root = temp.path().join("repo");
@@ -2541,9 +2686,11 @@ mod tests {
         let repo_root = temp.path().join("repo");
         fs::create_dir_all(&repo_root).expect("repo");
         fs::create_dir_all(repo_root.join("home")).expect("home");
+        fs::write(repo_root.join("other"), "#!/bin/sh\n").expect("other");
         fs::write(
             repo_root.join(REPO_SANDBOXFILE),
-            r#"SWITCH "$ARGV0"
+            r#"EXEC ALLOW other
+SWITCH "$ARGV0"
 CASE "tool"
 WARN "matched"
 DEFAULT
@@ -2553,7 +2700,11 @@ END
         )
         .expect("sandbox");
 
-        let context = context_for(&repo_root, &["other"]);
+        let mut context = context_for(&repo_root, &["other"]);
+        context.env.insert(
+            "PATH".to_string(),
+            format!("{}:/bin:/usr/bin", repo_root.display()),
+        );
         let explain = explain(&context, &[]).expect("explain");
 
         assert!(explain.warnings.contains(&"defaulted".to_string()));
@@ -2572,7 +2723,8 @@ END
         )
         .expect("sandbox");
 
-        let context = context_for(&repo_root, &["/bin/zsh"]);
+        let mut context = context_for(&repo_root, &["/bin/zsh"]);
+        context.argv.clear();
         let explain = explain(&context, &[]).expect("explain");
 
         assert!(explain.warnings.contains(&"defaulted-empty".to_string()));
@@ -2617,6 +2769,41 @@ END
         assert!(contents.contains("FS ALLOW READ ."));
         assert!(contents.contains("IF TEST -f ./Sandboxfile.local"));
         assert!(contents.contains("USE ./Sandboxfile.local"));
+    }
+
+    #[test]
+    fn omitted_defaults_are_closed() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        fs::create_dir_all(&repo_root).expect("repo");
+        fs::create_dir_all(repo_root.join("home")).expect("home");
+        fs::write(repo_root.join(REPO_SANDBOXFILE), "FS ALLOW READ .\n").expect("sandbox");
+
+        let mut context = context_for(&repo_root, &[]);
+        context.argv.clear();
+
+        let explain = explain(&context, &[]).expect("explain");
+        assert_eq!(explain.policy.fs_default, FsDefault::None);
+        assert_eq!(explain.policy.exec_default, ExecDefault::Deny);
+        assert_eq!(explain.environment_default, EnvDefault::None);
+    }
+
+    #[test]
+    fn profile_source_uses_deny_default_with_explicit_fs_defaults() {
+        let mut policy = EffectiveSandboxPolicy::default();
+        policy.fs_default = FsDefault::None;
+        policy.readable_roots.push(PathBuf::from("/tmp/repo"));
+
+        let profile = profile_source(&policy);
+
+        assert!(profile.contains("(deny default)"));
+        assert!(profile.contains("(import \"system.sb\")"));
+        assert!(profile.contains("READ_LITERAL_0"));
+        assert!(!profile.contains("(allow file-read* file-test-existence)\n"));
+
+        policy.fs_default = FsDefault::Read;
+        let read_profile = profile_source(&policy);
+        assert!(read_profile.contains("(allow file-read* file-test-existence)"));
     }
 
     #[test]
@@ -2667,6 +2854,7 @@ END
         context
             .env
             .insert("HOME".to_string(), home.display().to_string());
+        context.argv.clear();
 
         let explain = explain(&context, &[]).expect("explain");
         assert_eq!(explain.policy.fs_default, FsDefault::Read);
@@ -2741,6 +2929,7 @@ END
         context
             .env
             .insert("HOME".to_string(), home.display().to_string());
+        context.argv.clear();
 
         let explain = explain(&context, &[]).expect("explain");
         assert!(
@@ -2898,6 +3087,7 @@ END
         context
             .env
             .insert("HOME".to_string(), home.display().to_string());
+        context.argv.clear();
 
         let explain = explain(&context, &[]).expect("explain");
         assert!(

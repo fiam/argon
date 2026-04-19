@@ -70,7 +70,9 @@ struct SandboxfilePromptTests {
       rendered.contains(
         "USE os # Allow access to the operating system's shared filesystem without exposing personal directories."
       ))
-    #expect(rendered.contains("USE shell # Load shell config and history when they apply."))
+    #expect(
+      rendered.contains(
+        "USE shell # Allow the current shell binary and shell history when they apply."))
     #expect(
       rendered.contains(
         "USE agent # Load agent-specific config and state when they apply."))
@@ -103,7 +105,9 @@ struct SandboxfilePromptTests {
     #expect(
       contents.contains(
         "EXEC DEFAULT ALLOW # Allow running any command by default."))
-    #expect(contents.contains("USE shell # Load shell config and history when they apply."))
+    #expect(
+      contents.contains(
+        "USE shell # Allow the current shell binary and shell history when they apply."))
     #expect(
       contents.contains(
         "USE agent # Load agent-specific config and state when they apply."))

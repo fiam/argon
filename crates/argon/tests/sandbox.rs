@@ -1,8 +1,9 @@
 #![cfg(target_os = "macos")]
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use tempfile::tempdir;
@@ -297,6 +298,49 @@ ENV SET FOO sandboxed
 }
 
 #[test]
+fn sandbox_seatbelt_prints_raw_profile() -> Result<()> {
+    let temp = tempdir()?;
+    let repo_root = temp.path().join("repo");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&home)?;
+    std::fs::write(
+        repo_root.join("Sandboxfile"),
+        r#"
+FS ALLOW READ .
+EXEC ALLOW /bin/cat
+USE os
+"#,
+    )?;
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("SHELL", "/bin/zsh")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("seatbelt")
+            .arg("--json"),
+    )?;
+
+    if !output.status.success() {
+        bail!(
+            "sandbox seatbelt failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"profile\""));
+    assert!(stdout.contains("(deny default)"));
+    assert!(stdout.contains("(import \\\"system.sb\\\")"));
+    assert!(stdout.contains("\"parameters\""));
+    Ok(())
+}
+
+#[test]
 fn sandbox_explain_lists_detailed_policy_sections() -> Result<()> {
     let temp = tempdir()?;
     let home = temp.path().join("home");
@@ -479,6 +523,83 @@ ENV UNSET PATH
             String::from_utf8_lossy(&output.stderr),
         );
     }
+
+    Ok(())
+}
+
+#[test]
+fn sandbox_exec_blocks_reads_outside_repo_and_os_roots() -> Result<()> {
+    let temp = tempdir()?;
+    let root = temp.path().canonicalize()?;
+    let repo_root = root.join("repo");
+    let home = root.join("home");
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system time should be after unix epoch")?
+        .as_nanos();
+    let real_home = PathBuf::from(std::env::var("HOME").context("HOME should be set for tests")?);
+    let outside_file = real_home.join(format!(".argon-sandbox-read-test-{stamp}.txt"));
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&home)?;
+
+    let repo_file = repo_root.join("repo.txt");
+    std::fs::write(&repo_file, "repo\n")?;
+    std::fs::write(&outside_file, "outside\n")?;
+    std::fs::write(
+        repo_root.join("Sandboxfile"),
+        r#"
+FS ALLOW READ .
+USE os
+"#,
+    )?;
+
+    let allowed = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("PATH", "/usr/bin:/bin")
+            .env("SHELL", "/bin/zsh")
+            .env_remove("TMPDIR")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("exec")
+            .arg("--")
+            .arg("/bin/cat")
+            .arg(&repo_file),
+    )?;
+
+    if !allowed.status.success() {
+        bail!(
+            "sandbox exec allowed read failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            allowed.status.code(),
+            String::from_utf8_lossy(&allowed.stdout),
+            String::from_utf8_lossy(&allowed.stderr),
+        );
+    }
+
+    let denied = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("PATH", "/usr/bin:/bin")
+            .env("SHELL", "/bin/zsh")
+            .env_remove("TMPDIR")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("exec")
+            .arg("--")
+            .arg("/bin/cat")
+            .arg(&outside_file),
+    )?;
+
+    assert!(
+        !denied.status.success(),
+        "unexpected success: status={:?}\nstdout:{}\nstderr:{}",
+        denied.status.code(),
+        String::from_utf8_lossy(&denied.stdout),
+        String::from_utf8_lossy(&denied.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&denied.stderr);
+    assert!(stderr.contains("Operation not permitted"));
+    std::fs::remove_file(&outside_file)?;
 
     Ok(())
 }

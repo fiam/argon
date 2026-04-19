@@ -424,7 +424,7 @@ struct SandboxHelpPopover: View {
     FS ALLOW READ . # Allow reading files inside this repository.
     FS ALLOW WRITE . # Allow edits inside this repository.
     USE os # Allow access to the operating system's shared filesystem without exposing personal directories.
-    USE shell # Load shell config and history when they apply.
+    USE shell # Allow the current shell binary and shell history when they apply.
     USE agent # Load agent-specific config and state when they apply.
     IF TEST -f ./Sandboxfile.local # Check for an optional repo-local sandbox extension file.
         USE ./Sandboxfile.local
@@ -526,6 +526,12 @@ struct SandboxHelpPopover: View {
             .fontWeight(.semibold)
           Text(
             "`USE os`, `USE shell`, and `USE agent` are built-in modules that dispatch from the current launch context. `USE shell` and `USE agent` quietly do nothing when they do not apply."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+          Text(
+            "`USE shell` is intentionally minimal: it covers the shell binary and shell history, but not personal shell startup files or prompt tools."
           )
           .font(.caption)
           .foregroundStyle(.secondary)

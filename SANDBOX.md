@@ -61,7 +61,7 @@ EXEC DEFAULT ALLOW # Allow running any command by default.
 FS ALLOW READ . # Allow reading files inside this repository.
 FS ALLOW WRITE . # Allow edits inside this repository.
 USE os # Allow access to the operating system's shared filesystem without exposing personal directories.
-USE shell # Load shell config and history when they apply.
+USE shell # Allow the current shell binary and shell history when they apply.
 USE agent # Load agent-specific config and state when they apply.
 IF TEST -f ./Sandboxfile.local # Check for an optional repo-local sandbox extension file.
     USE ./Sandboxfile.local
@@ -124,6 +124,7 @@ EXEC INTERCEPT aws WITH .argon/sandbox/intercepts/aws.sh
 
 Notes:
 
+- if omitted, `ENV DEFAULT`, `FS DEFAULT`, and `EXEC DEFAULT` all default to `NONE`
 - `FS ALLOW READ` and `FS ALLOW WRITE` accept either files or directories
 - directory-vs-file is inferred from the existing path, or forced by a trailing `/`
 - directory-style paths must already exist; optional directories should be
@@ -221,8 +222,9 @@ FS ALLOW WRITE $TOOL_STATE_DIR
 
 ## Environment Policy
 
-If you do not set `ENV DEFAULT`, sandboxed processes inherit the full caller
-environment. The generated default `Sandboxfile` uses `ENV DEFAULT NONE`.
+If you do not set `ENV DEFAULT`, sandboxed processes start with an empty
+environment. The generated default `Sandboxfile` still writes
+`ENV DEFAULT NONE` explicitly for clarity.
 
 You can replace that with explicit `ENV ALLOW` rules:
 
@@ -279,6 +281,12 @@ These are ordinary builtin modules, not evaluator-level shorthands. They
 dispatch internally to more specific modules such as `os/macos`,
 `shell/zsh`, or `agent/codex` based on the current launch context. Relative
 `USE` paths are file includes, not builtin lookups.
+
+`USE shell` is intentionally minimal. It grants access to the current shell
+binary and the shell's history file when those variables are available. It
+does not automatically grant access to shell startup files, prompt tools, or
+other personal configuration under your home directory. If a shell needs more
+than that, add explicit rules in `Sandboxfile` or `Sandboxfile.local`.
 
 Inspect builtins with:
 
@@ -392,18 +400,10 @@ from `libsandbox`.
 
 Today the macOS implementation enforces:
 
+- read restrictions
 - write restrictions
 - executable allow/deny policy
 - intercept shims inside the sandbox
-
-It does not yet enforce general read denial. If a policy sets `FS DEFAULT NONE`
-or `FS DEFAULT READ`, Argon currently warns:
-
-```text
-macOS currently enforces write restrictions and exec mediation, but not general read denial
-```
-
-That limitation is explicit in `explain` and at sandbox launch time.
 
 ## Cross-Platform Structure
 

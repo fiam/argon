@@ -58,7 +58,7 @@ func renderSandboxfile() -> String {
     "FS ALLOW READ . # Allow reading files inside this repository.",
     "FS ALLOW WRITE . # Allow edits inside this repository.",
     "USE os # Allow access to the operating system's shared filesystem without exposing personal directories.",
-    "USE shell # Load shell config and history when they apply.",
+    "USE shell # Allow the current shell binary and shell history when they apply.",
     "USE agent # Load agent-specific config and state when they apply.",
     "IF TEST -f ./Sandboxfile.local # Check for an optional repo-local sandbox extension file.",
     "    USE ./Sandboxfile.local",

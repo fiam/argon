@@ -10,6 +10,7 @@ ENV ALLOW __CF_USER_TEXT_ENCODING
 # Common macOS runtime roots for system tools, frameworks, and common package managers.
 FS ALLOW READ /System/
 FS ALLOW READ /Library/Apple/
+FS ALLOW READ /dev/
 FS ALLOW READ /usr/lib/
 FS ALLOW READ /usr/libexec/
 FS ALLOW READ /usr/share/
@@ -17,9 +18,12 @@ FS ALLOW READ /bin/
 FS ALLOW READ /sbin/
 FS ALLOW READ /usr/bin/
 FS ALLOW READ /usr/sbin/
-IF TEST -d /opt/homebrew/bin
-FS ALLOW READ /opt/homebrew/bin/
-EXEC ALLOW /opt/homebrew/bin/
+IF TEST -d /private/var/select
+FS ALLOW READ /private/var/select/
+EXEC ALLOW /private/var/select/
+END
+IF TEST -d /private/etc/ssl
+FS ALLOW READ /private/etc/ssl/
 END
 IF TEST -d /opt/homebrew/lib
 FS ALLOW READ /opt/homebrew/lib/
@@ -35,10 +39,6 @@ END
 IF TEST -d /opt/homebrew/opt
 FS ALLOW READ /opt/homebrew/opt/
 EXEC ALLOW /opt/homebrew/opt/
-END
-IF TEST -d /usr/local/bin
-FS ALLOW READ /usr/local/bin/
-EXEC ALLOW /usr/local/bin/
 END
 IF TEST -d /usr/local/lib
 FS ALLOW READ /usr/local/lib/

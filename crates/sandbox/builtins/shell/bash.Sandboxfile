@@ -2,27 +2,6 @@ IF TEST -n "$SHELL"
 FS ALLOW READ $SHELL
 EXEC ALLOW $SHELL
 END
-IF TEST -n "$BASH_ENV"
-FS ALLOW READ $BASH_ENV
-END
-IF TEST -n "$ENV"
-FS ALLOW READ $ENV
-END
-IF TEST -f "$HOME/.bash_profile"
-FS ALLOW READ $HOME/.bash_profile
-END
-IF TEST -f "$HOME/.bash_login"
-FS ALLOW READ $HOME/.bash_login
-END
-IF TEST -f "$HOME/.bashrc"
-FS ALLOW READ $HOME/.bashrc
-END
-IF TEST -f "$HOME/.profile"
-FS ALLOW READ $HOME/.profile
-END
-IF TEST -d "$HOME/.config/bash"
-FS ALLOW READ $HOME/.config/bash/
-END
 IF TEST -n "$HISTFILE"
 FS ALLOW WRITE $HISTFILE
 ELSE

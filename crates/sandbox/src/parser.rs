@@ -422,7 +422,7 @@ fn parse_exec(
     }
 }
 
-fn tokenize_line(line: &str) -> Result<Vec<String>, String> {
+pub(crate) fn tokenize_line(line: &str) -> Result<Vec<String>, String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut chars = line.chars().peekable();

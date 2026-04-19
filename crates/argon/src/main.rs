@@ -21,9 +21,6 @@ use clap::{Parser, Subcommand, ValueEnum};
 use sandbox::{LaunchKind, SandboxContext};
 use uuid::Uuid;
 
-const MACOS_SANDBOX_LIMITATION_WARNING: &str =
-    "macOS currently enforces write restrictions and exec mediation, but not general read denial";
-
 #[derive(Parser, Debug)]
 #[command(name = "argon", about = "Local PR review loop CLI for agents")]
 struct Cli {
@@ -116,6 +113,8 @@ enum SandboxCommands {
     Check(SandboxCheckArgs),
     /// Resolve and explain the effective sandbox plan.
     Explain(SandboxExplainArgs),
+    #[command(hide = true)]
+    Seatbelt(SandboxSeatbeltArgs),
     /// Run a command inside Argon's sandbox.
     Exec(SandboxExecArgs),
 }
@@ -287,6 +286,15 @@ struct SandboxExplainArgs {
 
 #[derive(clap::Args, Debug)]
 struct SandboxCheckArgs {
+    #[command(flatten)]
+    context: SandboxExecutionContextArgs,
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args, Debug)]
+struct SandboxSeatbeltArgs {
     #[command(flatten)]
     context: SandboxExecutionContextArgs,
     /// Emit machine-readable JSON.
@@ -612,6 +620,14 @@ struct ReviewerFeedback {
     created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SandboxSeatbeltDebugResponse {
+    profile: String,
+    parameters: Vec<String>,
+    warnings: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AgentWaitSignature {
     decision: Option<argon_core::ReviewDecision>,
@@ -816,6 +832,7 @@ fn run_sandbox(command: SandboxCommands, runtime: &RuntimeOptions) -> Result<()>
         SandboxCommands::Builtin(command) => run_sandbox_builtin(command),
         SandboxCommands::Check(args) => run_sandbox_check(args),
         SandboxCommands::Explain(args) => run_sandbox_explain(args),
+        SandboxCommands::Seatbelt(args) => run_sandbox_seatbelt(args),
         SandboxCommands::Exec(args) => run_sandbox_exec(args),
     }
 }
@@ -2048,6 +2065,45 @@ fn run_sandbox_explain(args: SandboxExplainArgs) -> Result<()> {
     Ok(())
 }
 
+fn run_sandbox_seatbelt(args: SandboxSeatbeltArgs) -> Result<()> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = args;
+        bail!("sandbox seatbelt is only available on macOS");
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let context = sandbox_context_from_args(&args.context, &[])?;
+        let plan = sandbox::build_execution_plan(&context, &args.context.write_roots)?;
+        let response = SandboxSeatbeltDebugResponse {
+            profile: sandbox::profile_source(&plan.policy),
+            parameters: sandbox::profile_parameters(&plan.policy),
+            warnings: plan.warnings,
+        };
+        if args.json {
+            println!("{}", serde_json::to_string_pretty(&response)?);
+        } else {
+            print_sandbox_warnings(&response.warnings);
+            println!("{}", response.profile);
+            println!();
+            if response.parameters.is_empty() {
+                println!("# parameters: (none)");
+            } else {
+                println!("# parameters");
+                for pair in response.parameters.chunks(2) {
+                    match pair {
+                        [name, value] => println!("{name}={value}"),
+                        [name] => println!("{name}"),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 fn print_config_search(paths: &sandbox::ResolvedConfigPaths) {
     println!("Parsed Sandboxfiles:");
     if paths.existing_paths.is_empty() {
@@ -2291,9 +2347,6 @@ fn sandbox_context_from_args(
 
 fn print_sandbox_warnings(warnings: &[String]) {
     for warning in warnings {
-        if warning == MACOS_SANDBOX_LIMITATION_WARNING {
-            continue;
-        }
         eprintln!("warning: {warning}");
     }
 }
