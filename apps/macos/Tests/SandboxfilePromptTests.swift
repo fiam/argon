@@ -58,7 +58,7 @@ struct SandboxfilePromptTests {
   func renderSandboxfileUsesRecommendedDefaultScaffold() {
     let rendered = renderSandboxfile()
 
-    #expect(rendered.contains("# This file describes the Argon Sandbox configuration"))
+    #expect(rendered.contains("# This file describes the Argon Sandbox project configuration"))
     #expect(
       rendered.contains("ENV DEFAULT NONE # Start from a minimal process environment by default."))
     #expect(rendered.contains("FS DEFAULT NONE # Start from no filesystem access by default."))
@@ -78,6 +78,19 @@ struct SandboxfilePromptTests {
       rendered.contains(
         "USE agent # Load agent-specific config and state when they apply."))
     #expect(rendered.contains("    USE ./Sandboxfile.local\nEND"))
+  }
+
+  @Test("renderSandboxfile can produce the personal scaffold")
+  func renderSandboxfileProducesPersonalScaffold() {
+    let rendered = renderSandboxfile(kind: .personal)
+
+    #expect(rendered.contains("# This file describes the Argon Sandbox personal configuration"))
+    #expect(rendered.contains("# Full docs: https://github.com/fiam/argon/blob/main/SANDBOX.md"))
+    #expect(
+      rendered.contains(
+        "# Add user-specific rules here for tools your shell or agent needs,"))
+    #expect(rendered.contains("`starship`, `atuin`, or other local helpers."))
+    #expect(!rendered.contains("ENV DEFAULT NONE"))
   }
 
   @Test("createRepoSandboxfile writes the default scaffold")

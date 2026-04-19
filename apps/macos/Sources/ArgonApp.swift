@@ -124,6 +124,7 @@ struct ArgonApp: App {
 
     Settings {
       SettingsView()
+        .environment(commandContext)
         .environment(savedAgents)
         .environment(agentAvailability)
         .task(id: savedAgents.profiles) {

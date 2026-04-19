@@ -56,6 +56,7 @@ struct SettingsView: View {
   fileprivate static let formLikeVStackHorizontalPadding: CGFloat = 40
   fileprivate static let formLikeVStackTopPadding: CGFloat = 22
 
+  @Environment(CommandContext.self) private var commandContext
   @Environment(\.colorScheme) private var colorScheme
   @Environment(SavedAgentProfiles.self) private var savedAgents
   @Environment(AgentAvailability.self) private var agentAvailability
@@ -78,6 +79,13 @@ struct SettingsView: View {
   @State private var didLoadGhosttyConfigurationDraft = false
   @State private var terminalPreviewAppearance: TerminalPreviewAppearance = .dark
   @State private var didInitializeTerminalPreviewAppearance = false
+  @State private var sandboxSnapshot: SandboxfileSettingsSnapshot?
+  @State private var sandboxErrorMessage: String?
+  @State private var sandboxLoading = false
+  @State private var selectedSandboxLayer: SandboxfileSettingsLayer = .project
+  @State private var sandboxDraft = ""
+  @State private var appliedSandboxText = ""
+  @State private var sandboxSaving = false
 
   var body: some View {
     TabView {
@@ -86,7 +94,7 @@ struct SettingsView: View {
       agentsTab
         .tabItem { Label("Agents", systemImage: "person.2") }
       sandboxTab
-        .tabItem { Label("Sandboxfile", systemImage: "shield") }
+        .tabItem { Label("Sandbox", systemImage: "shield") }
       appearanceTab
         .tabItem { Label("Appearance", systemImage: "textformat.size") }
       terminalTab
@@ -229,54 +237,81 @@ struct SettingsView: View {
   // MARK: - Appearance Tab
 
   private var sandboxTab: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 14) {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-          Text("Sandboxfile")
-            .font(.title3)
-            .fontWeight(.semibold)
-          Link("Docs", destination: SandboxfileHelpContent.docsURL)
-            .font(.subheadline)
-            .pointingHandCursorOnHover()
-          Spacer(minLength: 0)
-        }
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(alignment: .center, spacing: 10) {
+        Text("Sandbox")
+          .font(.title3)
+          .fontWeight(.semibold)
+        Link("Docs", destination: SandboxfileHelpContent.docsURL)
+          .font(.subheadline)
+          .pointingHandCursorOnHover()
+        Spacer(minLength: 0)
 
-        Text(SandboxfileHelpContent.settingsOverview)
-          .foregroundStyle(.secondary)
+        SandboxLayerPillSelector(selection: $selectedSandboxLayer)
+
+        Button {
+          insertSandboxScaffold()
+        } label: {
+          Image(systemName: "plus")
+            .frame(width: 16, height: 16)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(!canInsertSandboxScaffold)
+        .help(insertScaffoldHelpText)
+      }
+
+      if sandboxLoading {
+        ProgressView("Loading Sandboxfiles…")
+          .controlSize(.small)
+      } else if let sandboxErrorMessage {
+        Text(sandboxErrorMessage)
+          .foregroundStyle(.red)
           .fixedSize(horizontal: false, vertical: true)
+      } else {
+        HighlightedCodeTextView(
+          text: $sandboxDraft,
+          path: sandboxHighlightPath,
+          fontSize: NSFont.preferredFont(forTextStyle: .body).pointSize,
+          theme: highlightTheme,
+          accessibilityIdentifier: "sandbox-editor"
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(
+          RoundedRectangle(cornerRadius: 6)
+            .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+        )
 
-        GroupBox("Default Sandboxfile") {
-          SandboxCodeBlock(
-            text: SandboxfileHelpContent.defaultScaffold.trimmingCharacters(
-              in: .whitespacesAndNewlines))
-        }
+        HStack(alignment: .center, spacing: 10) {
+          Text(sandboxFooterText)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
 
-        VStack(alignment: .leading, spacing: 6) {
-          Text("How it layers")
-            .font(.headline)
-            .fontWeight(.semibold)
-          Text("1. A repo `Sandboxfile` defines repo-local sandbox policy.")
-          Text("2. `./Sandboxfile.local` can extend that repo policy for one machine.")
-          Text(
-            "3. `$HOME/.Sandboxfile` can define user-level policy that applies after the repo-local sandbox files."
-          )
-          Text(
-            "4. Argon loads at most one of `Sandboxfile`, `.Sandboxfile`, or `.Sanboxfile` in each directory while walking parent directories upward."
-          )
-        }
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
+          Spacer(minLength: 0)
 
-        VStack(alignment: .leading, spacing: 6) {
-          Text("CLI")
-            .font(.headline)
-            .fontWeight(.semibold)
-          SandboxCodeBlock(text: SandboxfileHelpContent.commandExamples)
+          Button("Revert") {
+            revertSandboxDraft()
+          }
+          .disabled(!hasUnsavedSandboxChanges || sandboxSaving)
+
+          Button("Save") {
+            Task {
+              await saveSelectedSandboxfile()
+            }
+          }
+          .buttonStyle(.borderedProminent)
+          .disabled(!canSaveSandboxDraft || sandboxSaving)
         }
       }
-      .formLikeVStackInsets()
-      .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+    .formLikeVStackInsets()
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .task(id: sandboxSettingsRootPath) {
+      await reloadSandboxSnapshot()
+    }
+    .onChange(of: selectedSandboxLayer) { _, _ in
+      syncSandboxEditorState()
     }
   }
 
@@ -366,8 +401,9 @@ struct SettingsView: View {
           ZStack(alignment: .topLeading) {
             // SwiftUI's TextEditor cannot render the attributed syntax highlighting
             // used for Ghostty config tokens, so this field uses an NSTextView wrapper.
-            GhosttyConfigurationTextEditor(
+            HighlightedCodeTextView(
               text: $ghosttyConfigurationDraft,
+              path: GhosttyConfigurationSettings.highlightPath,
               fontSize: NSFont.preferredFont(forTextStyle: .body).pointSize,
               theme: highlightTheme
             )
@@ -466,6 +502,66 @@ struct SettingsView: View {
     colorScheme == .dark ? "base16-ocean.dark" : "base16-ocean.light"
   }
 
+  private var sandboxSettingsRootPath: String? {
+    commandContext.sandboxSettingsRoot
+  }
+
+  private var selectedSandboxSource: SandboxfileSettingsSource? {
+    sandboxSnapshot?.editableSource(for: selectedSandboxLayer)
+  }
+
+  private var sandboxHighlightPath: String {
+    "sandbox.sh"
+  }
+
+  private var selectedSandboxSavePath: String? {
+    switch selectedSandboxLayer {
+    case .project:
+      selectedSandboxSource?.path ?? projectSandboxfileCreationPath
+    case .personal:
+      selectedSandboxSource?.path ?? personalSandboxfilePath
+    }
+  }
+
+  private var canInsertSandboxScaffold: Bool {
+    selectedSandboxSource == nil && selectedSandboxSavePath != nil
+  }
+
+  private var insertScaffoldHelpText: String {
+    switch selectedSandboxLayer {
+    case .project:
+      "Insert the default project Sandboxfile scaffold"
+    case .personal:
+      "Insert the default personal .Sandboxfile scaffold"
+    }
+  }
+
+  private var hasUnsavedSandboxChanges: Bool {
+    sandboxDraft != appliedSandboxText
+  }
+
+  private var canSaveSandboxDraft: Bool {
+    selectedSandboxSavePath != nil && hasUnsavedSandboxChanges
+  }
+
+  private var sandboxFooterText: String {
+    var messages = [
+      "Changes saved here only affect future sandbox launches. Running sandboxes keep their current policy."
+    ]
+
+    if selectedSandboxLayer == .project,
+      let snapshot = sandboxSnapshot
+    {
+      let inheritedCount = snapshot.inheritedSourceCount(for: .project)
+      if inheritedCount > 0 {
+        let noun = inheritedCount == 1 ? "Sandboxfile is" : "Sandboxfiles are"
+        messages.append("\(inheritedCount) parent project \(noun) also loaded after this file.")
+      }
+    }
+
+    return messages.joined(separator: " ")
+  }
+
   private var terminalPreviewDarkModeBinding: Binding<Bool> {
     Binding(
       get: { terminalPreviewAppearance == .dark },
@@ -505,6 +601,113 @@ struct SettingsView: View {
     guard !didInitializeTerminalPreviewAppearance else { return }
     didInitializeTerminalPreviewAppearance = true
     terminalPreviewAppearance = colorScheme == .dark ? .dark : .light
+  }
+
+  private var personalSandboxfilePath: String {
+    URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".Sandboxfile").path
+  }
+
+  private var projectSandboxfileCreationPath: String? {
+    sandboxSnapshot?.initPath
+      ?? sandboxSettingsRootPath.map {
+        URL(fileURLWithPath: $0).appendingPathComponent("Sandboxfile").path
+      }
+  }
+
+  private func syncSandboxEditorState() {
+    let contents = selectedSandboxSource?.contents ?? ""
+    sandboxDraft = contents
+    appliedSandboxText = contents
+  }
+
+  @MainActor
+  private func reloadSandboxSnapshot() async {
+    guard let rootPath = sandboxSettingsRootPath else {
+      sandboxLoading = false
+      sandboxErrorMessage = nil
+      sandboxSnapshot = nil
+      syncSandboxEditorState()
+      return
+    }
+
+    sandboxLoading = true
+    sandboxErrorMessage = nil
+
+    let result = await Task.detached(priority: .userInitiated) {
+      Result {
+        try SandboxfileSettingsSnapshotLoader.load(rootPath: rootPath)
+      }
+    }.value
+
+    guard rootPath == sandboxSettingsRootPath else { return }
+
+    sandboxLoading = false
+    switch result {
+    case .success(let snapshot):
+      sandboxSnapshot = snapshot
+      sandboxErrorMessage = nil
+      syncSandboxEditorState()
+    case .failure(let error):
+      sandboxSnapshot = nil
+      sandboxErrorMessage = error.localizedDescription
+      syncSandboxEditorState()
+    }
+  }
+
+  private func insertSandboxScaffold() {
+    let kind: SandboxfileScaffoldKind =
+      selectedSandboxLayer == .project ? .project : .personal
+    sandboxDraft = renderSandboxfile(kind: kind)
+  }
+
+  private func revertSandboxDraft() {
+    sandboxDraft = appliedSandboxText
+  }
+
+  @MainActor
+  private func saveSelectedSandboxfile() async {
+    guard let path = selectedSandboxSavePath else { return }
+    sandboxSaving = true
+    defer { sandboxSaving = false }
+
+    do {
+      try await saveSandboxfile(atPath: path, contents: sandboxDraft)
+      await reloadSandboxSnapshot()
+    } catch {
+      sandboxErrorMessage = error.localizedDescription
+    }
+  }
+}
+
+private struct SandboxLayerPillSelector: View {
+  @Binding var selection: SandboxfileSettingsLayer
+
+  var body: some View {
+    HStack(spacing: 4) {
+      ForEach(SandboxfileSettingsLayer.allCases) { layer in
+        Button {
+          selection = layer
+        } label: {
+          Text(layer.title)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(selection == layer ? Color.white : Color.primary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .background(
+              Capsule()
+                .fill(selection == layer ? Color.accentColor : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+      }
+    }
+    .padding(4)
+    .background(Color(nsColor: .controlBackgroundColor))
+    .clipShape(Capsule())
+    .overlay(
+      Capsule()
+        .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+    )
   }
 }
 

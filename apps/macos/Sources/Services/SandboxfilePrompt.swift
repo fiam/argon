@@ -37,7 +37,11 @@ struct SandboxfilePromptRequest: Identifiable, Equatable, Sendable {
 }
 
 func renderSandboxfile() -> String {
-  SandboxfileHelpContent.defaultScaffold
+  renderSandboxfile(kind: .project)
+}
+
+func renderSandboxfile(kind: SandboxfileScaffoldKind) -> String {
+  SandboxfileHelpContent.scaffold(for: kind)
 }
 
 func sandboxfilePromptIfNeeded(
@@ -69,8 +73,18 @@ func loadSandboxfilePromptIfNeeded(
 
 @MainActor
 func createRepoSandboxfile(request: SandboxfilePromptRequest) async throws {
-  let path = request.repoSandboxfilePath
-  let contents = renderSandboxfile()
+  try await createSandboxfile(
+    atPath: request.repoSandboxfilePath,
+    kind: .project
+  )
+}
+
+@MainActor
+func createSandboxfile(
+  atPath path: String,
+  kind: SandboxfileScaffoldKind
+) async throws {
+  let contents = renderSandboxfile(kind: kind)
   try await Task.detached(priority: .userInitiated) {
     let url = URL(fileURLWithPath: path)
     let parent = url.deletingLastPathComponent()
@@ -84,5 +98,22 @@ func createRepoSandboxfile(request: SandboxfilePromptRequest) async throws {
     } catch CocoaError.fileWriteFileExists {
       return
     }
+  }.value
+}
+
+@MainActor
+func saveSandboxfile(
+  atPath path: String,
+  contents: String
+) async throws {
+  try await Task.detached(priority: .userInitiated) {
+    let url = URL(fileURLWithPath: path)
+    let parent = url.deletingLastPathComponent()
+    try FileManager.default.createDirectory(
+      at: parent,
+      withIntermediateDirectories: true,
+      attributes: nil
+    )
+    try Data(contents.utf8).write(to: url, options: .atomic)
   }.value
 }

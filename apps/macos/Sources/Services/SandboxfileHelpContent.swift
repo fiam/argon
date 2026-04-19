@@ -1,5 +1,19 @@
 import Foundation
 
+enum SandboxfileScaffoldKind: String, Sendable {
+  case project
+  case personal
+
+  var titleLine: String {
+    switch self {
+    case .project:
+      "# This file describes the Argon Sandbox project configuration"
+    case .personal:
+      "# This file describes the Argon Sandbox personal configuration"
+    }
+  }
+}
+
 enum SandboxfileHelpContent {
   static let docsURL = URL(string: "https://github.com/fiam/argon/blob/main/SANDBOX.md")!
 
@@ -30,24 +44,41 @@ enum SandboxfileHelpContent {
     """
   }
 
+  static func scaffold(for kind: SandboxfileScaffoldKind) -> String {
+    switch kind {
+    case .project:
+      return [
+        kind.titleLine,
+        "# Full docs: https://github.com/fiam/argon/blob/main/SANDBOX.md",
+        "",
+        "ENV DEFAULT NONE # Start from a minimal process environment by default.",
+        "FS DEFAULT NONE # Start from no filesystem access by default.",
+        "EXEC DEFAULT ALLOW # Allow running any command by default.",
+        "FS ALLOW READ . # Allow reading files inside this repository.",
+        "FS ALLOW WRITE . # Allow edits inside this repository.",
+        "USE os # Allow access to the operating system's shared filesystem without exposing personal directories.",
+        "USE shell # Allow the current shell binary and shell history when they apply.",
+        "USE agent # Load agent-specific config and state when they apply.",
+        "IF TEST -f ./Sandboxfile.local # Check for an optional repo-local sandbox extension file.",
+        "    USE ./Sandboxfile.local",
+        "END",
+        "",
+      ].joined(separator: "\n")
+
+    case .personal:
+      return [
+        kind.titleLine,
+        "# Full docs: https://github.com/fiam/argon/blob/main/SANDBOX.md",
+        "",
+        "# Add user-specific rules here for tools your shell or agent needs,",
+        "# for example `starship`, `atuin`, or other local helpers.",
+        "",
+      ].joined(separator: "\n")
+    }
+  }
+
   static var defaultScaffold: String {
-    [
-      "# This file describes the Argon Sandbox configuration",
-      "# Full docs: https://github.com/fiam/argon/blob/main/SANDBOX.md",
-      "",
-      "ENV DEFAULT NONE # Start from a minimal process environment by default.",
-      "FS DEFAULT NONE # Start from no filesystem access by default.",
-      "EXEC DEFAULT ALLOW # Allow running any command by default.",
-      "FS ALLOW READ . # Allow reading files inside this repository.",
-      "FS ALLOW WRITE . # Allow edits inside this repository.",
-      "USE os # Allow access to the operating system's shared filesystem without exposing personal directories.",
-      "USE shell # Allow the current shell binary and shell history when they apply.",
-      "USE agent # Load agent-specific config and state when they apply.",
-      "IF TEST -f ./Sandboxfile.local # Check for an optional repo-local sandbox extension file.",
-      "    USE ./Sandboxfile.local",
-      "END",
-      "",
-    ].joined(separator: "\n")
+    scaffold(for: .project)
   }
 
   static let commandExamples =

@@ -1,10 +1,12 @@
 import AppKit
 import SwiftUI
 
-struct GhosttyConfigurationTextEditor: NSViewRepresentable {
+struct HighlightedCodeTextView: NSViewRepresentable {
   @Binding var text: String
+  var path: String
   var fontSize: CGFloat = NSFont.systemFontSize
   var theme: String
+  var isEditable = true
   var accessibilityIdentifier: String? = nil
 
   func makeCoordinator() -> Coordinator {
@@ -22,7 +24,7 @@ struct GhosttyConfigurationTextEditor: NSViewRepresentable {
     let textView = NSTextView()
     textView.allowsUndo = true
     textView.isRichText = false
-    textView.isEditable = true
+    textView.isEditable = isEditable
     textView.isSelectable = true
     textView.backgroundColor = NSColor.textBackgroundColor
     textView.textColor = NSColor.labelColor
@@ -39,7 +41,13 @@ struct GhosttyConfigurationTextEditor: NSViewRepresentable {
     textView.delegate = context.coordinator
 
     applyPlainText(to: textView, text: text)
-    context.coordinator.scheduleHighlight(for: textView, text: text, theme: theme, immediate: true)
+    context.coordinator.scheduleHighlight(
+      for: textView,
+      text: text,
+      theme: theme,
+      path: path,
+      immediate: true
+    )
 
     scrollView.documentView = textView
     if let accessibilityIdentifier {
@@ -54,12 +62,13 @@ struct GhosttyConfigurationTextEditor: NSViewRepresentable {
   func updateNSView(_ scrollView: NSScrollView, context: Context) {
     guard let textView = scrollView.documentView as? NSTextView else { return }
     context.coordinator.parent = self
+    textView.isEditable = isEditable
     if textView.string != text {
       applyPlainText(to: textView, text: text)
       context.coordinator.scheduleHighlight(
-        for: textView, text: text, theme: theme, immediate: true)
+        for: textView, text: text, theme: theme, path: path, immediate: true)
     } else {
-      context.coordinator.scheduleHighlight(for: textView, text: text, theme: theme)
+      context.coordinator.scheduleHighlight(for: textView, text: text, theme: theme, path: path)
     }
     if let accessibilityIdentifier {
       scrollView.setAccessibilityIdentifier(accessibilityIdentifier)
@@ -87,21 +96,23 @@ struct GhosttyConfigurationTextEditor: NSViewRepresentable {
   }
 
   final class Coordinator: NSObject, NSTextViewDelegate {
-    var parent: GhosttyConfigurationTextEditor
+    var parent: HighlightedCodeTextView
     private var highlightTask: Task<Void, Never>?
     private var revision: UInt64 = 0
     private var lastHighlightedText = ""
     private var lastHighlightedTheme = ""
+    private var lastHighlightedPath = ""
 
-    init(_ parent: GhosttyConfigurationTextEditor) {
+    init(_ parent: HighlightedCodeTextView) {
       self.parent = parent
     }
 
     func textDidChange(_ notification: Notification) {
       guard let textView = notification.object as? NSTextView else { return }
+      guard parent.isEditable else { return }
       let updatedText = textView.string
       parent.text = updatedText
-      scheduleHighlight(for: textView, text: updatedText, theme: parent.theme)
+      scheduleHighlight(for: textView, text: updatedText, theme: parent.theme, path: parent.path)
     }
 
     @MainActor
@@ -109,15 +120,18 @@ struct GhosttyConfigurationTextEditor: NSViewRepresentable {
       for textView: NSTextView,
       text: String,
       theme: String,
+      path: String,
       immediate: Bool = false
     ) {
       if text.isEmpty {
         highlightTask?.cancel()
         lastHighlightedText = ""
         lastHighlightedTheme = theme
+        lastHighlightedPath = path
         return
       }
-      if lastHighlightedText == text && lastHighlightedTheme == theme {
+      if lastHighlightedText == text && lastHighlightedTheme == theme && lastHighlightedPath == path
+      {
         return
       }
 
@@ -125,7 +139,6 @@ struct GhosttyConfigurationTextEditor: NSViewRepresentable {
       let currentRevision = revision
       highlightTask?.cancel()
       let fontSize = parent.fontSize
-      let syntaxPath = GhosttyConfigurationSettings.highlightPath
 
       highlightTask = Task {
         if !immediate {
@@ -134,7 +147,7 @@ struct GhosttyConfigurationTextEditor: NSViewRepresentable {
         guard !Task.isCancelled else { return }
 
         let highlighted = try? await Task.detached(priority: .userInitiated) {
-          try ArgonCLI.highlightedText(text: text, path: syntaxPath, theme: theme)
+          try ArgonCLI.highlightedText(text: text, path: path, theme: theme)
         }.value
 
         await MainActor.run {
@@ -146,6 +159,7 @@ struct GhosttyConfigurationTextEditor: NSViewRepresentable {
             highlighted.lines, to: textView, originalText: text, fontSize: fontSize)
           self.lastHighlightedText = text
           self.lastHighlightedTheme = theme
+          self.lastHighlightedPath = path
         }
       }
     }
