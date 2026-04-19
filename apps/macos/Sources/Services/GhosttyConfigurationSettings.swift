@@ -4,6 +4,7 @@ import GhosttyKit
 enum GhosttyConfigurationSettings {
   static let storageKey = "ghosttyConfigurationText"
   static let docsURL = URL(string: "https://ghostty.org/docs/config/reference")!
+  static let highlightPath = "ghostty.ini"
 
   static func resolvedConfigPath() -> String? {
     do {

@@ -20,6 +20,10 @@ enum ArgonCLI {
     let created: Bool
   }
 
+  struct HighlightedTextResponse: Decodable, Sendable {
+    let lines: [[StyledSpan]]
+  }
+
   // MARK: - Session Creation
 
   static func cliPath() -> String {
@@ -85,6 +89,24 @@ enum ArgonCLI {
         "--theme", theme,
         "--json",
       ])
+  }
+
+  static func highlightedText(
+    text: String,
+    path: String,
+    theme: String
+  ) throws -> HighlightedTextResponse {
+    let output = try run(
+      repoRoot: nil,
+      args: [
+        "highlight",
+        "--path", path,
+        "--theme", theme,
+        "--json",
+      ],
+      stdin: text
+    )
+    return try decode(HighlightedTextResponse.self, from: output)
   }
 
   // MARK: - Draft Comments
@@ -319,7 +341,8 @@ enum ArgonCLI {
   }
 
   @discardableResult
-  private static func run(repoRoot: String?, args: [String]) throws -> String {
+  private static func run(repoRoot: String?, args: [String], stdin: String? = nil) throws -> String
+  {
     let cli = findCLI()
     let process = Process()
     process.executableURL = URL(fileURLWithPath: cli)
@@ -328,12 +351,23 @@ enum ArgonCLI {
       process.currentDirectoryURL = URL(fileURLWithPath: repoRoot)
     }
 
+    let stdinPipe = Pipe()
     let stdout = Pipe()
     let stderr = Pipe()
+    if stdin != nil {
+      process.standardInput = stdinPipe
+    }
     process.standardOutput = stdout
     process.standardError = stderr
 
     try process.run()
+
+    if let stdin {
+      if let data = stdin.data(using: .utf8) {
+        stdinPipe.fileHandleForWriting.write(data)
+      }
+      try? stdinPipe.fileHandleForWriting.close()
+    }
 
     // Read pipes before waitUntilExit to avoid deadlock when
     // output exceeds the pipe buffer.

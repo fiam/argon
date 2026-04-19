@@ -11,7 +11,7 @@ pub use diff::{
 };
 pub use highlight::{
     HighlightedDiff, HighlightedFileDiff, HighlightedHunk, HighlightedLine, SideBySidePair,
-    StyledSpan, available_themes, highlight_diff, theme_for_appearance,
+    StyledSpan, available_themes, highlight_diff, highlight_text, theme_for_appearance,
 };
 pub use model::{
     CommentAnchor, CommentAuthor, CommentKind, DraftReview, DraftReviewComment, ReviewComment,

@@ -1,4 +1,7 @@
 use serde::{Deserialize, Serialize};
+use std::ffi::OsStr;
+use std::path::Path;
+
 use syntect::highlighting::{Theme, ThemeSet};
 use syntect::parsing::SyntaxSet;
 
@@ -65,6 +68,30 @@ pub fn available_themes() -> Vec<String> {
     ts.themes.keys().cloned().collect()
 }
 
+/// Highlight arbitrary text using the syntax inferred from a virtual file path.
+pub fn highlight_text(text: &str, path: &str, theme_name: &str) -> Vec<Vec<StyledSpan>> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+
+    let ss = two_face::syntax::extra_newlines();
+    let ts: ThemeSet = two_face::theme::extra().into();
+    let theme = ts.themes.get(theme_name).unwrap_or_else(|| {
+        ts.themes
+            .get("base16-ocean.dark")
+            .expect("default theme must exist")
+    });
+    let syntax = syntax_for_virtual_path(&ss, path);
+    let mut highlighter = syntect::easy::HighlightLines::new(syntax, theme);
+
+    text.split('\n')
+        .map(|line| {
+            let line_with_newline = format!("{line}\n");
+            highlight_line_content(&mut highlighter, &ss, &line_with_newline)
+        })
+        .collect()
+}
+
 /// Highlight a parsed diff with syntax coloring.
 pub fn highlight_diff(diff: &ReviewDiff, theme_name: &str) -> HighlightedDiff {
     let ss = two_face::syntax::extra_newlines();
@@ -89,11 +116,7 @@ pub fn highlight_diff(diff: &ReviewDiff, theme_name: &str) -> HighlightedDiff {
 }
 
 fn highlight_file(file: &FileDiff, ss: &SyntaxSet, theme: &Theme) -> HighlightedFileDiff {
-    let syntax = ss
-        .find_syntax_for_file(&file.new_path)
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| ss.find_syntax_plain_text());
+    let syntax = syntax_for_virtual_path(ss, &file.new_path);
 
     let mut highlighter = syntect::easy::HighlightLines::new(syntax, theme);
 
@@ -146,6 +169,23 @@ fn highlight_file(file: &FileDiff, ss: &SyntaxSet, theme: &Theme) -> Highlighted
         added_count,
         removed_count,
     }
+}
+
+fn syntax_for_virtual_path<'a>(
+    ss: &'a SyntaxSet,
+    path: &str,
+) -> &'a syntect::parsing::SyntaxReference {
+    Path::new(path)
+        .extension()
+        .and_then(OsStr::to_str)
+        .and_then(|extension| ss.find_syntax_by_extension(extension))
+        .or_else(|| {
+            Path::new(path)
+                .file_name()
+                .and_then(OsStr::to_str)
+                .and_then(|name| ss.find_syntax_by_token(name))
+        })
+        .unwrap_or_else(|| ss.find_syntax_plain_text())
 }
 
 fn highlight_line_content(
@@ -729,6 +769,32 @@ mod tests {
         let deserialized: HighlightedDiff =
             serde_json::from_str(&json).expect("should deserialize");
         assert_eq!(deserialized.files.len(), result.files.len());
+    }
+
+    #[test]
+    fn highlight_text_uses_virtual_file_extension() {
+        let result = highlight_text(
+            "font-size = 14\n# comment\n",
+            "ghostty.ini",
+            "base16-ocean.dark",
+        );
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(
+            result[0]
+                .iter()
+                .map(|span| span.text.as_str())
+                .collect::<String>(),
+            "font-size = 14"
+        );
+        assert_eq!(
+            result[1]
+                .iter()
+                .map(|span| span.text.as_str())
+                .collect::<String>(),
+            "# comment"
+        );
+        assert!(result[0].iter().any(|span| span.fg.is_some()));
     }
 
     #[test]

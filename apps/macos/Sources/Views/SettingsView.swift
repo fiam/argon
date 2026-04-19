@@ -364,13 +364,18 @@ struct SettingsView: View {
           }
 
           ZStack(alignment: .topLeading) {
-            TextEditor(text: $ghosttyConfigurationDraft)
-              .font(.system(.body, design: .monospaced))
-              .frame(height: 170)
-              .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                  .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
-              )
+            // SwiftUI's TextEditor cannot render the attributed syntax highlighting
+            // used for Ghostty config tokens, so this field uses an NSTextView wrapper.
+            GhosttyConfigurationTextEditor(
+              text: $ghosttyConfigurationDraft,
+              fontSize: NSFont.preferredFont(forTextStyle: .body).pointSize,
+              theme: highlightTheme
+            )
+            .frame(height: 170)
+            .overlay(
+              RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+            )
 
             if ghosttyConfigurationDraft.isEmpty {
               Text("# Optional Ghostty overrides")
@@ -455,6 +460,10 @@ struct SettingsView: View {
 
   private var hasUnsavedGhosttyConfigurationChanges: Bool {
     ghosttyConfigurationDraft != appliedGhosttyConfigurationText
+  }
+
+  private var highlightTheme: String {
+    colorScheme == .dark ? "base16-ocean.dark" : "base16-ocean.light"
   }
 
   private var terminalPreviewDarkModeBinding: Binding<Bool> {
