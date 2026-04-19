@@ -623,6 +623,9 @@ pub fn profile_source(policy: &EffectiveSandboxPolicy) -> String {
         "(import \"system.sb\")".to_string(),
         "(import \"com.apple.corefoundation.sb\")".to_string(),
         "(corefoundation)".to_string(),
+        "(system-network)".to_string(),
+        "(allow network*)".to_string(),
+        "(allow network-outbound (remote ip))".to_string(),
         "(allow system-audit system-sched mach-task-name process-fork lsopen)".to_string(),
         "(allow process-info* (target self) (target children) (target same-sandbox))".to_string(),
         "(allow signal (target self) (target children) (target same-sandbox))".to_string(),
@@ -1387,7 +1390,12 @@ fn resolve_pending_exec_commands(
         }
     }
 
-    if context.launch == LaunchKind::Agent && context.agent.is_none() {
+    let explicit_agent = state
+        .vars
+        .get("AGENT")
+        .map(|value| !value.is_empty())
+        .unwrap_or(false);
+    if context.launch == LaunchKind::Agent && !explicit_agent {
         state
             .warnings
             .push("agent launch requested without an explicit agent family".to_string());
@@ -1668,6 +1676,12 @@ fn seed_variables(context: &SandboxContext) -> Result<BTreeMap<String, String>, 
     vars.insert("ARGC".to_string(), context.argv.len().to_string());
     for (index, value) in context.argv.iter().enumerate() {
         vars.insert(format!("ARGV{index}"), value.clone());
+    }
+    if let Some(argv0) = context.argv.first() {
+        let basename = basename(Path::new(argv0))
+            .unwrap_or(argv0.as_str())
+            .to_string();
+        vars.insert("ARGV0_BASENAME".to_string(), basename);
     }
 
     Ok(vars)
@@ -2316,12 +2330,76 @@ fn push_unique_string(values: &mut Vec<String>, value: String) {
 
 fn path_aliases(path: &Path) -> Vec<PathBuf> {
     let mut aliases = Vec::new();
-    push_unique_path(&mut aliases, path.to_path_buf());
+    let mut pending = vec![path.to_path_buf()];
+
+    while let Some(candidate) = pending.pop() {
+        if aliases.contains(&candidate) {
+            continue;
+        }
+        aliases.push(candidate.clone());
+
+        for expanded in symlink_expanded_paths(&candidate) {
+            if !aliases.contains(&expanded) && !pending.contains(&expanded) {
+                pending.push(expanded);
+            }
+        }
+    }
+
     let canonical = normalize_absolute_path(path.to_path_buf());
-    if canonical != path {
-        push_unique_path(&mut aliases, canonical);
+    if !aliases.contains(&canonical) {
+        aliases.push(canonical);
     }
     aliases
+}
+
+fn symlink_expanded_paths(path: &Path) -> Vec<PathBuf> {
+    let mut expanded = Vec::new();
+
+    for prefix in path_prefixes(path) {
+        let Ok(metadata) = fs::symlink_metadata(&prefix) else {
+            continue;
+        };
+        if !metadata.file_type().is_symlink() {
+            continue;
+        }
+
+        let Ok(target) = fs::read_link(&prefix) else {
+            continue;
+        };
+
+        let base_dir = prefix.parent().unwrap_or(Path::new("/"));
+        let resolved_target =
+            normalize_absolute_input_path(resolve_relative_path(&target, base_dir));
+        let remainder = path.strip_prefix(&prefix).unwrap_or_else(|_| Path::new(""));
+        let rewritten = normalize_absolute_input_path(resolved_target.join(remainder));
+        push_unique_path(&mut expanded, rewritten);
+    }
+
+    expanded
+}
+
+fn path_prefixes(path: &Path) -> Vec<PathBuf> {
+    use std::path::Component;
+
+    let mut prefixes = Vec::new();
+    let mut current = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => current.push(prefix.as_os_str()),
+            Component::RootDir => current.push(Path::new("/")),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let _ = current.pop();
+            }
+            Component::Normal(part) => {
+                current.push(part);
+                prefixes.push(current.clone());
+            }
+        }
+    }
+
+    prefixes
 }
 
 fn current_active(control: &[ControlFrame]) -> bool {
@@ -2446,6 +2524,8 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use tempfile::tempdir;
 
     fn context_for(repo_root: &Path, argv: &[&str]) -> SandboxContext {
@@ -2478,6 +2558,71 @@ mod tests {
         assert!(names.contains(&"agent".to_string()));
         assert!(names.contains(&"os/macos".to_string()));
         assert!(names.contains(&"shell/zsh".to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_aliases_expand_parent_and_leaf_symlinks() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+
+        fs::create_dir_all(root.join("real/etc")).expect("real etc");
+        fs::create_dir_all(root.join("real/var/run")).expect("real var run");
+        symlink("real/etc", root.join("etc")).expect("etc symlink");
+        symlink("real/var", root.join("var")).expect("var symlink");
+        symlink("../var/run/resolv.conf", root.join("real/etc/resolv.conf"))
+            .expect("resolv symlink");
+        fs::write(
+            root.join("real/var/run/resolv.conf"),
+            "nameserver 1.1.1.1\n",
+        )
+        .expect("resolv");
+
+        let aliases = path_aliases(&root.join("etc/resolv.conf"));
+
+        assert!(
+            aliases
+                .iter()
+                .any(|path| path == &root.join("etc/resolv.conf"))
+        );
+        assert!(
+            aliases
+                .iter()
+                .any(|path| path == &root.join("real/etc/resolv.conf"))
+        );
+        assert!(
+            aliases
+                .iter()
+                .any(|path| path == &root.join("var/run/resolv.conf"))
+        );
+        assert!(
+            aliases
+                .iter()
+                .any(|path| path == &root.join("real/var/run/resolv.conf"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_aliases_expand_symlinked_parent_for_missing_leaf() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+
+        fs::create_dir_all(root.join("real/etc")).expect("real etc");
+        symlink("real/etc", root.join("etc")).expect("etc symlink");
+
+        let aliases = path_aliases(&root.join("etc/missing.conf"));
+
+        assert!(
+            aliases
+                .iter()
+                .any(|path| path == &root.join("etc/missing.conf"))
+        );
+        assert!(
+            aliases
+                .iter()
+                .any(|path| path == &root.join("real/etc/missing.conf"))
+        );
     }
 
     #[test]
@@ -2541,6 +2686,52 @@ mod tests {
                 .iter()
                 .any(|path| path == Path::new("/System"))
         );
+        assert!(
+            explain
+                .policy
+                .readable_paths
+                .iter()
+                .any(|path| path == Path::new("/etc/resolv.conf"))
+        );
+        assert!(
+            explain
+                .policy
+                .readable_paths
+                .iter()
+                .any(|path| path == Path::new("/private/etc/resolv.conf"))
+        );
+        assert!(
+            explain
+                .policy
+                .readable_paths
+                .iter()
+                .any(|path| path == Path::new("/var/run/resolv.conf"))
+        );
+        assert!(
+            explain
+                .policy
+                .readable_paths
+                .iter()
+                .any(|path| path == Path::new("/private/var/run/resolv.conf"))
+        );
+        if Path::new("/opt/homebrew/etc").is_dir() {
+            assert!(
+                explain
+                    .policy
+                    .readable_roots
+                    .iter()
+                    .any(|path| path == Path::new("/opt/homebrew/etc"))
+            );
+        }
+        if Path::new("/usr/local/etc").is_dir() {
+            assert!(
+                explain
+                    .policy
+                    .readable_roots
+                    .iter()
+                    .any(|path| path == Path::new("/usr/local/etc"))
+            );
+        }
         assert!(
             !explain
                 .policy
@@ -2681,6 +2872,44 @@ mod tests {
     }
 
     #[test]
+    fn use_agent_infers_agent_family_from_argv0_basename() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        let bin_root = temp.path().join("bin");
+        fs::create_dir_all(&repo_root).expect("repo");
+        fs::create_dir_all(&bin_root).expect("bin");
+        fs::create_dir_all(repo_root.join("home")).expect("home");
+        fs::create_dir_all(repo_root.join("home/.codex")).expect("agent state");
+        fs::write(bin_root.join("codex"), "#!/bin/sh\nexit 0\n").expect("fake codex");
+        fs::write(repo_root.join(REPO_SANDBOXFILE), "USE agent\n").expect("sandbox");
+
+        let argv0 = bin_root.join("codex").display().to_string();
+        let mut context = context_for(&repo_root, &[argv0.as_str()]);
+        context.launch = LaunchKind::Agent;
+        context.agent = None;
+        context.env.insert(
+            "PATH".to_string(),
+            format!("{}:/bin:/usr/bin", bin_root.display()),
+        );
+
+        let explain = explain(&context, &[]).expect("explain");
+
+        assert_eq!(explain.context["ARGV0_BASENAME"], "codex");
+        assert!(
+            explain
+                .sources
+                .iter()
+                .any(|source| source.name == "agent/codex" && source.kind == "builtin")
+        );
+        assert!(
+            explain
+                .warnings
+                .iter()
+                .all(|warning| !warning.contains("without an explicit agent family"))
+        );
+    }
+
+    #[test]
     fn switch_default_branch_runs_when_no_case_matches() {
         let temp = tempdir().expect("tempdir");
         let repo_root = temp.path().join("repo");
@@ -2798,6 +3027,9 @@ END
 
         assert!(profile.contains("(deny default)"));
         assert!(profile.contains("(import \"system.sb\")"));
+        assert!(profile.contains("(system-network)"));
+        assert!(profile.contains("(allow network*)"));
+        assert!(profile.contains("(allow network-outbound (remote ip))"));
         assert!(profile.contains("READ_LITERAL_0"));
         assert!(!profile.contains("(allow file-read* file-test-existence)\n"));
 
@@ -3156,6 +3388,7 @@ END
         let explain = explain(&context, &[]).expect("explain");
         assert_eq!(explain.context["ARGC"], "2");
         assert_eq!(explain.context["ARGV0"], "tool");
+        assert_eq!(explain.context["ARGV0_BASENAME"], "tool");
         assert!(
             explain
                 .policy

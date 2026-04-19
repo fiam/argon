@@ -25,6 +25,12 @@ END
 IF TEST -d /private/etc/ssl
 FS ALLOW READ /private/etc/ssl/
 END
+IF TEST -f /etc/resolv.conf
+FS ALLOW READ /etc/resolv.conf
+END
+IF TEST -d /opt/homebrew/etc
+FS ALLOW READ /opt/homebrew/etc/
+END
 IF TEST -d /opt/homebrew/lib
 FS ALLOW READ /opt/homebrew/lib/
 EXEC ALLOW /opt/homebrew/lib/
@@ -43,6 +49,9 @@ END
 IF TEST -d /usr/local/lib
 FS ALLOW READ /usr/local/lib/
 EXEC ALLOW /usr/local/lib/
+END
+IF TEST -d /usr/local/etc
+FS ALLOW READ /usr/local/etc/
 END
 IF TEST -d /usr/local/share
 FS ALLOW READ /usr/local/share/

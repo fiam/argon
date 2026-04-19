@@ -1,3 +1,14 @@
+IF TEST -z "$AGENT"
+SWITCH "$ARGV0_BASENAME"
+CASE "claude"
+SET AGENT claude
+CASE "codex"
+SET AGENT codex
+CASE "gemini"
+SET AGENT gemini
+END
+END
+
 SWITCH "$AGENT"
 CASE "claude"
 USE agent/claude

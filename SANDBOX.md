@@ -222,6 +222,7 @@ Argon also seeds a small set of derived variables:
 - `$AGENT`
 - `$ARGC`
 - `$ARGV0`, `$ARGV1`, ...
+- `$ARGV0_BASENAME`
 
 `SET` can define new variables for later rules:
 
@@ -297,6 +298,10 @@ binary and the shell's history file when those variables are available. It
 does not automatically grant access to shell startup files, prompt tools, or
 other personal configuration under your home directory. If a shell needs more
 than that, add explicit rules in `Sandboxfile` or `Sandboxfile.local`.
+
+`USE agent` dispatches from `$AGENT` when the launcher provides an explicit
+agent family. If `$AGENT` is unset, it falls back to `$ARGV0_BASENAME` for
+direct launches such as `codex` or `/opt/homebrew/bin/codex`.
 
 Inspect builtins with:
 
