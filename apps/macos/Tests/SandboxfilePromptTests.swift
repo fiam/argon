@@ -26,6 +26,7 @@ struct SandboxfilePromptTests {
     #expect(prompt?.message.contains("customize it later by editing `Sandboxfile`") == true)
     #expect(prompt?.message.contains("shells and agents") == true)
     #expect(prompt?.message.contains("includes a link to its docs") == true)
+    #expect(prompt?.message.contains("$HOME/.Sandboxfile") == true)
   }
 
   @Test("prompt is skipped when any ancestor Sandboxfile already exists")

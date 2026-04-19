@@ -76,7 +76,9 @@ chain, including `.Sandboxfile` and legacy `.Sanboxfile` variants. It
 currently covers filesystem writes, executable policy, environment shaping,
 and command interception. Network policy is not implemented yet. Repo
 policies can also include optional relative modules such as
-`./Sandboxfile.local`. Use `argon sandbox check` to validate the resolved
+`./Sandboxfile.local`, and users can create `$HOME/.Sandboxfile` for
+policy that should apply after repo-local sandbox files. Use
+`argon sandbox check` to validate the resolved
 policy stack for the current launch context. In the macOS app, requesting a
 sandboxed shell or agent with no resolved `Sandboxfile` shows a confirmation
 dialog that explains the default scaffold and creates it before launch.

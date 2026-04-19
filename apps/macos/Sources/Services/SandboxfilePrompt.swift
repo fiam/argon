@@ -32,39 +32,12 @@ struct SandboxfilePromptRequest: Identifiable, Equatable, Sendable {
   }
 
   var message: String {
-    """
-    Argon needs a Sandboxfile before launching this \(launchKind.displayName).
-
-    The default Sandboxfile starts from a minimal environment and no filesystem access, then adds:
-    • read and write access to this repository
-    • the built-in `os`, `shell`, and `agent` modules
-    • an optional `Sandboxfile.local` include for local overrides
-
-    `USE os` allows access to the operating system's shared filesystem and runtime files used by shells and agents without exposing your personal directories.
-
-    The generated `Sandboxfile` includes a link to its docs at the top, and you can customize it later by editing `Sandboxfile`.
-    """
+    SandboxfileHelpContent.promptMessage(for: launchKind.displayName)
   }
 }
 
 func renderSandboxfile() -> String {
-  [
-    "# This file describes the Argon Sandbox configuration",
-    "# Full docs: https://github.com/fiam/argon/blob/main/SANDBOX.md",
-    "",
-    "ENV DEFAULT NONE # Start from a minimal process environment by default.",
-    "FS DEFAULT NONE # Start from no filesystem access by default.",
-    "EXEC DEFAULT ALLOW # Allow running any command by default.",
-    "FS ALLOW READ . # Allow reading files inside this repository.",
-    "FS ALLOW WRITE . # Allow edits inside this repository.",
-    "USE os # Allow access to the operating system's shared filesystem without exposing personal directories.",
-    "USE shell # Allow the current shell binary and shell history when they apply.",
-    "USE agent # Load agent-specific config and state when they apply.",
-    "IF TEST -f ./Sandboxfile.local # Check for an optional repo-local sandbox extension file.",
-    "    USE ./Sandboxfile.local",
-    "END",
-    "",
-  ].joined(separator: "\n")
+  SandboxfileHelpContent.defaultScaffold
 }
 
 func sandboxfilePromptIfNeeded(

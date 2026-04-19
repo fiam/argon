@@ -414,31 +414,11 @@ struct SandboxHelpPopover: View {
   }
 
   private var configExample: String {
-    """
-    # This file describes the Argon Sandbox configuration
-    # Full docs: https://github.com/fiam/argon/blob/main/SANDBOX.md
-
-    ENV DEFAULT NONE # Start from a minimal process environment by default.
-    FS DEFAULT NONE # Start from no filesystem access by default.
-    EXEC DEFAULT ALLOW # Allow running any command by default.
-    FS ALLOW READ . # Allow reading files inside this repository.
-    FS ALLOW WRITE . # Allow edits inside this repository.
-    USE os # Allow access to the operating system's shared filesystem without exposing personal directories.
-    USE shell # Allow the current shell binary and shell history when they apply.
-    USE agent # Load agent-specific config and state when they apply.
-    IF TEST -f ./Sandboxfile.local # Check for an optional repo-local sandbox extension file.
-        USE ./Sandboxfile.local
-    END
-    """
+    SandboxfileHelpContent.defaultScaffold.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   private var commandExamples: String {
-    """
-    argon --repo <repo> sandbox config paths
-    argon sandbox init --repo-root <repo>
-    argon sandbox builtin print shell
-    argon sandbox explain --repo-root <repo> --launch shell --interactive
-    """
+    SandboxfileHelpContent.commandExamples
   }
 
   var body: some View {
@@ -486,6 +466,10 @@ struct SandboxHelpPopover: View {
           .font(.caption)
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
+          Text(SandboxfileHelpContent.homeSandboxfileNote)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
           Text(
             "If more than one sandbox file exists in the same directory, Argon errors instead of guessing."
           )
@@ -557,20 +541,6 @@ private struct SandboxPathRow: View {
         .font(.system(.caption, design: .monospaced))
         .textSelection(.enabled)
     }
-  }
-}
-
-private struct SandboxCodeBlock: View {
-  let text: String
-
-  var body: some View {
-    Text(text)
-      .font(.system(.caption, design: .monospaced))
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(10)
-      .background(Color(nsColor: .controlBackgroundColor))
-      .clipShape(RoundedRectangle(cornerRadius: 8))
-      .textSelection(.enabled)
   }
 }
 
