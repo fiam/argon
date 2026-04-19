@@ -67,6 +67,137 @@ struct WorkspaceStateTests {
     #expect(state.activeAgentCount(for: "/tmp/repo") == 0)
   }
 
+  @Test("requesting a sandboxed shell prompts before launch when the repo Sandboxfile is missing")
+  @MainActor
+  func requestingSandboxedShellPromptsBeforeLaunchWhenSandboxfileIsMissing() async {
+    let previousLoader = WorkspaceState.sandboxfilePromptLoader
+    let previousCreator = WorkspaceState.sandboxfileCreator
+    defer {
+      WorkspaceState.sandboxfilePromptLoader = previousLoader
+      WorkspaceState.sandboxfileCreator = previousCreator
+    }
+
+    WorkspaceState.sandboxfilePromptLoader = { repoRoot, launchKind in
+      SandboxfilePromptRequest(
+        repoRoot: repoRoot,
+        repoSandboxfilePath: "\(repoRoot)/Sandboxfile",
+        launchKind: launchKind
+      )
+    }
+
+    let state = makeState()
+    state.requestSandboxedShellLaunch()
+
+    #expect(await waitUntil { state.pendingShellSandboxfilePrompt != nil })
+    #expect(state.pendingShellSandboxfilePrompt?.launchKind == .shell)
+    #expect(state.selectedTerminalTabs.isEmpty)
+  }
+
+  @Test("confirming a sandboxed shell prompt creates the Sandboxfile and opens the shell")
+  @MainActor
+  func confirmingSandboxedShellPromptCreatesSandboxfileAndOpensShell() async {
+    let previousLoader = WorkspaceState.sandboxfilePromptLoader
+    let previousCreator = WorkspaceState.sandboxfileCreator
+    defer {
+      WorkspaceState.sandboxfilePromptLoader = previousLoader
+      WorkspaceState.sandboxfileCreator = previousCreator
+    }
+
+    actor CreatedSandboxfileRecorder {
+      private(set) var repoRoot: String?
+
+      func set(repoRoot: String) {
+        self.repoRoot = repoRoot
+      }
+    }
+
+    let createdSandboxfile = CreatedSandboxfileRecorder()
+    WorkspaceState.sandboxfilePromptLoader = { repoRoot, launchKind in
+      SandboxfilePromptRequest(
+        repoRoot: repoRoot,
+        repoSandboxfilePath: "\(repoRoot)/Sandboxfile",
+        launchKind: launchKind
+      )
+    }
+    WorkspaceState.sandboxfileCreator = { request in
+      await createdSandboxfile.set(repoRoot: request.repoRoot)
+    }
+
+    let state = makeState()
+    state.requestSandboxedShellLaunch()
+    #expect(await waitUntil { state.pendingShellSandboxfilePrompt != nil })
+
+    state.confirmSandboxedShellLaunch()
+
+    #expect(await waitUntil { state.selectedTerminalTabs.count == 1 })
+    #expect(await createdSandboxfile.repoRoot == "/tmp/repo")
+    #expect(state.selectedTerminalTab?.title == "Shell 1")
+    #expect(state.pendingShellSandboxfilePrompt == nil)
+  }
+
+  @Test("requesting a sandboxed shell opens immediately when no prompt is needed")
+  @MainActor
+  func requestingSandboxedShellOpensImmediatelyWhenNoPromptIsNeeded() async {
+    let previousLoader = WorkspaceState.sandboxfilePromptLoader
+    let previousCreator = WorkspaceState.sandboxfileCreator
+    defer {
+      WorkspaceState.sandboxfilePromptLoader = previousLoader
+      WorkspaceState.sandboxfileCreator = previousCreator
+    }
+
+    WorkspaceState.sandboxfilePromptLoader = { _, _ in nil }
+
+    let state = makeState()
+    state.requestSandboxedShellLaunch()
+
+    #expect(await waitUntil { state.selectedTerminalTabs.count == 1 })
+    #expect(state.pendingShellSandboxfilePrompt == nil)
+    #expect(state.selectedTerminalTab?.title == "Shell 1")
+  }
+
+  @Test("multiple sandboxed shell requests coalesce behind one prompt and restore all tabs")
+  @MainActor
+  func multipleSandboxedShellRequestsCoalesceBehindOnePrompt() async {
+    let previousLoader = WorkspaceState.sandboxfilePromptLoader
+    let previousCreator = WorkspaceState.sandboxfileCreator
+    defer {
+      WorkspaceState.sandboxfilePromptLoader = previousLoader
+      WorkspaceState.sandboxfileCreator = previousCreator
+    }
+
+    actor CreationRecorder {
+      private(set) var count = 0
+
+      func record() {
+        count += 1
+      }
+    }
+
+    let recorder = CreationRecorder()
+    WorkspaceState.sandboxfilePromptLoader = { repoRoot, launchKind in
+      try? await Task.sleep(for: .milliseconds(50))
+      return SandboxfilePromptRequest(
+        repoRoot: repoRoot,
+        repoSandboxfilePath: "\(repoRoot)/Sandboxfile",
+        launchKind: launchKind
+      )
+    }
+    WorkspaceState.sandboxfileCreator = { _ in
+      await recorder.record()
+    }
+
+    let state = makeState()
+    state.requestSandboxedShellLaunch()
+    state.requestSandboxedShellLaunch()
+
+    #expect(await waitUntil { state.pendingShellSandboxfilePrompt != nil })
+    state.confirmSandboxedShellLaunch()
+
+    #expect(await waitUntil { state.selectedTerminalTabs.count == 2 })
+    #expect(await recorder.count == 1)
+    #expect(state.selectedTerminalTabs.map(\.title) == ["Shell 1", "Shell 2"])
+  }
+
   @Test("custom agent tabs derive titles from the command and hash duplicate names")
   @MainActor
   func customAgentTabsDeriveTitlesFromCommandName() throws {

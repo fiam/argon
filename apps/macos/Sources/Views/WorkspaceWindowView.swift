@@ -225,6 +225,21 @@ private struct WorkspaceContentView: View {
     } message: {
       Text(mergeBackDialogMessage)
     }
+    .alert(
+      workspaceState.pendingShellSandboxfilePrompt?.title ?? "Create Sandboxfile?",
+      isPresented: pendingShellSandboxfileAlertIsPresented
+    ) {
+      Button(workspaceState.pendingShellSandboxfilePrompt?.confirmTitle ?? "Create and Launch") {
+        workspaceState.confirmSandboxedShellLaunch()
+      }
+      Button("Cancel", role: .cancel) {
+        workspaceState.dismissShellSandboxfilePrompt()
+      }
+    } message: {
+      if let prompt = workspaceState.pendingShellSandboxfilePrompt {
+        Text(prompt.message)
+      }
+    }
     .onChange(of: workspaceState.pendingReviewAgentTabID) { _, tabID in
       guard let tabID else { return }
       workspaceState.pendingReviewAgentTabID = nil
@@ -242,6 +257,17 @@ private struct WorkspaceContentView: View {
       return true
     }
     return reviewWindowRegistry.state(for: worktreePath) == .opening
+  }
+
+  private var pendingShellSandboxfileAlertIsPresented: Binding<Bool> {
+    Binding(
+      get: { workspaceState.pendingShellSandboxfilePrompt != nil },
+      set: { isPresented in
+        if !isPresented {
+          workspaceState.dismissShellSandboxfilePrompt()
+        }
+      }
+    )
   }
 
   private func handleSelectedWorktreeReviewButton() {
@@ -748,7 +774,7 @@ private struct WorkspaceTerminalDeck: View {
             workspaceState.presentAgentLaunchSheet()
           },
           onNewShell: {
-            workspaceState.openShellTab()
+            workspaceState.requestSandboxedShellLaunch()
           },
           onNewPrivilegedShell: {
             workspaceState.openShellTab(sandboxed: false)
@@ -775,13 +801,7 @@ private struct WorkspaceTerminalDeck: View {
           isPresented: $workspaceState.isPresentingAgentLaunchSheet,
           taskContext: taskContext,
           onLaunch: { options in
-            do {
-              try await workspaceState.launchAgent(using: options)
-              return true
-            } catch {
-              workspaceState.errorMessage = error.localizedDescription
-              return false
-            }
+            await launchWorkspaceAgent(options)
           },
           onExternalLaunch: {
             switch taskContext {
@@ -799,6 +819,16 @@ private struct WorkspaceTerminalDeck: View {
         )
       }
     )
+  }
+
+  private func launchWorkspaceAgent(_ options: WorkspaceAgentLaunchOptions) async -> Bool {
+    do {
+      try await workspaceState.launchAgent(using: options)
+      return true
+    } catch {
+      workspaceState.errorMessage = error.localizedDescription
+      return false
+    }
   }
 
   private func launchExternalReview() async -> Bool {
@@ -1072,7 +1102,7 @@ private struct WorkspaceTerminalStage: View {
         WorkspaceExitedShellOverlay(
           tabTitle: selectedTerminalTab.title,
           onClose: { workspaceState.closeTerminalTab(selectedTerminalTab.id) },
-          onNewShell: { workspaceState.openShellTab() }
+          onNewShell: { workspaceState.requestSandboxedShellLaunch() }
         )
         .padding(24)
         .zIndex(2)
@@ -1355,6 +1385,8 @@ private struct WorkspaceAgentTabSheet: View {
   @State private var sandboxHelp: SandboxHelpData?
   @State private var sandboxHelpError: String?
   @State private var sandboxHelpLoading = false
+  @State private var pendingSandboxfilePrompt: SandboxfilePromptRequest?
+  @State private var pendingSandboxedLaunchOptions: WorkspaceAgentLaunchOptions?
 
   private var selectedSavedAgent: SavedAgentProfile? {
     guard let selectedAgentId else { return nil }
@@ -1488,6 +1520,22 @@ private struct WorkspaceAgentTabSheet: View {
         useCustom = false
       }
     }
+    .alert(
+      pendingSandboxfilePrompt?.title ?? "Create Sandboxfile?",
+      isPresented: pendingSandboxfileAlertIsPresented
+    ) {
+      Button(pendingSandboxfilePrompt?.confirmTitle ?? "Create and Launch") {
+        confirmSandboxedLaunch()
+      }
+      Button("Cancel", role: .cancel) {
+        pendingSandboxedLaunchOptions = nil
+        pendingSandboxfilePrompt = nil
+      }
+    } message: {
+      if let prompt = pendingSandboxfilePrompt {
+        Text(prompt.message)
+      }
+    }
   }
 
   private var canLaunch: Bool {
@@ -1497,6 +1545,18 @@ private struct WorkspaceAgentTabSheet: View {
     }
     guard let selectedSavedAgent else { return false }
     return agentAvailability.status(for: selectedSavedAgent) == .available
+  }
+
+  private var pendingSandboxfileAlertIsPresented: Binding<Bool> {
+    Binding(
+      get: { pendingSandboxfilePrompt != nil },
+      set: { isPresented in
+        if !isPresented {
+          pendingSandboxedLaunchOptions = nil
+          pendingSandboxfilePrompt = nil
+        }
+      }
+    )
   }
 
   private var sheetTitle: String {
@@ -1512,13 +1572,53 @@ private struct WorkspaceAgentTabSheet: View {
 
     isLaunching = true
     Task { @MainActor in
-      let didLaunch = await onLaunch(launchOptions)
-      isLaunching = false
-      guard didLaunch else { return }
-      isPresented = false
-      DispatchQueue.main.async {
-        onDidLaunch()
+      do {
+        if launchOptions.sandboxEnabled,
+          let prompt = try await loadSandboxfilePromptIfNeeded(
+            repoRoot: workspaceState.target.repoRoot,
+            launchKind: .agent
+          )
+        {
+          pendingSandboxedLaunchOptions = launchOptions
+          pendingSandboxfilePrompt = prompt
+          isLaunching = false
+          return
+        }
+
+        await performLaunch(launchOptions)
+      } catch {
+        isLaunching = false
+        workspaceState.errorMessage = error.localizedDescription
       }
+    }
+  }
+
+  private func confirmSandboxedLaunch() {
+    guard let launchOptions = pendingSandboxedLaunchOptions,
+      let prompt = pendingSandboxfilePrompt
+    else { return }
+    pendingSandboxedLaunchOptions = nil
+    pendingSandboxfilePrompt = nil
+    isLaunching = true
+
+    Task { @MainActor in
+      do {
+        try await createRepoSandboxfile(request: prompt)
+        await performLaunch(launchOptions)
+      } catch {
+        isLaunching = false
+        workspaceState.errorMessage = error.localizedDescription
+      }
+    }
+  }
+
+  private func performLaunch(_ launchOptions: WorkspaceAgentLaunchOptions) async {
+    let didLaunch = await onLaunch(launchOptions)
+    isLaunching = false
+    guard didLaunch else { return }
+    isPresented = false
+    DispatchQueue.main.async {
+      onDidLaunch()
     }
   }
 
@@ -1583,9 +1683,8 @@ private struct WorkspaceAgentTabSheet: View {
     Task {
       let result = await Task.detached(priority: .userInitiated) {
         Result {
-          let defaults = try ArgonCLI.sandboxDefaults(repoRoot: repoRoot)
           let paths = try ArgonCLI.sandboxConfigPaths(repoRoot: repoRoot)
-          return SandboxHelpData(repoRoot: repoRoot, defaults: defaults, paths: paths)
+          return SandboxHelpData(repoRoot: repoRoot, paths: paths)
         }
       }.value
 

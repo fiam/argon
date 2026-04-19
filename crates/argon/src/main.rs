@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::io::{self, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -16,8 +18,11 @@ use argon_core::{
 };
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand, ValueEnum};
-use sandbox::{ConfigFormat, ConfigScope, ConfigTarget, SandboxConfig, SandboxPolicy};
+use sandbox::{LaunchKind, SandboxContext};
 use uuid::Uuid;
+
+const MACOS_SANDBOX_LIMITATION_WARNING: &str =
+    "macOS currently enforces write restrictions and exec mediation, but not general read denial";
 
 #[derive(Parser, Debug)]
 #[command(name = "argon", about = "Local PR review loop CLI for agents")]
@@ -99,12 +104,19 @@ enum AgentCommands {
 
 #[derive(Subcommand, Debug)]
 enum SandboxCommands {
-    /// Print the built-in writable paths and roots Argon adds by default.
-    Defaults(SandboxDefaultsArgs),
-    /// Inspect and edit sandbox configuration files.
+    /// Inspect resolved Sandboxfile paths.
     #[command(subcommand)]
     Config(SandboxConfigCommands),
-    /// Run a command inside Argon's filesystem sandbox.
+    /// Create a default Sandboxfile when none exists.
+    Init(SandboxInitArgs),
+    /// Inspect builtin Sandboxfile modules.
+    #[command(subcommand)]
+    Builtin(SandboxBuiltinCommands),
+    /// Validate the discovered Sandboxfile stack for the current launch context.
+    Check(SandboxCheckArgs),
+    /// Resolve and explain the effective sandbox plan.
+    Explain(SandboxExplainArgs),
+    /// Run a command inside Argon's sandbox.
     Exec(SandboxExecArgs),
 }
 
@@ -112,16 +124,14 @@ enum SandboxCommands {
 enum SandboxConfigCommands {
     /// Print the resolved repo and user sandbox config paths.
     Paths(SandboxConfigPathsArgs),
-    /// Enable or disable built-in default writable locations for a config section.
-    SetDefaults(SandboxConfigSetDefaultsArgs),
-    /// Add a writable subtree to a sandbox config section.
-    AddWriteRoot(SandboxConfigPathArgs),
-    /// Remove a writable subtree from a sandbox config section.
-    RemoveWriteRoot(SandboxConfigPathArgs),
-    /// Add a single writable path to a sandbox config section.
-    AddWritePath(SandboxConfigPathArgs),
-    /// Remove a single writable path from a sandbox config section.
-    RemoveWritePath(SandboxConfigPathArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum SandboxBuiltinCommands {
+    /// List builtin Sandboxfile modules.
+    List(SandboxBuiltinListArgs),
+    /// Print a builtin Sandboxfile module.
+    Print(SandboxBuiltinPrintArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -259,21 +269,57 @@ struct PromptArgs {
 
 #[derive(clap::Args, Debug)]
 struct SandboxExecArgs {
-    /// Repository root used to resolve repo-local sandbox config and relative paths.
-    #[arg(long)]
-    repo_root: Option<PathBuf>,
-    /// Writable directory roots whose descendants remain writable.
-    ///
-    /// When omitted, Argon defaults to the current working directory.
-    #[arg(long = "write-root")]
-    write_roots: Vec<PathBuf>,
+    #[command(flatten)]
+    context: SandboxExecutionContextArgs,
     /// Command to run after `--`.
     #[arg(trailing_var_arg = true, required = true, allow_hyphen_values = true)]
     command: Vec<String>,
 }
 
 #[derive(clap::Args, Debug)]
-struct SandboxDefaultsArgs {
+struct SandboxExplainArgs {
+    #[command(flatten)]
+    context: SandboxExecutionContextArgs,
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args, Debug)]
+struct SandboxCheckArgs {
+    #[command(flatten)]
+    context: SandboxExecutionContextArgs,
+    /// Emit machine-readable JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+struct SandboxExecutionContextArgs {
+    /// Repository root used to resolve repo-local Sandboxfile paths.
+    #[arg(long)]
+    repo_root: Option<PathBuf>,
+    /// Writable directory roots whose descendants remain writable.
+    #[arg(long = "write-root")]
+    write_roots: Vec<PathBuf>,
+    /// Launch context used by `USE shell`, `USE agent`, and explain output.
+    #[arg(long, value_enum)]
+    launch: Option<SandboxLaunchArg>,
+    /// Explicit agent family for `USE agent`.
+    #[arg(long = "agent-family")]
+    agent_family: Option<String>,
+    /// Optional session directory to expose in sandbox variables.
+    #[arg(long)]
+    session_dir: Option<PathBuf>,
+    /// Mark the launch as interactive.
+    #[arg(long)]
+    interactive: bool,
+}
+
+#[derive(clap::Args, Debug)]
+struct SandboxInitArgs {
+    #[arg(long)]
+    repo_root: Option<PathBuf>,
     /// Emit machine-readable JSON.
     #[arg(long)]
     json: bool,
@@ -287,62 +333,28 @@ struct SandboxConfigPathsArgs {
 }
 
 #[derive(clap::Args, Debug)]
-struct SandboxConfigSetDefaultsArgs {
-    /// Which config file to edit.
-    #[arg(long, value_enum)]
-    scope: SandboxConfigScopeArg,
-    /// Which config section to edit.
-    #[arg(long, value_enum, default_value = "base")]
-    target: SandboxConfigTargetArg,
-    /// Set `include_defaults = true` for the target section.
-    #[arg(long)]
-    enabled: bool,
-    /// Format to use when creating a new config file.
-    #[arg(long, value_enum)]
-    format: Option<SandboxConfigFormatArg>,
+struct SandboxBuiltinListArgs {
     /// Emit machine-readable JSON.
     #[arg(long)]
     json: bool,
 }
 
 #[derive(clap::Args, Debug)]
-struct SandboxConfigPathArgs {
-    /// Which config file to edit.
-    #[arg(long, value_enum)]
-    scope: SandboxConfigScopeArg,
-    /// Which config section to edit.
-    #[arg(long, value_enum, default_value = "base")]
-    target: SandboxConfigTargetArg,
-    /// Path to add or remove. User-scope paths must be absolute.
-    path: PathBuf,
-    /// Format to use when creating a new config file.
-    #[arg(long, value_enum)]
-    format: Option<SandboxConfigFormatArg>,
+struct SandboxBuiltinPrintArgs {
+    name: String,
+    #[command(flatten)]
+    context: SandboxExecutionContextArgs,
     /// Emit machine-readable JSON.
     #[arg(long)]
     json: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
-enum SandboxConfigScopeArg {
-    User,
-    Repo,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum SandboxConfigFormatArg {
-    Yaml,
-    Yml,
-    Toml,
-    Json,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum SandboxConfigTargetArg {
-    Base,
-    Macos,
-    Linux,
-    Windows,
+enum SandboxLaunchArg {
+    Command,
+    Shell,
+    Agent,
+    Reviewer,
 }
 
 #[derive(clap::Args, Debug)]
@@ -555,33 +567,13 @@ impl From<ReviewModeArg> for ReviewMode {
     }
 }
 
-impl From<SandboxConfigScopeArg> for ConfigScope {
-    fn from(value: SandboxConfigScopeArg) -> Self {
+impl From<SandboxLaunchArg> for LaunchKind {
+    fn from(value: SandboxLaunchArg) -> Self {
         match value {
-            SandboxConfigScopeArg::User => ConfigScope::User,
-            SandboxConfigScopeArg::Repo => ConfigScope::Repo,
-        }
-    }
-}
-
-impl From<SandboxConfigFormatArg> for ConfigFormat {
-    fn from(value: SandboxConfigFormatArg) -> Self {
-        match value {
-            SandboxConfigFormatArg::Yaml => ConfigFormat::Yaml,
-            SandboxConfigFormatArg::Yml => ConfigFormat::Yml,
-            SandboxConfigFormatArg::Toml => ConfigFormat::Toml,
-            SandboxConfigFormatArg::Json => ConfigFormat::Json,
-        }
-    }
-}
-
-impl From<SandboxConfigTargetArg> for ConfigTarget {
-    fn from(value: SandboxConfigTargetArg) -> Self {
-        match value {
-            SandboxConfigTargetArg::Base => ConfigTarget::Base,
-            SandboxConfigTargetArg::Macos => ConfigTarget::Macos,
-            SandboxConfigTargetArg::Linux => ConfigTarget::Linux,
-            SandboxConfigTargetArg::Windows => ConfigTarget::Windows,
+            SandboxLaunchArg::Command => LaunchKind::Command,
+            SandboxLaunchArg::Shell => LaunchKind::Shell,
+            SandboxLaunchArg::Agent => LaunchKind::Agent,
+            SandboxLaunchArg::Reviewer => LaunchKind::Reviewer,
         }
     }
 }
@@ -644,6 +636,10 @@ fn main() {
 }
 
 fn run() -> Result<()> {
+    if sandbox::maybe_run_intercept_shim()? {
+        return Ok(());
+    }
+
     let raw_args: Vec<String> = std::env::args().collect();
     if let Some((path, launch)) = maybe_direct_path_invocation(&raw_args) {
         return run_path_workspace(path, &launch);
@@ -815,8 +811,11 @@ fn run_agent(command: AgentCommands, runtime: &RuntimeOptions) -> Result<()> {
 
 fn run_sandbox(command: SandboxCommands, runtime: &RuntimeOptions) -> Result<()> {
     match command {
-        SandboxCommands::Defaults(args) => run_sandbox_defaults(args),
         SandboxCommands::Config(command) => run_sandbox_config(command, runtime),
+        SandboxCommands::Init(args) => run_sandbox_init(args),
+        SandboxCommands::Builtin(command) => run_sandbox_builtin(command),
+        SandboxCommands::Check(args) => run_sandbox_check(args),
+        SandboxCommands::Explain(args) => run_sandbox_explain(args),
         SandboxCommands::Exec(args) => run_sandbox_exec(args),
     }
 }
@@ -1896,107 +1895,341 @@ fn render_agent_launch_command(
     }
 }
 
-fn run_sandbox_defaults(args: SandboxDefaultsArgs) -> Result<()> {
-    let defaults = SandboxPolicy::built_in_defaults();
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&defaults)?);
-    } else {
-        println!("Built-in writable paths:");
-        for path in defaults.writable_paths() {
-            println!("- {}", path.display());
-        }
-        println!("Built-in writable roots:");
-        for root in defaults.writable_roots() {
-            println!("- {}", root.display());
-        }
-    }
-    Ok(())
-}
-
 fn run_sandbox_config(command: SandboxConfigCommands, runtime: &RuntimeOptions) -> Result<()> {
     match command {
         SandboxConfigCommands::Paths(args) => run_sandbox_config_paths(args, runtime),
-        SandboxConfigCommands::SetDefaults(args) => run_sandbox_config_set_defaults(args, runtime),
-        SandboxConfigCommands::AddWriteRoot(args) => {
-            run_sandbox_config_path_update(args, runtime, ConfigPathOperation::AddRoot)
-        }
-        SandboxConfigCommands::RemoveWriteRoot(args) => {
-            run_sandbox_config_path_update(args, runtime, ConfigPathOperation::RemoveRoot)
-        }
-        SandboxConfigCommands::AddWritePath(args) => {
-            run_sandbox_config_path_update(args, runtime, ConfigPathOperation::AddPath)
-        }
-        SandboxConfigCommands::RemoveWritePath(args) => {
-            run_sandbox_config_path_update(args, runtime, ConfigPathOperation::RemovePath)
-        }
+    }
+}
+
+fn run_sandbox_builtin(command: SandboxBuiltinCommands) -> Result<()> {
+    match command {
+        SandboxBuiltinCommands::List(args) => run_sandbox_builtin_list(args),
+        SandboxBuiltinCommands::Print(args) => run_sandbox_builtin_print(args),
     }
 }
 
 fn run_sandbox_config_paths(args: SandboxConfigPathsArgs, runtime: &RuntimeOptions) -> Result<()> {
-    let repo_root = resolved_sandbox_repo_root(runtime)?;
-    let paths = sandbox::resolved_config_paths(repo_root.as_deref())?;
+    let start_dir = resolved_sandbox_repo_root(runtime)?
+        .unwrap_or(std::env::current_dir().context("failed to read current directory")?);
+    let paths = sandbox::resolved_config_paths(&start_dir)?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&paths)?);
     } else {
-        if let Some(path) = paths.repo_default_path.as_ref() {
-            println!("repo-default: {}", path.display());
+        println!("Start Dir: {}", start_dir.display());
+        if let Some(path) = paths.init_path.as_ref() {
+            println!("Init Path: {}", path.display());
         }
-        if let Some(path) = paths.repo_existing_path.as_ref() {
-            println!("repo-existing: {}", path.display());
-        }
-        println!("user-default: {}", paths.user_default_path.display());
-        if let Some(path) = paths.user_existing_path.as_ref() {
-            println!("user-existing: {}", path.display());
+        println!("Parsed Sandboxfiles:");
+        if paths.existing_paths.is_empty() {
+            println!("- (none)");
+        } else {
+            for path in &paths.existing_paths {
+                println!("- {}", path.display());
+            }
         }
     }
     Ok(())
 }
 
-fn run_sandbox_config_set_defaults(
-    args: SandboxConfigSetDefaultsArgs,
-    runtime: &RuntimeOptions,
-) -> Result<()> {
-    let scope: ConfigScope = args.scope.into();
-    let target: ConfigTarget = args.target.into();
-    let repo_root = resolved_sandbox_repo_root(runtime)?;
-    let mut config = sandbox::load_scope_config(scope, repo_root.as_deref())?.unwrap_or_default();
-    config.section_mut(target).include_defaults = Some(args.enabled);
-    let path = sandbox::save_scope_config(
-        scope,
-        repo_root.as_deref(),
-        &config,
-        args.format.map(Into::into),
-    )?;
-    print_saved_sandbox_config(path, &config, args.json)
+fn run_sandbox_init(args: SandboxInitArgs) -> Result<()> {
+    let current_dir = std::env::current_dir().context("failed to determine current directory")?;
+    let context = SandboxContext::from_process_environment(current_dir.clone());
+    let context = SandboxContext {
+        repo_root: Some(args.repo_root.unwrap_or(current_dir)),
+        ..context
+    };
+    let result = sandbox::ensure_sandboxfile(&context)?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else if result.created {
+        println!("created: {}", result.path.display());
+    } else {
+        println!("existing: {}", result.path.display());
+    }
+    Ok(())
 }
 
-fn run_sandbox_config_path_update(
-    args: SandboxConfigPathArgs,
-    runtime: &RuntimeOptions,
-    operation: ConfigPathOperation,
-) -> Result<()> {
-    let scope: ConfigScope = args.scope.into();
-    let target: ConfigTarget = args.target.into();
-    let path = sandbox::normalize_config_input_path(&args.path)?;
-    validate_sandbox_config_input_path(scope, &path)?;
-    let repo_root = resolved_sandbox_repo_root(runtime)?;
-    let mut config = sandbox::load_scope_config(scope, repo_root.as_deref())?.unwrap_or_default();
-    let section = config.section_mut(target);
+fn run_sandbox_builtin_list(args: SandboxBuiltinListArgs) -> Result<()> {
+    let builtins = sandbox::list_builtin_names();
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&builtins)?);
+    } else {
+        for builtin in builtins {
+            println!("{builtin}");
+        }
+    }
+    Ok(())
+}
 
-    match operation {
-        ConfigPathOperation::AddRoot => upsert_path(&mut section.write_roots, path),
-        ConfigPathOperation::RemoveRoot => remove_path(&mut section.write_roots, &path),
-        ConfigPathOperation::AddPath => upsert_path(&mut section.write_paths, path),
-        ConfigPathOperation::RemovePath => remove_path(&mut section.write_paths, &path),
+fn run_sandbox_builtin_print(args: SandboxBuiltinPrintArgs) -> Result<()> {
+    let context = sandbox_context_from_args(&args.context, &[])?;
+    let preview = sandbox::builtin_preview(&args.name, &context)?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&preview)?);
+        return Ok(());
     }
 
-    let path = sandbox::save_scope_config(
-        scope,
-        repo_root.as_deref(),
-        &config,
-        args.format.map(Into::into),
-    )?;
-    print_saved_sandbox_config(path, &config, args.json)
+    for warning in &preview.warnings {
+        eprintln!("warning: {warning}");
+    }
+    if let Some(resolved_name) = preview.resolved_name.as_ref() {
+        println!("# builtin/{resolved_name}");
+    }
+    if let Some(source) = preview.source.as_ref() {
+        print!("{source}");
+    }
+    Ok(())
+}
+
+fn run_sandbox_check(args: SandboxCheckArgs) -> Result<()> {
+    let context = sandbox_context_from_args(&args.context, &[])?;
+    let check = sandbox::check(&context, &args.context.write_roots)?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&check)?);
+        return Ok(());
+    }
+
+    println!("Sandbox: valid");
+    print_config_search(&check.paths);
+    print_explained_sources(&check.sources);
+    if check.warnings.is_empty() {
+        println!("Warnings:");
+        println!("- (none)");
+    } else {
+        println!("Warnings:");
+        for warning in &check.warnings {
+            println!("- {warning}");
+        }
+    }
+    Ok(())
+}
+
+fn run_sandbox_explain(args: SandboxExplainArgs) -> Result<()> {
+    let context = sandbox_context_from_args(&args.context, &[])?;
+    let explain = sandbox::explain(&context, &args.context.write_roots)?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&explain)?);
+    } else {
+        println!("Launch: {:?}", context.launch);
+        println!("Interactive: {}", context.interactive);
+        println!("Current Dir: {}", context.current_dir.display());
+        if let Some(repo_root) = context.repo_root.as_ref() {
+            println!("Repo Root: {}", repo_root.display());
+        }
+        if let Some(session_dir) = context.session_dir.as_ref() {
+            println!("Session Dir: {}", session_dir.display());
+        }
+        if let Some(shell) = context.shell.as_ref() {
+            match context.shell_path.as_ref() {
+                Some(path) => println!("Shell: {} ({})", shell, path.display()),
+                None => println!("Shell: {shell}"),
+            }
+        }
+        if let Some(agent) = context.agent.as_ref() {
+            println!("Agent: {agent}");
+        }
+        if !explain.warnings.is_empty() {
+            println!("Warnings:");
+            for warning in &explain.warnings {
+                println!("- {warning}");
+            }
+        }
+        print_config_search(&explain.paths);
+        print_explained_sources(&explain.sources);
+        print_filesystem_policy(&explain.policy);
+        print_exec_policy(&explain.policy, &explain.intercepts);
+        print_environment_policy(
+            explain.environment_default,
+            &explain.allowed_environment_patterns,
+            &explain.environment,
+            &explain.removed_environment_keys,
+        );
+    }
+    Ok(())
+}
+
+fn print_config_search(paths: &sandbox::ResolvedConfigPaths) {
+    println!("Parsed Sandboxfiles:");
+    if paths.existing_paths.is_empty() {
+        println!("- (none)");
+        return;
+    }
+
+    for path in &paths.existing_paths {
+        println!("- {}", path.display());
+    }
+}
+
+fn print_explained_sources(sources: &[sandbox::ExplainedSource]) {
+    println!("Sources:");
+    if sources.is_empty() {
+        println!("- (none)");
+        return;
+    }
+
+    for source in sources {
+        match source.path.as_ref() {
+            Some(path) => println!("- {}: {} ({})", source.kind, source.name, path.display()),
+            None => println!("- {}: {}", source.kind, source.name),
+        }
+    }
+}
+
+fn print_filesystem_policy(policy: &sandbox::EffectiveSandboxPolicy) {
+    println!("Filesystem:");
+    println!("- default: {:?}", policy.fs_default);
+    let entries = filesystem_entries(policy);
+    if entries.is_empty() {
+        println!("- paths: (none)");
+        return;
+    }
+
+    println!("- paths:");
+    for entry in entries {
+        println!(
+            "  - {} [{}]",
+            format_filesystem_path(&entry.path, entry.is_directory),
+            filesystem_access_label(entry.read, entry.write)
+        );
+    }
+}
+
+fn print_exec_policy(
+    policy: &sandbox::EffectiveSandboxPolicy,
+    intercepts: &[sandbox::ResolvedIntercept],
+) {
+    println!("Exec:");
+    println!("- default: {:?}", policy.exec_default);
+    print_path_list("Executable Files", &policy.executable_paths);
+    print_path_list("Executable Directories", &policy.executable_roots);
+    println!("Intercepts:");
+    if intercepts.is_empty() {
+        println!("- (none)");
+        return;
+    }
+
+    for intercept in intercepts {
+        println!("- {}", intercept.command_name);
+        println!("  handler: {}", intercept.handler_path.display());
+        if let Some(path) = intercept.real_command_path.as_ref() {
+            println!("  resolved: {}", path.display());
+        }
+        if let Some(path) = intercept.shim_path.as_ref() {
+            println!("  shim: {}", path.display());
+        }
+    }
+}
+
+fn print_environment_policy(
+    environment_default: sandbox::EnvDefault,
+    allowed_environment_patterns: &[String],
+    environment: &BTreeMap<String, String>,
+    removed_environment_keys: &[String],
+) {
+    println!("Environment:");
+    println!("- default: {:?}", environment_default);
+    if allowed_environment_patterns.is_empty() {
+        println!("- allow: (none)");
+    } else {
+        println!("- allow:");
+        for pattern in allowed_environment_patterns {
+            println!("  - {pattern}");
+        }
+    }
+
+    if environment.is_empty() {
+        println!("- set: (none)");
+    } else {
+        println!("- set:");
+        for (key, value) in environment {
+            println!("  - {key}={value}");
+        }
+    }
+
+    if removed_environment_keys.is_empty() {
+        println!("- unset: (none)");
+    } else {
+        println!("- unset:");
+        for key in removed_environment_keys {
+            println!("  - {key}");
+        }
+    }
+}
+
+fn print_path_list(label: &str, paths: &[PathBuf]) {
+    println!("- {}:", label);
+    if paths.is_empty() {
+        println!("  - (none)");
+        return;
+    }
+
+    for path in paths {
+        println!("  - {}", path.display());
+    }
+}
+
+#[derive(Default)]
+struct FilesystemEntry {
+    is_directory: bool,
+    read: bool,
+    write: bool,
+}
+
+struct FilesystemDisplayEntry {
+    path: PathBuf,
+    is_directory: bool,
+    read: bool,
+    write: bool,
+}
+
+fn filesystem_entries(policy: &sandbox::EffectiveSandboxPolicy) -> Vec<FilesystemDisplayEntry> {
+    let mut entries = BTreeMap::<PathBuf, FilesystemEntry>::new();
+
+    for path in &policy.readable_paths {
+        let entry = entries.entry(path.clone()).or_default();
+        entry.read = true;
+    }
+    for path in &policy.readable_roots {
+        let entry = entries.entry(path.clone()).or_default();
+        entry.is_directory = true;
+        entry.read = true;
+    }
+    for path in &policy.writable_paths {
+        let entry = entries.entry(path.clone()).or_default();
+        entry.write = true;
+    }
+    for path in &policy.writable_roots {
+        let entry = entries.entry(path.clone()).or_default();
+        entry.is_directory = true;
+        entry.write = true;
+    }
+
+    entries
+        .into_iter()
+        .map(|(path, entry)| FilesystemDisplayEntry {
+            path,
+            is_directory: entry.is_directory,
+            read: entry.read,
+            write: entry.write,
+        })
+        .collect()
+}
+
+fn format_filesystem_path(path: &Path, is_directory: bool) -> String {
+    let mut display = path.display().to_string();
+    if is_directory && display != "/" {
+        display.push('/');
+    }
+    display
+}
+
+fn filesystem_access_label(read: bool, write: bool) -> &'static str {
+    match (read, write) {
+        (true, true) => "read, write",
+        (true, false) => "read",
+        (false, true) => "write",
+        (false, false) => "none",
+    }
 }
 
 fn run_sandbox_exec(args: SandboxExecArgs) -> Result<()> {
@@ -2004,27 +2237,79 @@ fn run_sandbox_exec(args: SandboxExecArgs) -> Result<()> {
         .command
         .split_first()
         .context("sandbox exec requires a command after `--`")?;
-    let current_dir = std::env::current_dir().context("failed to determine current directory")?;
-    let repo_root = args
-        .repo_root
-        .clone()
-        .unwrap_or_else(|| current_dir.clone());
-    let write_roots = if args.write_roots.is_empty() {
-        vec![current_dir]
-    } else {
-        args.write_roots
-    };
-    let policy = SandboxPolicy::read_only_with_writable_roots_for_repo(
-        write_roots,
-        Some(repo_root.as_path()),
-    )?;
-    sandbox::apply_current_process(&policy)?;
-    exec_command(program, command_args)
+    let context = sandbox_context_from_args(&args.context, &args.command)?;
+    let init = sandbox::ensure_sandboxfile(&context)?;
+    if init.created {
+        eprintln!("created Sandboxfile at {}", init.path.display());
+    }
+
+    let plan = sandbox::build_execution_plan(&context, &args.context.write_roots)?;
+    print_sandbox_warnings(&plan.warnings);
+    sandbox::apply_current_process(&plan.policy)?;
+    exec_command(program, command_args, &plan)
 }
 
-fn exec_command(program: &str, args: &[String]) -> Result<()> {
+fn sandbox_context_from_args(
+    args: &SandboxExecutionContextArgs,
+    command: &[String],
+) -> Result<SandboxContext> {
+    let current_dir = std::env::current_dir().context("failed to determine current directory")?;
+    let env = std::env::vars().collect::<BTreeMap<_, _>>();
+    let shell_path = env
+        .get("SHELL")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let shell = shell_path
+        .as_ref()
+        .and_then(|path| path.file_name().and_then(OsStr::to_str))
+        .map(str::to_owned);
+    let launch = args.launch.map(Into::into).unwrap_or_else(|| {
+        if args.interactive {
+            LaunchKind::Shell
+        } else {
+            LaunchKind::Command
+        }
+    });
+
+    Ok(SandboxContext {
+        repo_root: Some(
+            args.repo_root
+                .clone()
+                .unwrap_or_else(|| current_dir.clone()),
+        ),
+        current_dir,
+        launch,
+        interactive: args.interactive || matches!(launch, LaunchKind::Shell),
+        shell,
+        shell_path,
+        agent: args.agent_family.clone(),
+        session_dir: args.session_dir.clone(),
+        argv: command.to_vec(),
+        env,
+    })
+}
+
+fn print_sandbox_warnings(warnings: &[String]) {
+    for warning in warnings {
+        if warning == MACOS_SANDBOX_LIMITATION_WARNING {
+            continue;
+        }
+        eprintln!("warning: {warning}");
+    }
+}
+
+fn exec_command(
+    program: &str,
+    args: &[String],
+    plan: &sandbox::SandboxExecutionPlan,
+) -> Result<()> {
     let mut command = Command::new(program);
     command.args(args);
+
+    let base_environment = std::env::vars().collect::<BTreeMap<_, _>>();
+    let environment = sandbox::resolved_environment(plan, &base_environment);
+    command.env_clear();
+    command.envs(environment);
 
     #[cfg(unix)]
     {
@@ -2079,51 +2364,6 @@ fn resolved_sandbox_repo_root(runtime: &RuntimeOptions) -> Result<Option<PathBuf
     }
     let current_dir = std::env::current_dir().context("failed to read current directory")?;
     Ok(Some(current_dir))
-}
-
-fn print_saved_sandbox_config(path: PathBuf, config: &SandboxConfig, json: bool) -> Result<()> {
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "path": path,
-                "config": config,
-            }))?
-        );
-    } else {
-        println!("path: {}", path.display());
-        println!("base-write-paths: {}", config.base.write_paths.len());
-        println!("base-write-roots: {}", config.base.write_roots.len());
-    }
-    Ok(())
-}
-
-fn upsert_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
-    if !paths.contains(&path) {
-        paths.push(path);
-    }
-}
-
-fn remove_path(paths: &mut Vec<PathBuf>, path: &Path) {
-    paths.retain(|candidate| candidate != path);
-}
-
-fn validate_sandbox_config_input_path(scope: ConfigScope, path: &Path) -> Result<()> {
-    if matches!(scope, ConfigScope::User) && !path.is_absolute() {
-        bail!(
-            "user sandbox config paths must be absolute, use ~ or $HOME if needed: {}",
-            path.display()
-        );
-    }
-    Ok(())
-}
-
-#[derive(Clone, Copy)]
-enum ConfigPathOperation {
-    AddRoot,
-    RemoveRoot,
-    AddPath,
-    RemovePath,
 }
 
 fn shell_command(command: &str) -> Command {

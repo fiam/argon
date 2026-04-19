@@ -1,26 +1,30 @@
 #![cfg(target_os = "macos")]
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, Output};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use tempfile::tempdir;
 
 fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 
+fn run_argon(command: &mut Command) -> Result<Output> {
+    command.output().context("failed to run argon")
+}
+
 #[test]
-fn sandbox_help_lists_exec_command() -> Result<()> {
-    let output = Command::new(env!("CARGO_BIN_EXE_argon"))
-        .arg("sandbox")
-        .arg("--help")
-        .output()
-        .context("failed to run argon sandbox --help")?;
+fn sandbox_help_lists_new_commands() -> Result<()> {
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .arg("sandbox")
+            .arg("--help"),
+    )?;
 
     if !output.status.success() {
-        anyhow::bail!(
+        bail!(
             "argon sandbox --help failed (exit {:?}):\nstdout: {}\nstderr: {}",
             output.status.code(),
             String::from_utf8_lossy(&output.stdout),
@@ -29,57 +33,35 @@ fn sandbox_help_lists_exec_command() -> Result<()> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("exec"), "sandbox help should list exec");
+    assert!(stdout.contains("init"));
+    assert!(stdout.contains("builtin"));
+    assert!(stdout.contains("check"));
+    assert!(stdout.contains("explain"));
+    assert!(stdout.contains("exec"));
     Ok(())
 }
 
 #[test]
-fn user_scope_config_rejects_relative_paths() -> Result<()> {
+fn sandbox_config_paths_reports_sandboxfile_locations() -> Result<()> {
     let temp = tempdir()?;
-    let output = Command::new(env!("CARGO_BIN_EXE_argon"))
-        .env("XDG_CONFIG_HOME", temp.path())
-        .arg("sandbox")
-        .arg("config")
-        .arg("add-write-root")
-        .arg("--scope")
-        .arg("user")
-        .arg("relative/path")
-        .output()
-        .context("failed to run sandbox config add-write-root")?;
+    let repo_root = temp.path().join("repo");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&home)?;
 
-    assert!(
-        !output.status.success(),
-        "relative user config paths should be rejected"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("user sandbox config paths must be absolute"),
-        "unexpected stderr: {stderr}"
-    );
-    Ok(())
-}
-
-#[test]
-fn user_scope_config_expands_home_shorthand() -> Result<()> {
-    let temp = tempdir()?;
-    let fake_home = temp.path().join("home");
-    std::fs::create_dir_all(&fake_home)?;
-    let output = Command::new(env!("CARGO_BIN_EXE_argon"))
-        .env("HOME", &fake_home)
-        .env("XDG_CONFIG_HOME", temp.path())
-        .arg("sandbox")
-        .arg("config")
-        .arg("add-write-root")
-        .arg("--scope")
-        .arg("user")
-        .arg("~/.claude.json.lock")
-        .arg("--json")
-        .output()
-        .context("failed to run sandbox config add-write-root with ~ path")?;
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("config")
+            .arg("paths")
+            .arg("--json"),
+    )?;
 
     if !output.status.success() {
-        anyhow::bail!(
-            "sandbox config add-write-root with ~ failed (exit {:?}):\nstdout: {}\nstderr: {}",
+        bail!(
+            "sandbox config paths failed (exit {:?}):\nstdout: {}\nstderr: {}",
             output.status.code(),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
@@ -87,68 +69,355 @@ fn user_scope_config_expands_home_shorthand() -> Result<()> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains(&fake_home.join(".claude.json.lock").display().to_string()),
-        "expected expanded home path in output: {stdout}"
-    );
+    assert!(stdout.contains("Sandboxfile"));
+    assert!(stdout.contains(".Sandboxfile"));
     Ok(())
 }
 
 #[test]
-fn sandbox_exec_restricts_writes_to_allowed_roots() -> Result<()> {
+fn sandbox_config_paths_reports_compatibility_user_file_when_present() -> Result<()> {
+    let temp = tempdir()?;
+    let home = temp.path().join("home");
+    let repo_root = home.join("repo");
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&home)?;
+    std::fs::write(home.join(".Sanboxfile"), "VERSION 1\nFS DEFAULT NONE\n")?;
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("config")
+            .arg("paths")
+            .arg("--json"),
+    )?;
+
+    if !output.status.success() {
+        bail!(
+            "sandbox config paths with compatibility file failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"existingPaths\""));
+    assert!(stdout.contains(".Sanboxfile"));
+    Ok(())
+}
+
+#[test]
+fn sandbox_init_creates_default_sandboxfile() -> Result<()> {
+    let temp = tempdir()?;
+    let repo_root = temp.path().join("repo");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&home)?;
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("init")
+            .arg("--json"),
+    )?;
+
+    if !output.status.success() {
+        bail!(
+            "sandbox init failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let sandboxfile = repo_root.join("Sandboxfile");
+    assert!(sandboxfile.exists());
+    let contents = std::fs::read_to_string(&sandboxfile)?;
+    assert!(contents.contains("# This file describes the Argon Sandbox configuration"));
+    assert!(contents.contains("# Full docs: https://github.com/fiam/argon/blob/main/SANDBOX.md"));
+    assert!(contents.contains("ENV DEFAULT NONE"));
+    assert!(contents.contains("FS ALLOW READ ."));
+    assert!(contents.contains("USE os"));
+    assert!(contents.contains("USE shell"));
+    assert!(contents.contains("USE agent"));
+    assert!(contents.contains("IF TEST -f ./Sandboxfile.local"));
+    assert!(contents.contains("USE ./Sandboxfile.local"));
+    Ok(())
+}
+
+#[test]
+fn sandbox_builtin_print_shell_warns_when_unknown() -> Result<()> {
+    let temp = tempdir()?;
+    let repo_root = temp.path().join("repo");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&home)?;
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("SHELL", "/bin/tcsh")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("builtin")
+            .arg("print")
+            .arg("shell")
+            .arg("--json"),
+    )?;
+
+    if !output.status.success() {
+        bail!(
+            "sandbox builtin print shell failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("does not recognize shell"));
+    Ok(())
+}
+
+#[test]
+fn sandbox_check_reports_valid_sandboxfiles() -> Result<()> {
+    let temp = tempdir()?;
+    let repo_root = temp.path().join("repo");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&home)?;
+    std::fs::write(
+        repo_root.join("Sandboxfile"),
+        "FS DEFAULT NONE\nFS ALLOW WRITE .\nUSE os\n",
+    )?;
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("SHELL", "/bin/zsh")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("check"),
+    )?;
+
+    if !output.status.success() {
+        bail!(
+            "sandbox check failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Sandbox: valid"));
+    assert!(stdout.contains("Parsed Sandboxfiles:"));
+    assert!(stdout.contains("Sources:"));
+    Ok(())
+}
+
+#[test]
+fn sandbox_check_reports_invalid_paths_with_line_numbers() -> Result<()> {
+    let temp = tempdir()?;
+    let repo_root = temp.path().join("repo");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&home)?;
+    std::fs::write(
+        repo_root.join("Sandboxfile"),
+        "FS ALLOW READ ./missing-dir/\n",
+    )?;
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("SHELL", "/bin/zsh")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("check"),
+    )?;
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid path"));
+    assert!(stderr.contains("Sandboxfile:1"));
+    assert!(stderr.contains("IF TEST -d"));
+    Ok(())
+}
+
+#[test]
+fn sandbox_explain_reports_env_policy() -> Result<()> {
+    let temp = tempdir()?;
+    let repo_root = temp.path().join("repo");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&home)?;
+    std::fs::write(
+        repo_root.join("Sandboxfile"),
+        r#"
+VERSION 1
+FS DEFAULT NONE
+EXEC DEFAULT ALLOW
+FS ALLOW WRITE .
+USE os
+ENV DEFAULT NONE
+ENV ALLOW HOME
+ENV SET FOO sandboxed
+"#,
+    )?;
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("SHELL", "/bin/zsh")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("explain")
+            .arg("--json"),
+    )?;
+
+    if !output.status.success() {
+        bail!(
+            "sandbox explain failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"environmentDefault\": \"none\""));
+    assert!(stdout.contains("\"allowedEnvironmentPatterns\""));
+    assert!(stdout.contains("\"FOO\": \"sandboxed\""));
+    Ok(())
+}
+
+#[test]
+fn sandbox_explain_lists_detailed_policy_sections() -> Result<()> {
+    let temp = tempdir()?;
+    let home = temp.path().join("home");
+    let repo_root = home.join("repo");
+    std::fs::create_dir_all(repo_root.join(".argon/sandbox/intercepts"))?;
+    std::fs::create_dir_all(repo_root.join(".direnv"))?;
+    std::fs::create_dir_all(&home)?;
+    std::fs::write(repo_root.join("README.md"), "docs\n")?;
+    std::fs::write(
+        repo_root.join("Sandboxfile"),
+        r#"
+FS DEFAULT NONE
+EXEC DEFAULT DENY
+FS ALLOW READ README.md
+FS ALLOW WRITE .
+EXEC ALLOW /bin/echo
+EXEC INTERCEPT echo WITH .argon/sandbox/intercepts/echo.sh
+ENV DEFAULT NONE
+ENV ALLOW HOME
+ENV SET FOO sandboxed
+ENV UNSET BAR
+USE os
+IF TEST -f ./Sandboxfile.local
+    USE ./Sandboxfile.local
+END
+"#,
+    )?;
+    std::fs::write(
+        repo_root.join("Sandboxfile.local"),
+        "FS ALLOW WRITE .direnv\n",
+    )?;
+    std::fs::write(
+        repo_root.join(".argon/sandbox/intercepts/echo.sh"),
+        "#!/bin/sh\nexec \"$ARGON_SANDBOX_REAL_COMMAND\" \"$@\"\n",
+    )?;
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("SHELL", "/bin/zsh")
+            .env("BAR", "remove-me")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("explain"),
+    )?;
+
+    if !output.status.success() {
+        bail!(
+            "sandbox explain failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Parsed Sandboxfiles:"));
+    assert!(stdout.contains("Sources:"));
+    assert!(stdout.contains("Filesystem:"));
+    assert!(stdout.contains("Exec:"));
+    assert!(stdout.contains("Environment:"));
+    assert!(stdout.contains("config:"));
+    assert!(stdout.contains("builtin: os"));
+    assert!(stdout.contains("README.md"));
+    assert!(stdout.contains(".direnv"));
+    assert!(stdout.contains("[read]"));
+    assert!(stdout.contains("[read, write]"));
+    assert!(stdout.contains("/bin/echo"));
+    assert!(stdout.contains("Intercepts:"));
+    assert!(stdout.contains("handler:"));
+    assert!(stdout.contains("FOO=sandboxed"));
+    assert!(stdout.contains("allow:"));
+    assert!(stdout.contains("unset:"));
+    Ok(())
+}
+
+#[test]
+fn sandbox_exec_restricts_writes_to_repo_and_extra_roots() -> Result<()> {
     let temp = tempdir()?;
     let root = temp.path().canonicalize()?;
     let fake_home = root.join("home");
-    let fake_tmp = root.join("tmp");
+    let fake_tmp = root.join("sandbox-tmp");
     let repo_root = root.join("repo");
     let session_root = root.join("session");
-    let state_root = fake_home.join(".local").join("state");
-    let outside_root = fake_home.join("outside");
+    let outside_root = root.join("outside");
     std::fs::create_dir_all(&fake_home)?;
     std::fs::create_dir_all(&fake_tmp)?;
     std::fs::create_dir_all(&repo_root)?;
     std::fs::create_dir_all(&session_root)?;
-    std::fs::create_dir_all(&state_root)?;
     std::fs::create_dir_all(&outside_root)?;
 
     let repo_file = repo_root.join("repo.txt");
     let session_file = session_root.join("session.txt");
-    let state_file = state_root.join("state.txt");
-    let claude_config_file = fake_home.join(".claude.json");
-    let claude_lock_dir = fake_home.join(".claude.json.lock");
-    let claude_lock_file = claude_lock_dir.join("lock.txt");
     let outside_file = outside_root.join("outside.txt");
     let script = format!(
-        "touch {} && touch {} && touch {} && touch {} && mkdir -p {} && touch {} && : > /dev/null && if touch {}; then exit 9; else exit 0; fi",
+        "touch {} && touch {} && if touch {}; then exit 9; else exit 0; fi",
         shell_quote(&repo_file),
         shell_quote(&session_file),
-        shell_quote(&state_file),
-        shell_quote(&claude_config_file),
-        shell_quote(&claude_lock_dir),
-        shell_quote(&claude_lock_file),
-        shell_quote(&outside_file)
+        shell_quote(&outside_file),
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_argon"))
-        .env("HOME", &fake_home)
-        .env("TMPDIR", &fake_tmp)
-        .arg("sandbox")
-        .arg("exec")
-        .arg("--repo-root")
-        .arg(&repo_root)
-        .arg("--write-root")
-        .arg(&repo_root)
-        .arg("--write-root")
-        .arg(&session_root)
-        .arg("--")
-        .arg("/bin/sh")
-        .arg("-c")
-        .arg(&script)
-        .output()
-        .context("failed to run sandbox helper")?;
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &fake_home)
+            .env("TMPDIR", &fake_tmp)
+            .env("SHELL", "/bin/zsh")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("exec")
+            .arg("--repo-root")
+            .arg(&repo_root)
+            .arg("--write-root")
+            .arg(&session_root)
+            .arg("--")
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg(&script),
+    )?;
 
     if !output.status.success() {
-        anyhow::bail!(
+        bail!(
             "sandbox exec failed (exit {:?}):\nstdout: {}\nstderr: {}",
             output.status.code(),
             String::from_utf8_lossy(&output.stdout),
@@ -156,139 +425,168 @@ fn sandbox_exec_restricts_writes_to_allowed_roots() -> Result<()> {
         );
     }
 
-    assert!(repo_file.exists(), "repo root should remain writable");
-    assert!(session_file.exists(), "session dir should remain writable");
-    assert!(
-        state_file.exists(),
-        "default state dir should remain writable"
-    );
-    assert!(
-        claude_config_file.exists(),
-        "Claude config file should remain writable"
-    );
-    assert!(
-        claude_lock_file.exists(),
-        "Claude config lock dir should remain writable"
-    );
-    assert!(
-        !outside_file.exists(),
-        "writes outside the allow-list should be denied"
-    );
+    assert!(repo_file.exists());
+    assert!(session_file.exists());
+    assert!(!outside_file.exists());
     Ok(())
 }
 
 #[test]
-fn sandbox_exec_defaults_write_root_to_current_directory() -> Result<()> {
+fn sandbox_exec_respects_environment_allowlist_mode() -> Result<()> {
+    let temp = tempdir()?;
+    let repo_root = temp.path().join("repo");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&home)?;
+    std::fs::write(
+        repo_root.join("Sandboxfile"),
+        r#"
+VERSION 1
+FS DEFAULT NONE
+EXEC DEFAULT ALLOW
+FS ALLOW WRITE .
+USE os
+ENV DEFAULT NONE
+ENV ALLOW HOME
+ENV ALLOW EXTRA_*
+ENV SET FOO sandboxed
+ENV UNSET PATH
+"#,
+    )?;
+
+    let script = "test \"$HOME\" != \"\" && test \"$FOO\" = sandboxed && test \"$EXTRA_VISIBLE\" = inherited && test -z \"$SECRET_TOKEN\"";
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("PATH", "/usr/bin:/bin")
+            .env("EXTRA_VISIBLE", "inherited")
+            .env("SECRET_TOKEN", "present-before-sandbox")
+            .env("SHELL", "/bin/zsh")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("exec")
+            .arg("--")
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg(script),
+    )?;
+
+    if !output.status.success() {
+        bail!(
+            "sandbox exec env test failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn sandbox_exec_validates_write_roots_before_launch() -> Result<()> {
+    let temp = tempdir()?;
+    let repo_root = temp.path().join("repo");
+    let home = temp.path().join("home");
+    let missing_write_root = temp.path().join("missing-write-root");
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&home)?;
+    std::fs::write(repo_root.join("Sandboxfile"), "FS ALLOW WRITE .\nUSE os\n")?;
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("SHELL", "/bin/zsh")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("exec")
+            .arg("--write-root")
+            .arg(&missing_write_root)
+            .arg("--")
+            .arg("/bin/echo")
+            .arg("ok"),
+    )?;
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid --write-root"));
+    assert!(stderr.contains("must already exist and be directories"));
+    Ok(())
+}
+
+#[test]
+fn sandbox_exec_runs_intercept_handlers_inside_the_sandbox() -> Result<()> {
     let temp = tempdir()?;
     let root = temp.path().canonicalize()?;
-    let fake_home = root.join("home");
-    let fake_tmp = root.join("tmp");
     let repo_root = root.join("repo");
-    let cwd_root = repo_root.join("cwd");
-    let inside_file = cwd_root.join("inside.txt");
-    let outside_file = repo_root.join("outside.txt");
-    std::fs::create_dir_all(&fake_home)?;
-    std::fs::create_dir_all(&fake_tmp)?;
-    std::fs::create_dir_all(&cwd_root)?;
+    let home = root.join("home");
+    let intercept_dir = repo_root.join(".argon/sandbox/intercepts");
+    std::fs::create_dir_all(&intercept_dir)?;
+    std::fs::create_dir_all(&home)?;
 
-    let script = format!(
-        "touch {} && if touch {}; then exit 9; else exit 0; fi",
-        shell_quote(&inside_file),
-        shell_quote(&outside_file)
-    );
+    std::fs::write(
+        repo_root.join("Sandboxfile"),
+        r#"
+VERSION 1
+FS DEFAULT NONE
+EXEC DEFAULT DENY
+FS ALLOW WRITE .
+USE os
+EXEC INTERCEPT aws WITH .argon/sandbox/intercepts/aws.sh
+"#,
+    )?;
 
-    let output = Command::new(env!("CARGO_BIN_EXE_argon"))
-        .env("HOME", &fake_home)
-        .env("TMPDIR", &fake_tmp)
-        .current_dir(&cwd_root)
-        .arg("sandbox")
-        .arg("exec")
-        .arg("--")
-        .arg("/bin/sh")
-        .arg("-c")
-        .arg(&script)
-        .output()
-        .context("failed to run sandbox helper without explicit write-root")?;
+    let intercepted_file = repo_root.join("intercepted.txt");
+    let real_file = repo_root.join("real.txt");
+    let args_file = repo_root.join("args.txt");
+    let manifest_file = repo_root.join("manifest.txt");
+    let handler_path = intercept_dir.join("aws.sh");
+    std::fs::write(
+        &handler_path,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$ARGON_SANDBOX_INTERCEPTED_COMMAND\" > {}\nprintf '%s\\n' \"$ARGON_SANDBOX_REAL_COMMAND\" > {}\nprintf '%s %s\\n' \"$1\" \"$2\" > {}\nif [ -n \"$ARGON_SANDBOX_INTERCEPT_MANIFEST\" ]; then printf '%s\\n' set > {}; exit 14; fi\n",
+            shell_quote(&intercepted_file),
+            shell_quote(&real_file),
+            shell_quote(&args_file),
+            shell_quote(&manifest_file),
+        ),
+    )?;
+    let mut permissions = std::fs::metadata(&handler_path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&handler_path, permissions)?;
+    std::fs::write(repo_root.join("aws"), "#!/bin/sh\nexit 99\n")?;
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("PATH", format!("{}:/bin:/usr/bin", repo_root.display()))
+            .env("SHELL", "/bin/zsh")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("exec")
+            .arg("--repo-root")
+            .arg(&repo_root)
+            .arg("--")
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg("aws first second"),
+    )?;
 
     if !output.status.success() {
-        anyhow::bail!(
-            "sandbox exec without write-root failed (exit {:?}):\nstdout: {}\nstderr: {}",
+        bail!(
+            "sandbox exec intercept test failed (exit {:?}):\nstdout: {}\nstderr: {}",
             output.status.code(),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
     }
 
-    assert!(
-        inside_file.exists(),
-        "cwd should remain writable by default"
+    assert_eq!(std::fs::read_to_string(&intercepted_file)?.trim(), "aws");
+    assert_eq!(
+        std::fs::read_to_string(&real_file)?.trim(),
+        repo_root.join("aws").display().to_string()
     );
-    assert!(
-        !outside_file.exists(),
-        "paths outside the cwd should remain read-only by default"
-    );
-    Ok(())
-}
-
-#[test]
-fn sandbox_exec_allows_standard_system_tmp_root() -> Result<()> {
-    let temp = tempdir()?;
-    let root = temp.path().canonicalize()?;
-    let fake_home = root.join("home");
-    let fake_tmp = root.join("tmp");
-    let cwd_root = root.join("cwd");
-    std::fs::create_dir_all(&fake_home)?;
-    std::fs::create_dir_all(&fake_tmp)?;
-    std::fs::create_dir_all(&cwd_root)?;
-
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("clock went backwards")?
-        .as_nanos();
-    let system_tmp_root = if Path::new("/private/tmp").exists() {
-        Path::new("/private/tmp")
-    } else {
-        Path::new("/tmp")
-    };
-    let temp_dir = system_tmp_root.join(format!("argon-sandbox-{stamp}"));
-    let temp_file = temp_dir.join("ok.txt");
-    let script = format!(
-        "cleanup() {{ rm -f {file} 2>/dev/null || true; rmdir {dir} 2>/dev/null || true; }}; \
-         trap cleanup EXIT; \
-         mkdir -p {dir} && touch {file}",
-        dir = shell_quote(&temp_dir),
-        file = shell_quote(&temp_file)
-    );
-
-    let output = Command::new(env!("CARGO_BIN_EXE_argon"))
-        .env("HOME", &fake_home)
-        .env("TMPDIR", &fake_tmp)
-        .current_dir(&cwd_root)
-        .arg("sandbox")
-        .arg("exec")
-        .arg("--write-root")
-        .arg(&cwd_root)
-        .arg("--")
-        .arg("/bin/sh")
-        .arg("-c")
-        .arg(&script)
-        .output()
-        .context("failed to run sandbox helper for system tmp root")?;
-
-    let _ = std::fs::remove_dir_all(&temp_dir);
-
-    if !output.status.success() {
-        anyhow::bail!(
-            "sandbox exec for system tmp root failed (exit {:?}):\nstdout: {}\nstderr: {}",
-            output.status.code(),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        );
-    }
-
-    assert!(
-        !temp_dir.exists(),
-        "temporary system tmp directory should be cleaned up"
-    );
+    assert_eq!(std::fs::read_to_string(&args_file)?.trim(), "first second");
+    assert!(!manifest_file.exists());
     Ok(())
 }

@@ -51,6 +51,10 @@ struct AgentLaunchSheet: View {
   @State private var focusPrompt = ""
   @State private var customCommand = ""
   @State private var useCustom = false
+  @State private var isLaunching = false
+  @State private var pendingSandboxfilePrompt: SandboxfilePromptRequest?
+  @State private var pendingLaunchProfile: AgentProfile?
+  @State private var pendingLaunchFocusPrompt: String?
 
   private var selectedSavedAgent: SavedAgentProfile? {
     guard let id = selectedAgentId else { return nil }
@@ -171,6 +175,7 @@ struct AgentLaunchSheet: View {
         }
         .accessibilityIdentifier("agent-launch-cancel-button")
         .keyboardShortcut(.cancelAction)
+        .disabled(isLaunching)
 
         Button("Launch") {
           launch()
@@ -194,14 +199,45 @@ struct AgentLaunchSheet: View {
     .onChange(of: agentAvailability.revision) { _, _ in
       syncSelectedAgent()
     }
+    .alert(
+      pendingSandboxfilePrompt?.title ?? "Create Sandboxfile?",
+      isPresented: pendingSandboxfileAlertIsPresented
+    ) {
+      Button(pendingSandboxfilePrompt?.confirmTitle ?? "Create and Launch") {
+        confirmSandboxedLaunch()
+      }
+      Button("Cancel", role: .cancel) {
+        pendingLaunchProfile = nil
+        pendingLaunchFocusPrompt = nil
+        pendingSandboxfilePrompt = nil
+      }
+    } message: {
+      if let prompt = pendingSandboxfilePrompt {
+        Text(prompt.message)
+      }
+    }
   }
 
   private var canLaunch: Bool {
+    guard !isLaunching else { return false }
     if useCustom {
       return !customCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     guard let saved = selectedSavedAgent else { return false }
     return agentAvailability.status(for: saved) == .available
+  }
+
+  private var pendingSandboxfileAlertIsPresented: Binding<Bool> {
+    Binding(
+      get: { pendingSandboxfilePrompt != nil },
+      set: { isPresented in
+        if !isPresented {
+          pendingLaunchProfile = nil
+          pendingLaunchFocusPrompt = nil
+          pendingSandboxfilePrompt = nil
+        }
+      }
+    )
   }
 
   private func launch() {
@@ -231,11 +267,59 @@ struct AgentLaunchSheet: View {
     }
 
     let focus = focusPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    let resolvedFocus = focus.isEmpty ? nil : focus
+    isLaunching = true
+
+    Task { @MainActor in
+      do {
+        if sandboxEnabled,
+          let repoRoot = appState.repoRoot,
+          let prompt = try await loadSandboxfilePromptIfNeeded(
+            repoRoot: repoRoot,
+            launchKind: .reviewer
+          )
+        {
+          pendingLaunchProfile = profile
+          pendingLaunchFocusPrompt = resolvedFocus
+          pendingSandboxfilePrompt = prompt
+          isLaunching = false
+          return
+        }
+
+        performLaunch(profile: profile, focusPrompt: resolvedFocus)
+      } catch {
+        isLaunching = false
+        appState.errorMessage = error.localizedDescription
+      }
+    }
+  }
+
+  private func confirmSandboxedLaunch() {
+    guard let profile = pendingLaunchProfile, let prompt = pendingSandboxfilePrompt else { return }
+    let focusPrompt = pendingLaunchFocusPrompt
+    pendingLaunchProfile = nil
+    pendingLaunchFocusPrompt = nil
+    pendingSandboxfilePrompt = nil
+    isLaunching = true
+
+    Task { @MainActor in
+      do {
+        try await createRepoSandboxfile(request: prompt)
+        performLaunch(profile: profile, focusPrompt: focusPrompt)
+      } catch {
+        isLaunching = false
+        appState.errorMessage = error.localizedDescription
+      }
+    }
+  }
+
+  private func performLaunch(profile: AgentProfile, focusPrompt: String?) {
     appState.launchReviewerAgent(
       profile: profile,
-      focusPrompt: focus.isEmpty ? nil : focus,
+      focusPrompt: focusPrompt,
       sandboxEnabled: sandboxEnabled
     )
+    isLaunching = false
     isPresented = false
   }
 
@@ -253,9 +337,8 @@ struct AgentLaunchSheet: View {
     Task {
       let result = await Task.detached(priority: .userInitiated) {
         Result {
-          let defaults = try ArgonCLI.sandboxDefaults(repoRoot: repoRoot)
           let paths = try ArgonCLI.sandboxConfigPaths(repoRoot: repoRoot)
-          return SandboxHelpData(repoRoot: repoRoot, defaults: defaults, paths: paths)
+          return SandboxHelpData(repoRoot: repoRoot, paths: paths)
         }
       }.value
 
@@ -318,7 +401,6 @@ struct AgentLaunchSheet: View {
 
 struct SandboxHelpData: Sendable {
   let repoRoot: String?
-  let defaults: ArgonCLI.SandboxDefaults
   let paths: ArgonCLI.SandboxConfigPaths
 }
 
@@ -333,25 +415,29 @@ struct SandboxHelpPopover: View {
 
   private var configExample: String {
     """
-    include_defaults: true
-    write_roots:
-      - .direnv
-      - .build
-    write_paths:
-      - /dev/null
+    # This file describes the Argon Sandbox configuration
+    # Full docs: https://github.com/fiam/argon/blob/main/SANDBOX.md
 
-    macos:
-      write_roots:
-        - .swiftpm
+    ENV DEFAULT NONE # Start from a minimal process environment by default.
+    FS DEFAULT NONE # Start from no filesystem access by default.
+    EXEC DEFAULT ALLOW # Allow running any command by default.
+    FS ALLOW READ . # Allow reading files inside this repository.
+    FS ALLOW WRITE . # Allow edits inside this repository.
+    USE os # Allow access to the operating system's shared filesystem without exposing personal directories.
+    USE shell # Load shell config and history when they apply.
+    USE agent # Load agent-specific config and state when they apply.
+    IF TEST -f ./Sandboxfile.local # Check for an optional repo-local sandbox extension file.
+        USE ./Sandboxfile.local
+    END
     """
   }
 
   private var commandExamples: String {
     """
-    argon sandbox defaults
-    argon sandbox config paths --repo <repo>
-    argon sandbox config add-write-root --scope repo .direnv
-    argon sandbox config add-write-root --scope user ~/.cache
+    argon --repo <repo> sandbox config paths
+    argon sandbox init --repo-root <repo>
+    argon sandbox builtin print shell
+    argon sandbox explain --repo-root <repo> --launch shell --interactive
     """
   }
 
@@ -362,7 +448,7 @@ struct SandboxHelpPopover: View {
           Text("Sandbox configuration")
             .font(.headline)
           Text(
-            "Sandboxed agents can write to the repo, the Argon session directory, the built-in defaults below, and any extra paths you add in sandbox config files."
+            "Sandboxed agents resolve policy by walking parent directories upward from the launch directory."
           )
           .font(.caption)
           .foregroundStyle(.secondary)
@@ -378,12 +464,12 @@ struct SandboxHelpPopover: View {
 
           if let help {
             SandboxPathRow(
-              label: "Repo",
-              value: help.paths.repoExistingPath ?? help.paths.repoDefaultPath ?? "Unavailable"
+              label: "Init",
+              value: help.paths.initPath ?? "Unavailable"
             )
             SandboxPathRow(
-              label: "User",
-              value: help.paths.userExistingPath ?? help.paths.userDefaultPath
+              label: "Loaded",
+              value: help.paths.existingPaths.first ?? "None discovered"
             )
           } else if isLoading {
             ProgressView()
@@ -394,12 +480,14 @@ struct SandboxHelpPopover: View {
               .foregroundStyle(.red)
           }
 
-          Text("Only one config file per scope is allowed: `.yaml`, `.yml`, `.toml`, or `.json`.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
           Text(
-            "Repo config paths may be relative to the repo root. User config paths must be absolute."
+            "Argon walks parent directories upward from the launch directory and loads at most one of `Sandboxfile`, `.Sandboxfile`, or `.Sanboxfile` from each directory."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+          Text(
+            "If more than one sandbox file exists in the same directory, Argon errors instead of guessing."
           )
           .font(.caption)
           .foregroundStyle(.secondary)
@@ -407,12 +495,18 @@ struct SandboxHelpPopover: View {
         }
 
         VStack(alignment: .leading, spacing: 6) {
-          Text("YAML syntax")
+          Text("Sandboxfile Syntax")
             .font(.subheadline)
             .fontWeight(.semibold)
           SandboxCodeBlock(text: configExample)
           Text(
-            "Use `include_defaults: false` to replace the built-in defaults instead of extending them."
+            "Use `USE os`, `USE shell`, and `USE agent` to bring in built-in policy modules, then optionally include `./Sandboxfile.local` for local repo overrides."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+          Text(
+            "Bare `EXEC ALLOW git` rules search `PATH` and allow each matching executable. Path-like values such as `./bin/tool` or `/usr/bin/git` refer to specific files."
           )
           .font(.caption)
           .foregroundStyle(.secondary)
@@ -427,32 +521,15 @@ struct SandboxHelpPopover: View {
         }
 
         VStack(alignment: .leading, spacing: 6) {
-          Text("Built-in defaults on \(platformLabel)")
+          Text("Built-ins on \(platformLabel)")
             .font(.subheadline)
             .fontWeight(.semibold)
-
-          if let help {
-            if !help.defaults.writablePaths.isEmpty {
-              Text("Exact paths")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-              SandboxDefaultsList(values: help.defaults.writablePaths)
-            }
-
-            if !help.defaults.writableRoots.isEmpty {
-              Text("Writable roots")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-              SandboxDefaultsList(values: help.defaults.writableRoots)
-            }
-          } else if isLoading {
-            ProgressView()
-              .controlSize(.small)
-          } else if let errorMessage {
-            Text(errorMessage)
-              .font(.caption)
-              .foregroundStyle(.red)
-          }
+          Text(
+            "`USE os`, `USE shell`, and `USE agent` are built-in modules that dispatch from the current launch context. `USE shell` and `USE agent` quietly do nothing when they do not apply."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
         }
       }
       .padding(16)
@@ -488,25 +565,6 @@ private struct SandboxCodeBlock: View {
       .background(Color(nsColor: .controlBackgroundColor))
       .clipShape(RoundedRectangle(cornerRadius: 8))
       .textSelection(.enabled)
-  }
-}
-
-private struct SandboxDefaultsList: View {
-  let values: [String]
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      ForEach(values, id: \.self) { value in
-        Text(value)
-          .font(.system(.caption, design: .monospaced))
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.horizontal, 8)
-          .padding(.vertical, 5)
-          .background(Color(nsColor: .controlBackgroundColor))
-          .clipShape(RoundedRectangle(cornerRadius: 6))
-          .textSelection(.enabled)
-      }
-    }
   }
 }
 

@@ -1,0 +1,7 @@
+ENV ALLOW GEMINI_*
+ENV ALLOW GOOGLE_*
+
+EXEC ALLOW gemini
+IF TEST -d "$HOME/.gemini"
+FS ALLOW WRITE $HOME/.gemini/
+END

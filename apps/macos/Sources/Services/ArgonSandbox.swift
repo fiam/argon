@@ -11,11 +11,17 @@ enum ArgonSandbox {
       executable: cli,
       args: [
         "sandbox", "exec",
+        "--launch", "agent",
+        "--interactive",
+        "--session-dir", sessionDir,
         "--write-root", agent.repoRoot,
         "--write-root", sessionDir,
-        "--",
-        launch.executable,
-      ] + launch.args
+      ]
+        + (sandboxAgentFamily(from: agent.profile.command).map { ["--agent-family", $0] } ?? [])
+        + [
+          "--",
+          launch.executable,
+        ] + launch.args
     )
   }
 }

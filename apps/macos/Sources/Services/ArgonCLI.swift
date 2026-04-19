@@ -1,16 +1,23 @@
 import Foundation
 
 enum ArgonCLI {
-  struct SandboxDefaults: Decodable, Sendable {
-    let writablePaths: [String]
-    let writableRoots: [String]
+  struct SandboxConfigEntry: Decodable, Sendable {
+    let directory: String
+    let sandboxfilePath: String
+    let dotSandboxfilePath: String
+    let compatibilityPath: String
+    let existingPath: String?
   }
 
   struct SandboxConfigPaths: Decodable, Sendable {
-    let repoDefaultPath: String?
-    let repoExistingPath: String?
-    let userDefaultPath: String
-    let userExistingPath: String?
+    let initPath: String?
+    let entries: [SandboxConfigEntry]
+    let existingPaths: [String]
+  }
+
+  struct SandboxInitResult: Decodable, Sendable {
+    let path: String
+    let created: Bool
   }
 
   // MARK: - Session Creation
@@ -242,14 +249,17 @@ enum ArgonCLI {
     return result?.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
-  static func sandboxDefaults(repoRoot: String?) throws -> SandboxDefaults {
-    let output = try run(repoRoot: repoRoot, args: ["sandbox", "defaults", "--json"])
-    return try decode(SandboxDefaults.self, from: output)
-  }
-
   static func sandboxConfigPaths(repoRoot: String?) throws -> SandboxConfigPaths {
     let output = try run(repoRoot: repoRoot, args: ["sandbox", "config", "paths", "--json"])
     return try decode(SandboxConfigPaths.self, from: output)
+  }
+
+  static func sandboxInit(repoRoot: String) throws -> SandboxInitResult {
+    let output = try run(
+      repoRoot: repoRoot,
+      args: ["sandbox", "init", "--repo-root", repoRoot, "--json"]
+    )
+    return try decode(SandboxInitResult.self, from: output)
   }
 
   static func extractAgentPromptText(from output: String) -> String {

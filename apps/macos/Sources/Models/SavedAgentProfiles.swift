@@ -207,6 +207,19 @@ func commandExecutableName(from command: String) -> String {
   return basename.isEmpty ? "agent" : basename
 }
 
+func sandboxAgentFamily(from command: String) -> String? {
+  switch commandExecutableName(from: command).lowercased() {
+  case "claude":
+    "claude"
+  case "codex":
+    "codex"
+  case "gemini":
+    "gemini"
+  default:
+    nil
+  }
+}
+
 func commandExecutableToken(from command: String) -> String {
   let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
   guard !trimmed.isEmpty else { return "agent" }

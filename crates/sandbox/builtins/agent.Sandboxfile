@@ -1,0 +1,12 @@
+SWITCH "$AGENT"
+CASE "claude"
+USE agent/claude
+CASE "codex"
+USE agent/codex
+CASE "gemini"
+USE agent/gemini
+DEFAULT
+IF TEST -n "$AGENT"
+WARN "USE agent does not recognize agent `$AGENT`"
+END
+END

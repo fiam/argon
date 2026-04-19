@@ -60,6 +60,7 @@ struct TerminalLaunchConfiguration: Sendable {
     let launch = UserShell.interactiveLaunchSpec(environment: environment)
     let args =
       ["sandbox", "exec"]
+      + ["--launch", "shell", "--interactive"]
       + writableRoots.flatMap { ["--write-root", $0] }
       + ["--", launch.executable]
       + launch.args
@@ -87,15 +88,26 @@ struct TerminalLaunchConfiguration: Sendable {
     _ command: String,
     currentDirectory: String,
     writableRoots: [String],
+    launchKind: String = "command",
+    agentFamily: String? = nil,
+    sessionDirectory: String? = nil,
     environment: [String: String] = ProcessInfo.processInfo.environment
   ) -> Self {
     let cli = ArgonCLI.cliPath()
     let launch = UserShell.launchSpec(command: command, environment: environment)
-    let args =
-      ["sandbox", "exec"]
+    var args =
+      ["sandbox", "exec", "--launch", launchKind]
       + writableRoots.flatMap { ["--write-root", $0] }
-      + ["--", launch.executable]
-      + launch.args
+    if launchKind == "agent" || launchKind == "shell" {
+      args += ["--interactive"]
+    }
+    if let agentFamily, !agentFamily.isEmpty {
+      args += ["--agent-family", agentFamily]
+    }
+    if let sessionDirectory, !sessionDirectory.isEmpty {
+      args += ["--session-dir", sessionDirectory]
+    }
+    args += ["--", launch.executable] + launch.args
 
     return Self(
       processSpec: SandboxedProcessSpec(executable: cli, args: args),

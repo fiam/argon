@@ -12,8 +12,8 @@ struct ReviewerTerminalTests {
       processSpec: SandboxedProcessSpec(
         executable: "/opt/homebrew/bin/argon",
         args: [
-          "sandbox", "exec", "--write-root", "/tmp/repo path", "--", "/bin/zsh", "-i", "-l", "-c",
-          "echo 'hi'",
+          "sandbox", "exec", "--launch", "agent", "--interactive", "--write-root",
+          "/tmp/repo path", "--", "/bin/zsh", "-i", "-l", "-c", "echo 'hi'",
         ]
       ),
       environment: [:],
@@ -22,11 +22,11 @@ struct ReviewerTerminalTests {
 
     #expect(
       launch.shellCommand
-        == "'/opt/homebrew/bin/argon' 'sandbox' 'exec' '--write-root' '/tmp/repo path' '--' '/bin/zsh' '-i' '-l' '-c' 'echo '\\''hi'\\'''"
+        == "'/opt/homebrew/bin/argon' 'sandbox' 'exec' '--launch' 'agent' '--interactive' '--write-root' '/tmp/repo path' '--' '/bin/zsh' '-i' '-l' '-c' 'echo '\\''hi'\\'''"
     )
     #expect(
       launch.ghosttyCommand
-        == "'/opt/homebrew/bin/argon' 'sandbox' 'exec' '--write-root' '/tmp/repo path' '--' '/bin/zsh' '-i' '-l' '-c' 'echo '\\''hi'\\'''"
+        == "'/opt/homebrew/bin/argon' 'sandbox' 'exec' '--launch' 'agent' '--interactive' '--write-root' '/tmp/repo path' '--' '/bin/zsh' '-i' '-l' '-c' 'echo '\\''hi'\\'''"
     )
   }
 

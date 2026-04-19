@@ -1,0 +1,8 @@
+ENV ALLOW ANTHROPIC_*
+
+EXEC ALLOW claude
+IF TEST -d "$HOME/.claude"
+FS ALLOW WRITE $HOME/.claude/
+END
+FS ALLOW WRITE $HOME/.claude.json
+FS ALLOW WRITE $HOME/.claude.json.lock

@@ -5,6 +5,16 @@ import Foundation
 final class WorkspaceState {
   nonisolated(unsafe) static var tabRestoreTestDelay: Duration?
   nonisolated(unsafe) static var sessionRecordsProvider: (@Sendable () -> [AgentSessionRecord])?
+  nonisolated(unsafe) static var sandboxfilePromptLoader:
+    (@Sendable (String, SandboxfileLaunchKind) async throws -> SandboxfilePromptRequest?) = {
+      repoRoot,
+      launchKind in
+      try await loadSandboxfilePromptIfNeeded(repoRoot: repoRoot, launchKind: launchKind)
+    }
+  nonisolated(unsafe) static var sandboxfileCreator:
+    (@Sendable (SandboxfilePromptRequest) async throws -> Void) = { request in
+      try await createRepoSandboxfile(request: request)
+    }
 
   var worktrees: [DiscoveredWorktree] = []
   var worktreeSummaries: [String: WorktreeDiffSummary] = [:]
@@ -21,6 +31,7 @@ final class WorkspaceState {
   var errorMessage: String?
   var launchWarningMessage: String?
   var restoreFailureMessage: String?
+  var pendingShellSandboxfilePrompt: SandboxfilePromptRequest?
   var isLoadingSelectionDetails = false
   var isLoading = false
   var isLaunchingReview = false
@@ -49,6 +60,8 @@ final class WorkspaceState {
   private var worktreeWatchersByPath: [String: FileWatcher] = [:]
   private var workspaceReloadTask: Task<Void, Never>?
   private var worktreeRefreshTasksByPath: [String: Task<Void, Never>] = [:]
+  private var pendingSandboxedShellLaunchCount = 0
+  private var isResolvingSandboxedShellLaunch = false
   private var pendingRestorableTabsByWorktreePath: [String: [PersistedWorkspaceTerminalTab]] = [:]
   private var pendingTabRestoreTasksByWorktreePath: [String: Task<Void, Never>] = [:]
   private var selectionLoadRequestID: UUID?
@@ -753,6 +766,53 @@ final class WorkspaceState {
     insertTerminalTab(tab, for: worktreePath)
   }
 
+  func requestSandboxedShellLaunch() {
+    pendingSandboxedShellLaunchCount += 1
+    guard pendingShellSandboxfilePrompt == nil, !isResolvingSandboxedShellLaunch else { return }
+    isResolvingSandboxedShellLaunch = true
+
+    Task { @MainActor in
+      defer { isResolvingSandboxedShellLaunch = false }
+      do {
+        if let prompt = try await Self.sandboxfilePromptLoader(target.repoRoot, .shell) {
+          pendingShellSandboxfilePrompt = prompt
+          return
+        }
+        let launchCount = pendingSandboxedShellLaunchCount
+        pendingSandboxedShellLaunchCount = 0
+        for _ in 0..<launchCount {
+          openShellTab()
+        }
+      } catch {
+        pendingSandboxedShellLaunchCount = 0
+        errorMessage = error.localizedDescription
+      }
+    }
+  }
+
+  func dismissShellSandboxfilePrompt() {
+    pendingShellSandboxfilePrompt = nil
+    pendingSandboxedShellLaunchCount = 0
+  }
+
+  func confirmSandboxedShellLaunch() {
+    guard let prompt = pendingShellSandboxfilePrompt else { return }
+    let launchCount = max(pendingSandboxedShellLaunchCount, 1)
+    pendingShellSandboxfilePrompt = nil
+    pendingSandboxedShellLaunchCount = 0
+
+    Task { @MainActor in
+      do {
+        try await Self.sandboxfileCreator(prompt)
+        for _ in 0..<launchCount {
+          openShellTab()
+        }
+      } catch {
+        errorMessage = error.localizedDescription
+      }
+    }
+  }
+
   @discardableResult
   func openAgentTab(_ request: WorkspaceAgentLaunchRequest) -> WorkspaceTerminalTab? {
     guard let worktree = selectedWorktree else { return nil }
@@ -777,7 +837,9 @@ final class WorkspaceState {
       ? TerminalLaunchConfiguration.sandboxedCommand(
         request.command,
         currentDirectory: worktree.path,
-        writableRoots: writableRoots
+        writableRoots: writableRoots,
+        launchKind: "agent",
+        agentFamily: sandboxAgentFamily(from: request.command)
       )
       : TerminalLaunchConfiguration.command(request.command, currentDirectory: worktree.path)
     let resumeArgumentTemplate =
@@ -1089,7 +1151,9 @@ final class WorkspaceState {
         ? TerminalLaunchConfiguration.sandboxedCommand(
           launchCommandDescription,
           currentDirectory: persistedTab.worktreePath,
-          writableRoots: persistedTab.writableRoots
+          writableRoots: persistedTab.writableRoots,
+          launchKind: "agent",
+          agentFamily: sandboxAgentFamily(from: launchCommandDescription)
         )
         : TerminalLaunchConfiguration.command(
           launchCommandDescription,

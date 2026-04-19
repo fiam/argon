@@ -1,0 +1,89 @@
+ENV ALLOW HOME
+ENV ALLOW PATH
+ENV ALLOW TMPDIR
+ENV ALLOW USER
+ENV ALLOW LOGNAME
+ENV ALLOW LANG
+ENV ALLOW LC_*
+ENV ALLOW __CF_USER_TEXT_ENCODING
+
+# Common macOS runtime roots for system tools, frameworks, and common package managers.
+FS ALLOW READ /System/
+FS ALLOW READ /Library/Apple/
+FS ALLOW READ /usr/lib/
+FS ALLOW READ /usr/libexec/
+FS ALLOW READ /usr/share/
+FS ALLOW READ /bin/
+FS ALLOW READ /sbin/
+FS ALLOW READ /usr/bin/
+FS ALLOW READ /usr/sbin/
+IF TEST -d /opt/homebrew/bin
+FS ALLOW READ /opt/homebrew/bin/
+EXEC ALLOW /opt/homebrew/bin/
+END
+IF TEST -d /opt/homebrew/lib
+FS ALLOW READ /opt/homebrew/lib/
+EXEC ALLOW /opt/homebrew/lib/
+END
+IF TEST -d /opt/homebrew/share
+FS ALLOW READ /opt/homebrew/share/
+END
+IF TEST -d /opt/homebrew/Cellar
+FS ALLOW READ /opt/homebrew/Cellar/
+EXEC ALLOW /opt/homebrew/Cellar/
+END
+IF TEST -d /opt/homebrew/opt
+FS ALLOW READ /opt/homebrew/opt/
+EXEC ALLOW /opt/homebrew/opt/
+END
+IF TEST -d /usr/local/bin
+FS ALLOW READ /usr/local/bin/
+EXEC ALLOW /usr/local/bin/
+END
+IF TEST -d /usr/local/lib
+FS ALLOW READ /usr/local/lib/
+EXEC ALLOW /usr/local/lib/
+END
+IF TEST -d /usr/local/share
+FS ALLOW READ /usr/local/share/
+END
+IF TEST -d /usr/local/Cellar
+FS ALLOW READ /usr/local/Cellar/
+EXEC ALLOW /usr/local/Cellar/
+END
+IF TEST -d /usr/local/opt
+FS ALLOW READ /usr/local/opt/
+EXEC ALLOW /usr/local/opt/
+END
+
+EXEC ALLOW /System/
+EXEC ALLOW /usr/lib/
+EXEC ALLOW /usr/libexec/
+EXEC ALLOW /bin/
+EXEC ALLOW /sbin/
+EXEC ALLOW /usr/bin/
+EXEC ALLOW /usr/sbin/
+
+FS ALLOW WRITE /dev/null
+IF TEST -n "$TMPDIR"
+IF TEST -d "$TMPDIR"
+FS ALLOW WRITE $TMPDIR
+END
+END
+FS ALLOW WRITE /tmp
+FS ALLOW WRITE /private/tmp
+FS ALLOW WRITE /var/tmp
+FS ALLOW WRITE /private/var/tmp
+IF TEST -d "$USER_CACHE_HOME"
+FS ALLOW WRITE $USER_CACHE_HOME/
+END
+IF TEST -n "$XDG_CACHE_HOME"
+IF TEST -d "$XDG_CACHE_HOME"
+FS ALLOW WRITE $XDG_CACHE_HOME/
+END
+END
+IF TEST -n "$XDG_STATE_HOME"
+IF TEST -d "$XDG_STATE_HOME"
+FS ALLOW WRITE $XDG_STATE_HOME/
+END
+END

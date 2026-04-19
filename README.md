@@ -69,12 +69,17 @@ or request changes, but only the human reviewer can approve the session.
 
 ## Sandbox
 
-Argon can launch reviewer agents inside a filesystem sandbox. That mode is
-currently optional and disabled by default.
+Argon can launch reviewer agents inside a local sandbox on macOS.
 
-When enabled, Argon keeps the reviewed repo writable, keeps Argon session
-storage writable, and applies additional writable paths from built-in defaults
-plus user and repo sandbox config files.
+That sandbox is driven by `Sandboxfile` discovery up the parent-directory
+chain, including `.Sandboxfile` and legacy `.Sanboxfile` variants. It
+currently covers filesystem writes, executable policy, environment shaping,
+and command interception. Network policy is not implemented yet. Repo
+policies can also include optional relative modules such as
+`./Sandboxfile.local`. Use `argon sandbox check` to validate the resolved
+policy stack for the current launch context. In the macOS app, requesting a
+sandboxed shell or agent with no resolved `Sandboxfile` shows a confirmation
+dialog that explains the default scaffold and creates it before launch.
 
 Sandbox documentation:
 

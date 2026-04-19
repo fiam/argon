@@ -247,7 +247,7 @@ private struct WorkspaceFileCommands: Commands {
       .disabled(commandContext.activeWorkspaceState?.selectedWorktree == nil)
 
       Button {
-        commandContext.activeWorkspaceState?.openShellTab()
+        commandContext.activeWorkspaceState?.requestSandboxedShellLaunch()
       } label: {
         Label("New Shell Tab", systemImage: "terminal")
       }

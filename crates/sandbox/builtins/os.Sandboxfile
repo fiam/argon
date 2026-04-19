@@ -1,0 +1,6 @@
+SWITCH "$OS"
+CASE "macos"
+USE os/macos
+DEFAULT
+WARN "USE os does not recognize OS `$OS`"
+END
