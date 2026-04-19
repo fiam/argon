@@ -339,26 +339,34 @@ private struct WorkspaceWorktreeCommands: Commands {
 
   var body: some Commands {
     CommandMenu("Worktree") {
-      Button("Start Review") {
+      Button(action: {
         startReview()
+      }) {
+        Label("Start Review", systemImage: "text.magnifyingglass")
       }
       .keyboardShortcut("r", modifiers: [.command, .shift])
       .disabled(commandContext.activeWorkspaceState?.selectedWorktree == nil)
 
-      Button("Rebase onto Base") {
+      Button(action: {
         commandContext.activeWorkspaceState?.beginRebaseFlow()
+      }) {
+        Label("Rebase onto Base", systemImage: "arrow.clockwise")
       }
       .keyboardShortcut("r", modifiers: [.command, .option])
       .disabled(!(commandContext.activeWorkspaceState?.canRebaseSelectedWorktree ?? false))
 
-      Button("Merge Back") {
+      Button(action: {
         commandContext.activeWorkspaceState?.beginMergeBackFlow()
+      }) {
+        Label("Merge Back", systemImage: "arrow.triangle.branch")
       }
       .keyboardShortcut("m", modifiers: [.command, .shift])
       .disabled(!(commandContext.activeWorkspaceState?.canMergeBackSelectedWorktree ?? false))
 
-      Button("Open Pull Request") {
+      Button(action: {
         commandContext.activeWorkspaceState?.beginOpenPullRequestFlow()
+      }) {
+        Label("Open Pull Request", systemImage: "arrow.up.forward.app")
       }
       .keyboardShortcut("p", modifiers: [.command, .shift])
       .disabled(
