@@ -85,6 +85,8 @@ struct SettingsView: View {
         .tabItem { Label("General", systemImage: "gearshape") }
       agentsTab
         .tabItem { Label("Agents", systemImage: "person.2") }
+      sandboxTab
+        .tabItem { Label("Sandboxfile", systemImage: "shield") }
       appearanceTab
         .tabItem { Label("Appearance", systemImage: "textformat.size") }
       terminalTab
@@ -225,6 +227,58 @@ struct SettingsView: View {
   }
 
   // MARK: - Appearance Tab
+
+  private var sandboxTab: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 14) {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+          Text("Sandboxfile")
+            .font(.title3)
+            .fontWeight(.semibold)
+          Link("Docs", destination: SandboxfileHelpContent.docsURL)
+            .font(.subheadline)
+            .pointingHandCursorOnHover()
+          Spacer(minLength: 0)
+        }
+
+        Text(SandboxfileHelpContent.settingsOverview)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+
+        GroupBox("Default Sandboxfile") {
+          SandboxCodeBlock(
+            text: SandboxfileHelpContent.defaultScaffold.trimmingCharacters(
+              in: .whitespacesAndNewlines))
+        }
+
+        VStack(alignment: .leading, spacing: 6) {
+          Text("How it layers")
+            .font(.headline)
+            .fontWeight(.semibold)
+          Text("1. A repo `Sandboxfile` defines repo-local sandbox policy.")
+          Text("2. `./Sandboxfile.local` can extend that repo policy for one machine.")
+          Text(
+            "3. `$HOME/.Sandboxfile` can define user-level policy that applies after the repo-local sandbox files."
+          )
+          Text(
+            "4. Argon loads at most one of `Sandboxfile`, `.Sandboxfile`, or `.Sanboxfile` in each directory while walking parent directories upward."
+          )
+        }
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+
+        VStack(alignment: .leading, spacing: 6) {
+          Text("CLI")
+            .font(.headline)
+            .fontWeight(.semibold)
+          SandboxCodeBlock(text: SandboxfileHelpContent.commandExamples)
+        }
+      }
+      .formLikeVStackInsets()
+      .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+  }
 
   private var appearanceTab: some View {
     Form {

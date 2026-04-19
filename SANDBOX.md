@@ -48,6 +48,9 @@ In the macOS app, sandboxed shell, agent, and reviewer launches show a
 confirmation dialog when no `Sandboxfile` is discovered. That dialog
 explains what the default scaffold does, creates it on confirmation, and
 reminds the user that it can be customized later by editing `Sandboxfile`.
+The app Settings window also includes a dedicated Sandbox tab that explains
+the layering model, including `$HOME/.Sandboxfile` as a user-level policy
+file applied after repo-local sandbox files.
 
 The generated scaffold is intentionally small:
 
@@ -85,6 +88,13 @@ system.
 
 `USE ./relative/path` resolves from the including file's directory, so repo
 policies can opt into local extensions such as `./Sandboxfile.local`.
+
+A common setup is:
+
+- `Sandboxfile` in the repo for repo-local policy
+- `./Sandboxfile.local` for machine-local repo extensions
+- `$HOME/.Sandboxfile` for user-level policy applied after the repo-local
+  sandbox files
 
 ## Language
 
