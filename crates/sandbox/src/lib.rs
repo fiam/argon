@@ -640,6 +640,11 @@ pub fn profile_source(policy: &EffectiveSandboxPolicy) -> String {
         "(allow system-audit system-sched mach-task-name process-fork lsopen)".to_string(),
         "(allow process-info* (target self) (target children) (target same-sandbox))".to_string(),
         "(allow signal (target self) (target children) (target same-sandbox))".to_string(),
+        "(allow mach-lookup".to_string(),
+        "       (global-name \"com.apple.securityd.xpc\")".to_string(),
+        "       (global-name \"com.apple.SecurityServer\")".to_string(),
+        "       (global-name \"com.apple.TrustEvaluationAgent\")".to_string(),
+        "       (global-name \"com.apple.ocspd\"))".to_string(),
         "(allow pseudo-tty)".to_string(),
         "(allow file-read-data file-write-data file-ioctl (literal \"/dev/tty\"))".to_string(),
         "(allow file-read* file-write* file-ioctl (literal \"/dev/ptmx\"))".to_string(),
@@ -2757,6 +2762,24 @@ mod tests {
                     .any(|path| path == Path::new("/usr/local/etc"))
             );
         }
+        if Path::new("/Library/Keychains").is_dir() {
+            assert!(
+                explain
+                    .policy
+                    .readable_roots
+                    .iter()
+                    .any(|path| path == Path::new("/Library/Keychains"))
+            );
+        }
+        if Path::new("/Library/Security").is_dir() {
+            assert!(
+                explain
+                    .policy
+                    .readable_roots
+                    .iter()
+                    .any(|path| path == Path::new("/Library/Security"))
+            );
+        }
         assert!(
             !explain
                 .policy
@@ -3250,6 +3273,10 @@ END
         assert!(profile.contains("(system-network)"));
         assert!(profile.contains("(allow network*)"));
         assert!(profile.contains("(allow network-outbound (remote ip))"));
+        assert!(profile.contains("(global-name \"com.apple.securityd.xpc\")"));
+        assert!(profile.contains("(global-name \"com.apple.SecurityServer\")"));
+        assert!(profile.contains("(global-name \"com.apple.TrustEvaluationAgent\")"));
+        assert!(profile.contains("(global-name \"com.apple.ocspd\")"));
         assert!(profile.contains("READ_LITERAL_0"));
         assert!(!profile.contains("(allow file-read* file-test-existence)\n"));
 

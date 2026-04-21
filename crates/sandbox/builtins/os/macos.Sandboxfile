@@ -25,6 +25,12 @@ END
 IF TEST -d /private/etc/ssl
 FS ALLOW READ /private/etc/ssl/
 END
+IF TEST -d /Library/Keychains
+FS ALLOW READ /Library/Keychains/
+END
+IF TEST -d /Library/Security
+FS ALLOW READ /Library/Security/
+END
 IF TEST -f /etc/resolv.conf
 FS ALLOW READ /etc/resolv.conf
 END
