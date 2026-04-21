@@ -1,0 +1,12 @@
+ENV ALLOW GIT_*
+
+EXEC ALLOW git
+IF TEST -f "$HOME/.gitconfig"
+FS ALLOW READ $HOME/.gitconfig
+END
+IF TEST -d "$XDG_CONFIG_HOME/git"
+FS ALLOW READ $XDG_CONFIG_HOME/git/
+END
+IF TEST -f /etc/gitconfig
+FS ALLOW READ /etc/gitconfig
+END

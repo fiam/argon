@@ -18,6 +18,7 @@ pub(crate) enum StatementKind {
     Set { name: String, value: String },
     Use { module: String },
     Warn { message: String },
+    Info { message: String },
     EnvDefault { value: EnvDefault },
     EnvAllow { name: String },
     EnvSet { name: String, value: String },
@@ -134,6 +135,18 @@ fn parse_tokens(
                 ));
             }
             Ok(StatementKind::Warn {
+                message: tokens[1].clone(),
+            })
+        }
+        Some("INFO") => {
+            if tokens.len() != 2 {
+                return Err(parse_error(
+                    source_name,
+                    line_number,
+                    "INFO expects exactly one message",
+                ));
+            }
+            Ok(StatementKind::Info {
                 message: tokens[1].clone(),
             })
         }
@@ -519,6 +532,17 @@ mod tests {
         ));
         assert!(matches!(program.statements[3].kind, StatementKind::Default));
         assert!(matches!(program.statements[5].kind, StatementKind::End));
+    }
+
+    #[test]
+    fn parse_info_statement() {
+        let program = parse_program("builtin", r#"INFO "hello""#).expect("program");
+
+        assert_eq!(program.statements.len(), 1);
+        assert!(matches!(
+            program.statements[0].kind,
+            StatementKind::Info { .. }
+        ));
     }
 
     #[test]

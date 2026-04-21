@@ -1,0 +1,13 @@
+ENV ALLOW SSH_AUTH_SOCK
+
+EXEC ALLOW ssh-keygen
+IF TEST -n "$SSH_AUTH_SOCK"
+FS ALLOW WRITE $SSH_AUTH_SOCK
+END
+IF TEST -f "$HOME/.ssh/config"
+FS ALLOW READ $HOME/.ssh/config
+END
+IF TEST -f "$HOME/.ssh/allowed_signers"
+FS ALLOW READ $HOME/.ssh/allowed_signers
+END
+INFO "USE ssh does not allow SSH private keys or arbitrary public key files; add explicit rules for any on-disk signing key paths"

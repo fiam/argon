@@ -13,6 +13,22 @@ static BUILTINS: &[BuiltinModule] = &[
         source: include_str!("../builtins/os/macos.Sandboxfile"),
     },
     BuiltinModule {
+        name: "git",
+        source: include_str!("../builtins/git.Sandboxfile"),
+    },
+    BuiltinModule {
+        name: "git/signing",
+        source: include_str!("../builtins/git/signing.Sandboxfile"),
+    },
+    BuiltinModule {
+        name: "ssh",
+        source: include_str!("../builtins/ssh.Sandboxfile"),
+    },
+    BuiltinModule {
+        name: "gpg",
+        source: include_str!("../builtins/gpg.Sandboxfile"),
+    },
+    BuiltinModule {
         name: "shell",
         source: include_str!("../builtins/shell.Sandboxfile"),
     },

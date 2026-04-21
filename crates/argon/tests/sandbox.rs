@@ -143,6 +143,7 @@ fn sandbox_init_creates_default_sandboxfile() -> Result<()> {
     assert!(contents.contains("ENV DEFAULT NONE"));
     assert!(contents.contains("FS ALLOW READ ."));
     assert!(contents.contains("USE os"));
+    assert!(contents.contains("USE git"));
     assert!(contents.contains("USE shell"));
     assert!(contents.contains("USE agent"));
     assert!(contents.contains("IF TEST -f ./Sandboxfile.local"));

@@ -1,0 +1,36 @@
+ENV ALLOW GNUPGHOME
+ENV ALLOW GPG_*
+
+EXEC ALLOW gpg
+SET GPG_HOME "$HOME/.gnupg"
+IF TEST -n "$GNUPGHOME"
+SET GPG_HOME "$GNUPGHOME"
+END
+IF TEST -d "$GPG_HOME"
+IF TEST -f "$GPG_HOME/gpg.conf"
+FS ALLOW READ $GPG_HOME/gpg.conf
+END
+IF TEST -f "$GPG_HOME/common.conf"
+FS ALLOW READ $GPG_HOME/common.conf
+END
+IF TEST -f "$GPG_HOME/gpg-agent.conf"
+FS ALLOW READ $GPG_HOME/gpg-agent.conf
+END
+IF TEST -f "$GPG_HOME/pubring.kbx"
+FS ALLOW READ $GPG_HOME/pubring.kbx
+END
+IF TEST -f "$GPG_HOME/pubring.kbx~"
+FS ALLOW READ $GPG_HOME/pubring.kbx~
+END
+IF TEST -f "$GPG_HOME/pubring.gpg"
+FS ALLOW READ $GPG_HOME/pubring.gpg
+END
+IF TEST -f "$GPG_HOME/trustdb.gpg"
+FS ALLOW READ $GPG_HOME/trustdb.gpg
+FS ALLOW WRITE $GPG_HOME/trustdb.gpg
+END
+FS ALLOW WRITE $GPG_HOME/S.gpg-agent
+FS ALLOW WRITE $GPG_HOME/S.gpg-agent.extra
+FS ALLOW WRITE $GPG_HOME/S.gpg-agent.browser
+FS ALLOW WRITE $GPG_HOME/S.gpg-agent.ssh
+END

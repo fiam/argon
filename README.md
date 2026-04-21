@@ -81,7 +81,8 @@ policy that should apply after repo-local sandbox files. Use
 `argon sandbox check` to validate the resolved
 policy stack for the current launch context. In the macOS app, requesting a
 sandboxed shell or agent with no resolved `Sandboxfile` shows a confirmation
-dialog that explains the default scaffold and creates it before launch.
+dialog that explains the default scaffold, including the built-in `git`
+module, and creates it before launch.
 
 Sandbox documentation:
 

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -643,6 +643,7 @@ struct ReviewerFeedback {
 struct SandboxSeatbeltDebugResponse {
     profile: String,
     parameters: Vec<String>,
+    infos: Vec<String>,
     warnings: Vec<String>,
 }
 
@@ -2026,9 +2027,7 @@ fn run_sandbox_builtin_print(args: SandboxBuiltinPrintArgs) -> Result<()> {
         return Ok(());
     }
 
-    for warning in &preview.warnings {
-        eprintln!("warning: {warning}");
-    }
+    print_sandbox_messages(&preview.infos, &preview.warnings);
     if let Some(resolved_name) = preview.resolved_name.as_ref() {
         println!("# builtin/{resolved_name}");
     }
@@ -2049,11 +2048,18 @@ fn run_sandbox_check(args: SandboxCheckArgs) -> Result<()> {
     println!("Sandbox: valid");
     print_config_search(&check.paths);
     print_explained_sources(&check.sources);
-    if check.warnings.is_empty() {
-        println!("Warnings:");
+    println!("Info:");
+    if check.infos.is_empty() {
         println!("- (none)");
     } else {
-        println!("Warnings:");
+        for info in &check.infos {
+            println!("- {info}");
+        }
+    }
+    println!("Warnings:");
+    if check.warnings.is_empty() {
+        println!("- (none)");
+    } else {
         for warning in &check.warnings {
             println!("- {warning}");
         }
@@ -2084,6 +2090,12 @@ fn run_sandbox_explain(args: SandboxExplainArgs) -> Result<()> {
         }
         if let Some(agent) = context.agent.as_ref() {
             println!("Agent: {agent}");
+        }
+        if !explain.infos.is_empty() {
+            println!("Info:");
+            for info in &explain.infos {
+                println!("- {info}");
+            }
         }
         if !explain.warnings.is_empty() {
             println!("Warnings:");
@@ -2119,12 +2131,13 @@ fn run_sandbox_seatbelt(args: SandboxSeatbeltArgs) -> Result<()> {
         let response = SandboxSeatbeltDebugResponse {
             profile: sandbox::profile_source(&plan.policy),
             parameters: sandbox::profile_parameters(&plan.policy),
+            infos: plan.infos,
             warnings: plan.warnings,
         };
         if args.json {
             println!("{}", serde_json::to_string_pretty(&response)?);
         } else {
-            print_sandbox_warnings(&response.warnings);
+            print_sandbox_messages(&response.infos, &response.warnings);
             println!("{}", response.profile);
             println!();
             if response.parameters.is_empty() {
@@ -2340,7 +2353,7 @@ fn run_sandbox_exec(args: SandboxExecArgs) -> Result<()> {
     }
 
     let plan = sandbox::build_execution_plan(&context, &args.context.write_roots)?;
-    print_sandbox_warnings(&plan.warnings);
+    print_sandbox_messages(&plan.infos, &plan.warnings);
     sandbox::apply_current_process(&plan.policy)?;
     exec_command(program, command_args, &plan)
 }
@@ -2385,9 +2398,23 @@ fn sandbox_context_from_args(
     })
 }
 
-fn print_sandbox_warnings(warnings: &[String]) {
+fn print_sandbox_messages(infos: &[String], warnings: &[String]) {
+    for info in infos {
+        eprintln!("{}: {info}", sandbox_message_prefix("info", "\u{1b}[36m"));
+    }
     for warning in warnings {
-        eprintln!("warning: {warning}");
+        eprintln!(
+            "{}: {warning}",
+            sandbox_message_prefix("warning", "\u{1b}[33m")
+        );
+    }
+}
+
+fn sandbox_message_prefix(label: &str, color_code: &str) -> String {
+    if std::io::stderr().is_terminal() {
+        format!("{color_code}{label}\u{1b}[0m")
+    } else {
+        label.to_string()
     }
 }
 

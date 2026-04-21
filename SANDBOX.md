@@ -64,6 +64,7 @@ EXEC DEFAULT ALLOW # Allow running any command by default.
 FS ALLOW READ . # Allow reading files inside this repository.
 FS ALLOW WRITE . # Allow edits inside this repository.
 USE os # Allow access to the operating system's shared filesystem without exposing personal directories.
+USE git # Allow git and read standard git configuration files.
 USE shell # Allow the current shell binary and shell history when they apply.
 USE agent # Load agent-specific config and state when they apply.
 IF TEST -f ./Sandboxfile.local # Check for an optional repo-local sandbox extension file.
@@ -273,10 +274,14 @@ Builtins are authored in `Sandboxfile` syntax and compiled into Argon.
 
 Current builtins:
 
+- `gpg`
+- `git`
+- `git/signing`
 - `os/macos`
 - `shell/bash`
 - `shell/fish`
 - `shell/zsh`
+- `ssh`
 - `agent/claude`
 - `agent/codex`
 - `agent/gemini`
@@ -284,6 +289,7 @@ Current builtins:
 Common entrypoints and includes:
 
 - `USE os`
+- `USE git`
 - `USE shell`
 - `USE agent`
 - `USE ./Sandboxfile.local`
@@ -298,6 +304,23 @@ binary and the shell's history file when those variables are available. It
 does not automatically grant access to shell startup files, prompt tools, or
 other personal configuration under your home directory. If a shell needs more
 than that, add explicit rules in `Sandboxfile` or `Sandboxfile.local`.
+
+`USE git` allows `git` and the standard git configuration locations:
+`$HOME/.gitconfig`, `$XDG_CONFIG_HOME/git/`, and `/etc/gitconfig` when they
+exist. It also preserves `GIT_*` environment variables. It does not enable
+commit signing helpers by default.
+
+`USE ssh` enables SSH-based signing support by allowing `ssh-keygen`,
+`SSH_AUTH_SOCK`, `$HOME/.ssh/config`, and `$HOME/.ssh/allowed_signers`. It
+does not allow SSH private keys or arbitrary public key files.
+
+`USE gpg` enables GPG signing support by allowing `gpg`, `GNUPGHOME`,
+`GPG_*`, specific GnuPG config files, public keyring files, `trustdb.gpg`,
+and the standard GnuPG agent sockets. It does not allow the full
+`~/.gnupg` tree.
+
+`USE git/signing` is opt-in and simply includes both `USE ssh` and
+`USE gpg`.
 
 `USE agent` dispatches from `$AGENT` when the launcher provides an explicit
 agent family. If `$AGENT` is unset, it falls back to `$ARGV0_BASENAME` for

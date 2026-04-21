@@ -105,6 +105,7 @@ pub struct BuiltinPreview {
     pub requested_name: String,
     pub resolved_name: Option<String>,
     pub source: Option<String>,
+    pub infos: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -145,6 +146,7 @@ pub struct SandboxExplain {
     pub context: BTreeMap<String, String>,
     pub paths: ResolvedConfigPaths,
     pub sources: Vec<ExplainedSource>,
+    pub infos: Vec<String>,
     pub warnings: Vec<String>,
     pub policy: EffectiveSandboxPolicy,
     pub intercepts: Vec<ResolvedIntercept>,
@@ -160,6 +162,7 @@ pub struct SandboxCheck {
     pub valid: bool,
     pub paths: ResolvedConfigPaths,
     pub sources: Vec<ExplainedSource>,
+    pub infos: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -169,6 +172,7 @@ pub struct SandboxExecutionPlan {
     pub context: BTreeMap<String, String>,
     pub paths: ResolvedConfigPaths,
     pub sources: Vec<ExplainedSource>,
+    pub infos: Vec<String>,
     pub warnings: Vec<String>,
     pub policy: EffectiveSandboxPolicy,
     pub intercepts: Vec<ResolvedIntercept>,
@@ -299,6 +303,7 @@ struct EvaluationState {
     vars: BTreeMap<String, String>,
     policy: EffectiveSandboxPolicy,
     sources: Vec<ExplainedSource>,
+    infos: Vec<String>,
     warnings: Vec<String>,
     pending_exec_commands: Vec<PendingExecCommand>,
     pending_intercepts: Vec<PendingIntercept>,
@@ -387,6 +392,7 @@ impl SandboxExecutionPlan {
             valid: true,
             paths: self.paths.clone(),
             sources: self.sources.clone(),
+            infos: self.infos.clone(),
             warnings: self.warnings.clone(),
         }
     }
@@ -396,6 +402,7 @@ impl SandboxExecutionPlan {
             context: self.context.clone(),
             paths: self.paths.clone(),
             sources: self.sources.clone(),
+            infos: self.infos.clone(),
             warnings: self.warnings.clone(),
             policy: self.policy.clone(),
             intercepts: self.intercepts.clone(),
@@ -426,6 +433,7 @@ pub fn builtin_preview(
         vars,
         policy: EffectiveSandboxPolicy::default(),
         sources: Vec::new(),
+        infos: Vec::new(),
         warnings: Vec::new(),
         pending_exec_commands: Vec::new(),
         pending_intercepts: Vec::new(),
@@ -442,6 +450,7 @@ pub fn builtin_preview(
         requested_name: request.to_string(),
         resolved_name: Some(resolved_name),
         source: Some(source_file.source.clone()),
+        infos: state.infos,
         warnings: state.warnings,
     })
 }
@@ -532,6 +541,7 @@ pub fn build_execution_plan(
         vars: seed_variables(context)?,
         policy: EffectiveSandboxPolicy::default(),
         sources: Vec::new(),
+        infos: Vec::new(),
         warnings: Vec::new(),
         pending_exec_commands: Vec::new(),
         pending_intercepts: Vec::new(),
@@ -575,6 +585,7 @@ pub fn build_execution_plan(
         context: state.vars,
         paths,
         sources: state.sources,
+        infos: state.infos,
         warnings: state.warnings,
         policy: state.policy,
         intercepts,
@@ -1174,6 +1185,15 @@ fn evaluate_source(
                     )?;
                     state.warnings.push(expanded);
                 }
+                StatementKind::Info { message } => {
+                    let expanded = expand_variables(
+                        message,
+                        &state.vars,
+                        &source_label(source),
+                        statement.line_number,
+                    )?;
+                    state.infos.push(expanded);
+                }
                 StatementKind::EnvDefault { value } => {
                     state.environment_default = *value;
                 }
@@ -1701,6 +1721,7 @@ EXEC DEFAULT ALLOW # Allow running any command by default.
 FS ALLOW READ . # Allow reading files inside this repository.
 FS ALLOW WRITE . # Allow edits inside this repository.
 USE os # Allow access to the operating system's shared filesystem without exposing personal directories.
+USE git # Allow git and read standard git configuration files.
 USE shell # Allow the current shell binary and shell history when they apply.
 USE agent # Load agent-specific config and state when they apply.
 IF TEST -f ./Sandboxfile.local # Check for an optional repo-local sandbox extension file.
@@ -2554,6 +2575,10 @@ mod tests {
     fn builtins_are_listed() {
         let names = list_builtin_names();
         assert!(names.contains(&"os".to_string()));
+        assert!(names.contains(&"git".to_string()));
+        assert!(names.contains(&"git/signing".to_string()));
+        assert!(names.contains(&"ssh".to_string()));
+        assert!(names.contains(&"gpg".to_string()));
         assert!(names.contains(&"shell".to_string()));
         assert!(names.contains(&"agent".to_string()));
         assert!(names.contains(&"os/macos".to_string()));
@@ -2829,6 +2854,200 @@ mod tests {
     }
 
     #[test]
+    fn use_git_allows_git_and_standard_config_files() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        let home = repo_root.join("home");
+        let xdg_config = home.join(".config");
+        let bin_root = temp.path().join("bin");
+        fs::create_dir_all(&repo_root).expect("repo");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(xdg_config.join("git")).expect("xdg git");
+        fs::create_dir_all(&bin_root).expect("bin");
+        fs::write(home.join(".gitconfig"), "[user]\n\tname = Test\n").expect("gitconfig");
+        fs::write(
+            xdg_config.join("git/config"),
+            "[init]\n\tdefaultBranch = main\n",
+        )
+        .expect("xdg git config");
+        fs::write(bin_root.join("git"), "#!/bin/sh\nexit 0\n").expect("fake git");
+        fs::write(repo_root.join(REPO_SANDBOXFILE), "USE git\n").expect("sandbox");
+
+        let mut context = context_for(&repo_root, &["git", "status"]);
+        context.env.insert(
+            "PATH".to_string(),
+            format!("{}:/bin:/usr/bin", bin_root.display()),
+        );
+        context.env.insert(
+            "XDG_CONFIG_HOME".to_string(),
+            xdg_config.display().to_string(),
+        );
+
+        let explain = explain(&context, &[]).expect("explain");
+
+        assert!(
+            explain
+                .sources
+                .iter()
+                .any(|source| source.name == "git" && source.kind == "builtin")
+        );
+        assert!(
+            explain
+                .policy
+                .readable_paths
+                .iter()
+                .any(|path| path.ends_with(".gitconfig"))
+        );
+        assert!(
+            explain
+                .policy
+                .readable_roots
+                .iter()
+                .any(|path| path.ends_with(".config/git"))
+        );
+        assert!(
+            explain
+                .policy
+                .executable_paths
+                .iter()
+                .any(|path| path.ends_with("git"))
+        );
+        assert!(
+            explain
+                .allowed_environment_patterns
+                .iter()
+                .any(|pattern| pattern == "GIT_*")
+        );
+    }
+
+    #[test]
+    fn use_git_signing_allows_signing_tools_and_agent_paths() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        let home = repo_root.join("home");
+        let gnupg = home.join(".gnupg");
+        let ssh = home.join(".ssh");
+        let ssh_auth_sock = ssh.join("agent.sock");
+        let ssh_config = ssh.join("config");
+        let ssh_allowed_signers = ssh.join("allowed_signers");
+        let ssh_private_key = ssh.join("id_ed25519");
+        let ssh_public_key = ssh.join("id_ed25519.pub");
+        let gpg_conf = gnupg.join("gpg.conf");
+        let common_conf = gnupg.join("common.conf");
+        let gpg_agent_conf = gnupg.join("gpg-agent.conf");
+        let pubring = gnupg.join("pubring.kbx");
+        let trustdb = gnupg.join("trustdb.gpg");
+        let gpg_agent_socket = gnupg.join("S.gpg-agent");
+        let bin_root = temp.path().join("bin");
+        fs::create_dir_all(&repo_root).expect("repo");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&gnupg).expect("gnupg");
+        fs::create_dir_all(&ssh).expect("ssh");
+        fs::create_dir_all(&bin_root).expect("bin");
+        fs::write(&ssh_config, "Host *\n").expect("ssh config");
+        fs::write(&ssh_allowed_signers, "user@example.com ssh-ed25519 AAAA\n")
+            .expect("allowed signers");
+        fs::write(&ssh_private_key, "PRIVATE KEY\n").expect("ssh private key");
+        fs::write(&ssh_public_key, "ssh-ed25519 AAAA test\n").expect("ssh public key");
+        fs::write(&gpg_conf, "use-agent\n").expect("gpg conf");
+        fs::write(&common_conf, "no-emit-version\n").expect("common conf");
+        fs::write(&gpg_agent_conf, "default-cache-ttl 600\n").expect("gpg-agent conf");
+        fs::write(&pubring, "PUBRING\n").expect("pubring");
+        fs::write(&trustdb, "TRUSTDB\n").expect("trustdb");
+        fs::write(bin_root.join("gpg"), "#!/bin/sh\nexit 0\n").expect("fake gpg");
+        fs::write(bin_root.join("ssh-keygen"), "#!/bin/sh\nexit 0\n").expect("fake ssh-keygen");
+        fs::write(
+            repo_root.join(REPO_SANDBOXFILE),
+            "USE git\nUSE git/signing\n",
+        )
+        .expect("sandbox");
+
+        let mut context = context_for(&repo_root, &["git", "commit"]);
+        context.env.insert(
+            "PATH".to_string(),
+            format!("{}:/bin:/usr/bin", bin_root.display()),
+        );
+        context.env.insert(
+            "SSH_AUTH_SOCK".to_string(),
+            ssh_auth_sock.display().to_string(),
+        );
+
+        let explain = explain(&context, &[]).expect("explain");
+
+        assert!(
+            explain
+                .sources
+                .iter()
+                .any(|source| source.name == "git/signing" && source.kind == "builtin")
+        );
+        assert!(
+            explain
+                .sources
+                .iter()
+                .any(|source| source.name == "ssh" && source.kind == "builtin")
+        );
+        assert!(
+            explain
+                .sources
+                .iter()
+                .any(|source| source.name == "gpg" && source.kind == "builtin")
+        );
+        assert!(
+            explain
+                .policy
+                .executable_paths
+                .iter()
+                .any(|path| path.ends_with("gpg"))
+        );
+        assert!(
+            explain
+                .policy
+                .executable_paths
+                .iter()
+                .any(|path| path.ends_with("ssh-keygen"))
+        );
+        assert!(explain.policy.writable_paths.contains(&ssh_auth_sock));
+        assert!(explain.policy.readable_paths.contains(&ssh_config));
+        assert!(explain.policy.readable_paths.contains(&ssh_allowed_signers));
+        assert!(!explain.policy.readable_paths.contains(&ssh_private_key));
+        assert!(!explain.policy.readable_paths.contains(&ssh_public_key));
+        assert!(explain.policy.readable_paths.contains(&gpg_conf));
+        assert!(explain.policy.readable_paths.contains(&common_conf));
+        assert!(explain.policy.readable_paths.contains(&gpg_agent_conf));
+        assert!(explain.policy.readable_paths.contains(&pubring));
+        assert!(explain.policy.readable_paths.contains(&trustdb));
+        assert!(explain.policy.writable_paths.contains(&trustdb));
+        assert!(explain.policy.writable_paths.contains(&gpg_agent_socket));
+        assert!(!explain.policy.readable_roots.contains(&gnupg));
+        assert!(!explain.policy.writable_roots.contains(&gnupg));
+        assert!(!explain.policy.readable_roots.contains(&ssh));
+        assert!(
+            explain
+                .allowed_environment_patterns
+                .iter()
+                .any(|pattern| pattern == "SSH_AUTH_SOCK")
+        );
+        assert!(
+            explain
+                .allowed_environment_patterns
+                .iter()
+                .any(|pattern| pattern == "GNUPGHOME")
+        );
+        assert!(
+            explain
+                .allowed_environment_patterns
+                .iter()
+                .any(|pattern| pattern == "GPG_*")
+        );
+        assert!(
+            explain
+                .infos
+                .iter()
+                .any(|info| info.contains("does not allow SSH private keys"))
+        );
+    }
+
+    #[test]
     fn use_agent_dispatches_to_agent_specific_module() {
         let temp = tempdir().expect("tempdir");
         let repo_root = temp.path().join("repo");
@@ -2993,6 +3212,7 @@ END
             contents.contains("# Full docs: https://github.com/fiam/argon/blob/main/SANDBOX.md")
         );
         assert!(contents.contains("USE os"));
+        assert!(contents.contains("USE git"));
         assert!(contents.contains("USE shell"));
         assert!(contents.contains("USE agent"));
         assert!(contents.contains("FS ALLOW READ ."));
@@ -3061,6 +3281,7 @@ END
             contents.contains("# Full docs: https://github.com/fiam/argon/blob/main/SANDBOX.md")
         );
         assert!(contents.contains("FS ALLOW READ ."));
+        assert!(contents.contains("USE git"));
         assert!(contents.contains("IF TEST -f ./Sandboxfile.local"));
     }
 
@@ -3408,6 +3629,7 @@ END
                 existing_paths: Vec::new(),
             },
             sources: Vec::new(),
+            infos: Vec::new(),
             warnings: Vec::new(),
             policy: EffectiveSandboxPolicy::default(),
             intercepts: Vec::new(),

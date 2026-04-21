@@ -484,7 +484,7 @@ struct SandboxHelpPopover: View {
             .fontWeight(.semibold)
           SandboxCodeBlock(text: configExample)
           Text(
-            "Use `USE os`, `USE shell`, and `USE agent` to bring in built-in policy modules, then optionally include `./Sandboxfile.local` for local repo overrides."
+            "Use `USE os`, `USE git`, `USE shell`, and `USE agent` to bring in built-in policy modules, then optionally include `./Sandboxfile.local` for local repo overrides."
           )
           .font(.caption)
           .foregroundStyle(.secondary)
@@ -509,13 +509,19 @@ struct SandboxHelpPopover: View {
             .font(.subheadline)
             .fontWeight(.semibold)
           Text(
-            "`USE os`, `USE shell`, and `USE agent` are built-in modules that dispatch from the current launch context. `USE shell` and `USE agent` quietly do nothing when they do not apply."
+            "`USE os`, `USE git`, `USE shell`, and `USE agent` are built-in modules. `USE shell` and `USE agent` quietly do nothing when they do not apply."
           )
           .font(.caption)
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
           Text(
             "`USE shell` is intentionally minimal: it covers the shell binary and shell history, but not personal shell startup files or prompt tools."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+          Text(
+            "`USE git` allows `git` and standard git configuration files. `USE ssh` and `USE gpg` are available for signing, and `USE git/signing` includes both."
           )
           .font(.caption)
           .foregroundStyle(.secondary)

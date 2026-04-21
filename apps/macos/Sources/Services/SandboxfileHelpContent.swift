@@ -33,7 +33,7 @@ enum SandboxfileHelpContent {
 
     The default Sandboxfile starts from a minimal environment and no filesystem access, then adds:
     • read and write access to this repository
-    • the built-in `os`, `shell`, and `agent` modules
+    • the built-in `os`, `git`, `shell`, and `agent` modules
     • an optional `Sandboxfile.local` include for local overrides
 
     `USE os` allows access to the operating system's shared filesystem and runtime files used by shells and agents without exposing your personal directories.
@@ -57,6 +57,7 @@ enum SandboxfileHelpContent {
         "FS ALLOW READ . # Allow reading files inside this repository.",
         "FS ALLOW WRITE . # Allow edits inside this repository.",
         "USE os # Allow access to the operating system's shared filesystem without exposing personal directories.",
+        "USE git # Allow git and read standard git configuration files.",
         "USE shell # Allow the current shell binary and shell history when they apply.",
         "USE agent # Load agent-specific config and state when they apply.",
         "IF TEST -f ./Sandboxfile.local # Check for an optional repo-local sandbox extension file.",

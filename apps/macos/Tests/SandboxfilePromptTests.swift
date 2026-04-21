@@ -27,6 +27,7 @@ struct SandboxfilePromptTests {
     #expect(prompt?.message.contains("shells and agents") == true)
     #expect(prompt?.message.contains("includes a link to its docs") == true)
     #expect(prompt?.message.contains("$HOME/.Sandboxfile") == true)
+    #expect(prompt?.message.contains("`os`, `git`, `shell`, and `agent`") == true)
   }
 
   @Test("prompt is skipped when any ancestor Sandboxfile already exists")
@@ -71,6 +72,9 @@ struct SandboxfilePromptTests {
       rendered.contains(
         "USE os # Allow access to the operating system's shared filesystem without exposing personal directories."
       ))
+    #expect(
+      rendered.contains(
+        "USE git # Allow git and read standard git configuration files."))
     #expect(
       rendered.contains(
         "USE shell # Allow the current shell binary and shell history when they apply."))
@@ -119,6 +123,9 @@ struct SandboxfilePromptTests {
     #expect(
       contents.contains(
         "EXEC DEFAULT ALLOW # Allow running any command by default."))
+    #expect(
+      contents.contains(
+        "USE git # Allow git and read standard git configuration files."))
     #expect(
       contents.contains(
         "USE shell # Allow the current shell binary and shell history when they apply."))
