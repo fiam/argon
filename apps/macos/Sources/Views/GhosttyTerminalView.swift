@@ -349,6 +349,11 @@ final class GhosttyTerminalHostView: NSView {
   private var markedText = NSMutableAttributedString()
   private var keyTextAccumulator: [String]?
   private var eventMonitor: Any?
+  private var appDidBecomeActiveObserver: NSObjectProtocol?
+  private var appDidResignActiveObserver: NSObjectProtocol?
+  private var windowDidBecomeKeyObserver: NSObjectProtocol?
+  private var windowDidResignKeyObserver: NSObjectProtocol?
+  private weak var observedWindow: NSWindow?
   private var cellSize = NSSize(width: 8, height: 16)
 
   private lazy var messageLabel: NSTextField = {
@@ -386,6 +391,7 @@ final class GhosttyTerminalHostView: NSView {
     super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
     self.callbackUserdata = GhosttyHostRegistry.register(self, terminalID: terminalID)
     GhosttyHostRegistry.retain(self, terminalID: terminalID)
+    installApplicationFocusObservers()
     initializeTerminal()
   }
 
@@ -406,6 +412,9 @@ final class GhosttyTerminalHostView: NSView {
       NSEvent.removeMonitor(eventMonitor)
       self.eventMonitor = nil
     }
+
+    removeWindowFocusObservers()
+    removeApplicationFocusObservers()
 
     if let surface {
       ghostty_surface_free(surface)
@@ -516,7 +525,9 @@ final class GhosttyTerminalHostView: NSView {
 
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
+    updateWindowFocusObservers()
     updateSurfaceMetrics()
+    syncEmbeddedFocusState()
     applyPendingFocusRequestIfNeeded()
   }
 
@@ -539,16 +550,16 @@ final class GhosttyTerminalHostView: NSView {
 
   override func becomeFirstResponder() -> Bool {
     let result = super.becomeFirstResponder()
-    if result, let surface {
-      ghostty_surface_set_focus(surface, true)
+    if result {
+      syncEmbeddedFocusState()
     }
     return result
   }
 
   override func resignFirstResponder() -> Bool {
     let result = super.resignFirstResponder()
-    if result, let surface {
-      ghostty_surface_set_focus(surface, false)
+    if result {
+      syncEmbeddedFocusState()
     }
     return result
   }
@@ -798,7 +809,6 @@ final class GhosttyTerminalHostView: NSView {
       return
     }
     self.app = app
-    ghostty_app_set_focus(app, NSApp.isActive)
 
     guard let surface = createSurface(for: app) else {
       showMessage("Ghostty failed to create a terminal surface.")
@@ -815,6 +825,88 @@ final class GhosttyTerminalHostView: NSView {
     startProcessPollTimer()
     updateTrackingAreas()
     updateSurfaceMetrics()
+    syncEmbeddedFocusState()
+  }
+
+  private func installApplicationFocusObservers() {
+    let center = NotificationCenter.default
+    appDidBecomeActiveObserver = center.addObserver(
+      forName: NSApplication.didBecomeActiveNotification,
+      object: NSApp,
+      queue: .main
+    ) { [weak self] _ in
+      self?.syncEmbeddedFocusState()
+    }
+    appDidResignActiveObserver = center.addObserver(
+      forName: NSApplication.didResignActiveNotification,
+      object: NSApp,
+      queue: .main
+    ) { [weak self] _ in
+      self?.syncEmbeddedFocusState()
+    }
+  }
+
+  private func removeApplicationFocusObservers() {
+    let center = NotificationCenter.default
+    if let appDidBecomeActiveObserver {
+      center.removeObserver(appDidBecomeActiveObserver)
+      self.appDidBecomeActiveObserver = nil
+    }
+    if let appDidResignActiveObserver {
+      center.removeObserver(appDidResignActiveObserver)
+      self.appDidResignActiveObserver = nil
+    }
+  }
+
+  private func updateWindowFocusObservers() {
+    guard observedWindow !== window else { return }
+    removeWindowFocusObservers()
+
+    guard let window else { return }
+    observedWindow = window
+
+    let center = NotificationCenter.default
+    windowDidBecomeKeyObserver = center.addObserver(
+      forName: NSWindow.didBecomeKeyNotification,
+      object: window,
+      queue: .main
+    ) { [weak self] _ in
+      self?.syncEmbeddedFocusState()
+    }
+    windowDidResignKeyObserver = center.addObserver(
+      forName: NSWindow.didResignKeyNotification,
+      object: window,
+      queue: .main
+    ) { [weak self] _ in
+      self?.syncEmbeddedFocusState()
+    }
+  }
+
+  private func removeWindowFocusObservers() {
+    let center = NotificationCenter.default
+    if let windowDidBecomeKeyObserver {
+      center.removeObserver(windowDidBecomeKeyObserver)
+      self.windowDidBecomeKeyObserver = nil
+    }
+    if let windowDidResignKeyObserver {
+      center.removeObserver(windowDidResignKeyObserver)
+      self.windowDidResignKeyObserver = nil
+    }
+    observedWindow = nil
+  }
+
+  private func syncEmbeddedFocusState() {
+    guard let app else { return }
+
+    let appFocused = NSApp.isActive
+    ghostty_app_set_focus(app, appFocused)
+
+    guard let surface else { return }
+    let surfaceFocused =
+      appFocused
+      && (window?.isKeyWindow ?? false)
+      && (window?.firstResponder === self)
+    ghostty_surface_set_focus(surface, surfaceFocused)
   }
 
   private func reloadGhosttyConfiguration() {

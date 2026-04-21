@@ -10,8 +10,6 @@ struct TerminalLaunchConfiguration: Sendable {
     "TERM",
     "COLORTERM",
     "TERMINFO",
-    "TERM_PROGRAM",
-    "TERM_PROGRAM_VERSION",
     "VTE_VERSION",
   ]
 
@@ -145,6 +143,10 @@ struct TerminalLaunchConfiguration: Sendable {
       launchEnvironment["ARGON_CLI_CMD"] = cliCmd
     }
 
+    if launchEnvironment["TERM_PROGRAM"]?.isEmpty != false {
+      launchEnvironment["TERM_PROGRAM"] = "ghostty"
+    }
+
     launchEnvironment["TERM"] = "xterm-256color"
     launchEnvironment["COLORTERM"] = "truecolor"
 
@@ -179,10 +181,6 @@ struct TerminalLaunchConfiguration: Sendable {
     _ environment: inout [String: String]
   ) {
     for key in strippedTerminalIdentityKeys {
-      environment.removeValue(forKey: key)
-    }
-
-    for key in environment.keys where key.hasPrefix("GHOSTTY_") {
       environment.removeValue(forKey: key)
     }
   }

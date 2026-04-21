@@ -64,8 +64,8 @@ struct ReviewerTerminalTests {
     #expect(environment["COLORTERM"] == "truecolor")
   }
 
-  @Test("terminal environment strips inherited terminal identity")
-  func terminalEnvironmentStripsInheritedTerminalIdentity() {
+  @Test("terminal environment preserves Ghostty identity for child processes")
+  func terminalEnvironmentPreservesGhosttyIdentityForChildProcesses() {
     let environment = ReviewerTerminalLaunch.terminalEnvironment(
       base: [
         "TERM": "xterm-ghostty",
@@ -84,10 +84,23 @@ struct ReviewerTerminalTests {
     #expect(environment["TERM"] == "xterm-256color")
     #expect(environment["COLORTERM"] == "truecolor")
     #expect(environment["TERMINFO"] == nil)
-    #expect(environment["TERM_PROGRAM"] == nil)
-    #expect(environment["TERM_PROGRAM_VERSION"] == nil)
+    #expect(environment["TERM_PROGRAM"] == "ghostty")
+    #expect(environment["TERM_PROGRAM_VERSION"] == "1.3.1")
     #expect(environment["NO_COLOR"] == nil)
-    #expect(environment["GHOSTTY_RESOURCES_DIR"] == nil)
-    #expect(environment["GHOSTTY_SHELL_FEATURES"] == nil)
+    #expect(
+      environment["GHOSTTY_RESOURCES_DIR"] == "/Applications/Ghostty.app/Contents/Resources/ghostty"
+    )
+    #expect(environment["GHOSTTY_SHELL_FEATURES"] == "path,title")
+  }
+
+  @Test("terminal environment defaults TERM_PROGRAM to ghostty")
+  func terminalEnvironmentDefaultsTermProgramToGhostty() {
+    let environment = ReviewerTerminalLaunch.terminalEnvironment(
+      base: [:],
+      sessionId: "session-123",
+      repoRoot: "/tmp/repo"
+    )
+
+    #expect(environment["TERM_PROGRAM"] == "ghostty")
   }
 }
