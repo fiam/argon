@@ -33,6 +33,26 @@ workspace `Review` button, or from the terminal with `argon review <dir>`.
 Agents can be driven entirely by copied prompts and CLI commands; installed
 skills are optional convenience.
 
+Planned v2 direction:
+
+- an in-app MCP server so embedded agents can call Argon tools directly
+- typed workspace actions for creating worktrees
+- typed review actions for asking another saved agent profile to review
+
+## Command Line Tool
+
+Argon bundles an `argon` CLI inside the app and expects a symlink at
+`/usr/local/bin/argon`.
+
+On launch, the macOS app checks that link. If it is missing or broken, Argon
+shows a startup dialog offering to install or fix it. That link enables:
+
+- `argon <dir>` to open Argon focused on a repository or worktree
+- `argon review <dir>` to open the review UI for a repository from the shell
+
+You can always inspect the current status or repair the link later in
+Settings > General.
+
 ## Main Pieces
 
 - `apps/macos`

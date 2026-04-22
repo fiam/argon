@@ -752,6 +752,15 @@ The CLI must be updated to:
 - preserve review-loop commands unchanged
 - add workspace-oriented machine-readable commands later if needed
 
+Future v2 direction:
+
+- host an in-app MCP server so embedded agents can call Argon tools
+  directly instead of relying only on copied prompts or shell commands
+- expose narrow workspace actions first, especially worktree creation and
+  reviewer-agent requests
+- keep saved agent profiles as the authority for which reviewer agents can
+  be launched through that MCP surface
+
 ### 12.4 macOS App
 
 The macOS app should be split into:
@@ -865,6 +874,19 @@ Exit criteria:
 
 - workspace mode is stable enough to replace the current review-first entry
 
+### Phase 9 - MCP Workspace Actions
+
+- add an in-app MCP server hosted by the macOS app
+- expose worktree creation / listing tools to embedded agents
+- expose reviewer-agent request tools so one agent can ask another saved
+  agent profile for review
+- keep approval / visibility boundaries explicit for privileged actions
+
+Exit criteria:
+
+- embedded agents can create worktrees and request reviewer agents through
+  typed Argon tools instead of prompt conventions alone
+
 ## 14. Milestones
 
 | Milestone | Scope | Outcome |
@@ -880,6 +902,7 @@ Exit criteria:
 | M8 | Conflict handling | Continuous conflict detection and `Fix Conflicts` action ship. |
 | M9 | GitHub / PR flow | GitHub detection and PR button ship for supported repos. |
 | M10 | Stabilization | Persistence, UX polish, and reliability hardening complete the transition. |
+| M11 | MCP workspace actions | Embedded agents can create worktrees and request reviewer agents through an in-app MCP server. |
 
 ## 15. Testing and Validation Requirements
 
