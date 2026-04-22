@@ -50,6 +50,26 @@ enum ArgonCLI {
     findCLI()
   }
 
+  static func bundledCLIPath() -> String? {
+    if let resourcePath = Bundle.main.resourceURL?
+      .appendingPathComponent("bin/argon").path,
+      FileManager.default.fileExists(atPath: resourcePath)
+    {
+      return resourcePath
+    }
+
+    if let executablePath = Bundle.main.executableURL?
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Resources/bin/argon").path,
+      FileManager.default.fileExists(atPath: executablePath)
+    {
+      return executablePath
+    }
+
+    return nil
+  }
+
   /// Creates a new review session for the given repo path.
   /// Returns the session ID and repo root from the CLI output.
   static func createSession(
@@ -461,12 +481,7 @@ enum ArgonCLI {
       return cli
     }
 
-    if let bundlePath = Bundle.main.executableURL?
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-      .appendingPathComponent("Resources/bin/argon").path,
-      FileManager.default.fileExists(atPath: bundlePath)
-    {
+    if let bundlePath = bundledCLIPath() {
       return bundlePath
     }
 

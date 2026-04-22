@@ -86,6 +86,9 @@ struct SettingsView: View {
   @State private var sandboxDraft = ""
   @State private var appliedSandboxText = ""
   @State private var sandboxSaving = false
+  @State private var cliInstallStatus = ArgonCLIInstallLink.status()
+  @State private var cliInstallBusy = false
+  @State private var cliInstallErrorMessage: String?
 
   var body: some View {
     TabView {
@@ -116,6 +119,60 @@ struct SettingsView: View {
       Section("Workspace") {
         Toggle("Close finished terminals automatically", isOn: autoCloseFinishedTerminalsBinding)
           .help(selectedFinishedTerminalBehavior.helpText)
+      }
+
+      Section("Command Line Tool") {
+        VStack(alignment: .leading, spacing: 8) {
+          HStack(alignment: .center, spacing: 8) {
+            Label(cliInstallStatus.title, systemImage: cliInstallStatus.symbolName)
+              .foregroundStyle(cliInstallStatus.isHealthy ? .green : .orange)
+
+            Spacer(minLength: 0)
+
+            if cliInstallBusy {
+              ProgressView()
+                .controlSize(.small)
+            }
+          }
+
+          Text(cliInstallStatus.detail)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+          LabeledContent("Link") {
+            Text(cliInstallStatus.linkPath)
+              .font(.system(.caption, design: .monospaced))
+              .textSelection(.enabled)
+          }
+
+          if let expectedTargetPath = cliInstallStatus.expectedTargetPath {
+            LabeledContent("Target") {
+              Text(expectedTargetPath)
+                .font(.system(.caption, design: .monospaced))
+                .lineLimit(2)
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
+            }
+          }
+
+          if let cliInstallErrorMessage {
+            Text(cliInstallErrorMessage)
+              .foregroundStyle(.red)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+
+          if cliInstallStatus.canRepair {
+            HStack {
+              Spacer(minLength: 0)
+              Button(cliInstallStatus.repairButtonTitle) {
+                Task {
+                  await repairCLIInstallLink()
+                }
+              }
+              .disabled(cliInstallBusy)
+            }
+          }
+        }
       }
 
       Section("Worktrees") {
@@ -150,6 +207,9 @@ struct SettingsView: View {
     }
     .formStyle(.grouped)
     .settingsTabInsets()
+    .task {
+      refreshCLIInstallStatus()
+    }
   }
 
   // MARK: - Agents Tab
@@ -449,6 +509,24 @@ struct SettingsView: View {
 
   private var selectedFinishedTerminalBehavior: WorkspaceFinishedTerminalBehavior {
     WorkspaceFinishedTerminalBehavior(rawValue: finishedTerminalBehavior) ?? .autoClose
+  }
+
+  private func refreshCLIInstallStatus() {
+    cliInstallStatus = ArgonCLIInstallLink.status()
+  }
+
+  @MainActor
+  private func repairCLIInstallLink() async {
+    cliInstallBusy = true
+    cliInstallErrorMessage = nil
+    defer { cliInstallBusy = false }
+
+    do {
+      cliInstallStatus = try ArgonCLIInstallLink.repair()
+    } catch {
+      cliInstallErrorMessage = error.localizedDescription
+      cliInstallStatus = ArgonCLIInstallLink.status()
+    }
   }
 
   private var autoCloseFinishedTerminalsBinding: Binding<Bool> {
