@@ -15,14 +15,17 @@ final class RecentProjects {
 
   private let userDefaults: UserDefaults
   private let storageKey: String
+  private let fileManager: FileManager
   var projects: [RecentProject] = []
 
   init(
     userDefaults: UserDefaults = .standard,
-    storageKey: String = defaultStorageKey
+    storageKey: String = defaultStorageKey,
+    fileManager: FileManager = .default
   ) {
     self.userDefaults = userDefaults
     self.storageKey = storageKey
+    self.fileManager = fileManager
     load()
   }
 
@@ -50,11 +53,19 @@ final class RecentProjects {
     save()
   }
 
+  func pruneMissingProjects() {
+    let filteredProjects = projects.filter { fileManager.fileExists(atPath: $0.repoRoot) }
+    guard filteredProjects != projects else { return }
+    projects = filteredProjects
+    save()
+  }
+
   private func load() {
     guard let data = userDefaults.data(forKey: storageKey),
       let decoded = try? JSONDecoder().decode([RecentProject].self, from: data)
     else { return }
     projects = decoded
+    pruneMissingProjects()
   }
 
   private func save() {

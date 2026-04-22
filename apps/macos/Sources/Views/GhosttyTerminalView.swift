@@ -120,22 +120,55 @@ private enum GhosttyHostRegistry {
 }
 
 enum GhosttyAppShortcutPassthrough {
+  private static let supportedModifiers: NSEvent.ModifierFlags = [
+    .command, .shift, .option, .control,
+  ]
+
+  @MainActor
   static func shouldPassThrough(
     charactersIgnoringModifiers: String?,
-    modifierFlags: NSEvent.ModifierFlags
+    modifierFlags: NSEvent.ModifierFlags,
+    menu: NSMenu? = nil
   ) -> Bool {
     guard let characters = charactersIgnoringModifiers?.lowercased() else { return false }
-    let relevantModifiers = modifierFlags.intersection([.command, .shift, .option, .control])
+    let relevantModifiers = modifierFlags.intersection(supportedModifiers)
+    return menuContainsShortcut(
+      menu ?? NSApp.mainMenu,
+      charactersIgnoringModifiers: characters,
+      modifierFlags: relevantModifiers
+    )
+  }
 
-    switch (characters, relevantModifiers) {
-    case (",", [.command]):
-      // Keep macOS Settings shortcut working while terminal has focus.
-      return true
-    case ("t", [.command]), ("t", [.command, .shift]), ("t", [.command, .shift, .option]):
-      return true
-    default:
-      return false
+  @MainActor
+  private static func menuContainsShortcut(
+    _ menu: NSMenu?,
+    charactersIgnoringModifiers: String,
+    modifierFlags: NSEvent.ModifierFlags
+  ) -> Bool {
+    guard let menu else { return false }
+
+    for item in menu.items {
+      if item.isEnabled {
+        let keyEquivalent = item.keyEquivalent.lowercased()
+        let keyEquivalentModifiers = item.keyEquivalentModifierMask.intersection(supportedModifiers)
+        if !keyEquivalent.isEmpty,
+          keyEquivalent == charactersIgnoringModifiers,
+          keyEquivalentModifiers == modifierFlags
+        {
+          return true
+        }
+      }
+
+      if menuContainsShortcut(
+        item.submenu,
+        charactersIgnoringModifiers: charactersIgnoringModifiers,
+        modifierFlags: modifierFlags
+      ) {
+        return true
+      }
     }
+
+    return false
   }
 }
 

@@ -13,6 +13,7 @@ struct ArgonApp: App {
   @State private var reviewWindowRegistry = ReviewWindowRegistry()
   @State private var workspaceWindowRegistry = WorkspaceWindowRegistry()
   @State private var terminalAttentionNotifier = WorkspaceTerminalAttentionNotifier()
+  @State private var cliInstallStartupPrompt = ArgonCLIInstallStartupPrompt()
 
   init() {
     AppSignalHandling.installEmbeddedTerminalHandlers()
@@ -38,8 +39,11 @@ struct ArgonApp: App {
         .task {
           terminalAttentionNotifier.bind(workspaceWindowRegistry: workspaceWindowRegistry)
         }
+        .task {
+          await cliInstallStartupPrompt.presentIfNeeded()
+        }
     }
-    .defaultSize(width: Self.cliLaunchRequest == nil ? 560 : 300, height: 420)
+    .defaultSize(width: Self.cliLaunchRequest == nil ? 560 : 300, height: 560)
 
     WindowGroup(for: WorkspaceTarget.self) { $target in
       if let target {
@@ -65,6 +69,7 @@ struct ArgonApp: App {
         commandContext: commandContext,
         workspaceWindowRegistry: workspaceWindowRegistry
       )
+      WorkspaceWindowCommands()
       WorkspaceWorktreeCommands(
         commandContext: commandContext,
         reviewWindowRegistry: reviewWindowRegistry
@@ -156,6 +161,9 @@ struct ArgonApp: App {
     .task {
       terminalAttentionNotifier.bind(workspaceWindowRegistry: workspaceWindowRegistry)
     }
+    .task {
+      await cliInstallStartupPrompt.presentIfNeeded()
+    }
   }
 
   @ViewBuilder
@@ -170,6 +178,21 @@ struct ArgonApp: App {
       .task(id: savedAgents.profiles) {
         agentAvailability.refresh(for: savedAgents.profiles)
       }
+      .task {
+        await cliInstallStartupPrompt.presentIfNeeded()
+      }
+  }
+}
+
+private struct WorkspaceWindowCommands: Commands {
+  @Environment(\.openWindow) private var openWindow
+
+  var body: some Commands {
+    CommandGroup(after: .windowArrangement) {
+      Button("Show Recents") {
+        openWindow(id: "welcome")
+      }
+    }
   }
 }
 

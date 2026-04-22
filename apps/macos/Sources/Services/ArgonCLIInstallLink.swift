@@ -30,15 +30,18 @@ struct ArgonCLIInstallLinkStatus: Equatable, Sendable {
   }
 
   var detail: String {
+    let usage =
+      "It enables `argon <dir>` to open Argon in a directory and `argon review <dir>` to open the review UI from Terminal, editors, and scripts."
+
     switch state {
     case .installed:
-      return "\(linkPath) points to this app’s bundled argon CLI."
+      return "Argon’s command line tool is installed."
     case .missing:
-      return "Create \(linkPath) so `argon` works from shells, editors, and scripts."
-    case .pointsElsewhere(let currentTarget):
-      return "\(linkPath) currently points to \(currentTarget)."
+      return "Argon’s command line tool is not installed. \(usage)"
+    case .pointsElsewhere:
+      return "Argon’s command line tool needs to be fixed. \(usage)"
     case .occupiedByFile:
-      return "\(linkPath) exists but is not a symlink."
+      return "Argon’s command line tool needs to be fixed. \(usage)"
     case .bundledCLIUnavailable:
       return
         "This app bundle does not include `Resources/bin/argon`, so Argon cannot install the link."
@@ -78,9 +81,9 @@ struct ArgonCLIInstallLinkStatus: Equatable, Sendable {
   var repairButtonTitle: String {
     switch state {
     case .missing:
-      return "Install Link"
+      return "Install"
     case .pointsElsewhere, .occupiedByFile:
-      return "Fix Link"
+      return "Repair"
     case .installed:
       return "Installed"
     case .bundledCLIUnavailable:

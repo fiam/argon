@@ -139,22 +139,6 @@ struct SettingsView: View {
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
 
-          LabeledContent("Link") {
-            Text(cliInstallStatus.linkPath)
-              .font(.system(.caption, design: .monospaced))
-              .textSelection(.enabled)
-          }
-
-          if let expectedTargetPath = cliInstallStatus.expectedTargetPath {
-            LabeledContent("Target") {
-              Text(expectedTargetPath)
-                .font(.system(.caption, design: .monospaced))
-                .lineLimit(2)
-                .multilineTextAlignment(.trailing)
-                .textSelection(.enabled)
-            }
-          }
-
           if let cliInstallErrorMessage {
             Text(cliInstallErrorMessage)
               .foregroundStyle(.red)

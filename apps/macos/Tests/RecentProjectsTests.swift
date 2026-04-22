@@ -23,19 +23,85 @@ struct RecentProjectsTests {
 
   @Test("recent projects persist through reload")
   @MainActor
-  func recentProjectsPersistThroughReload() {
+  func recentProjectsPersistThroughReload() throws {
     let suiteName = "RecentProjectsTests.persistence"
     let defaults = UserDefaults(suiteName: suiteName)!
     defaults.removePersistentDomain(forName: suiteName)
 
+    let fixtureRoot = FileManager.default.temporaryDirectory
+      .appendingPathComponent("RecentProjectsTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: fixtureRoot, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: fixtureRoot) }
+
+    let one = fixtureRoot.appendingPathComponent("one")
+    let two = fixtureRoot.appendingPathComponent("two")
+    try FileManager.default.createDirectory(at: one, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: two, withIntermediateDirectories: true)
+
     do {
       let recents = RecentProjects(userDefaults: defaults, storageKey: suiteName)
-      recents.add(repoRoot: "/tmp/one")
-      recents.add(repoRoot: "/tmp/two")
+      recents.add(repoRoot: one.path)
+      recents.add(repoRoot: two.path)
     }
 
     let reloaded = RecentProjects(userDefaults: defaults, storageKey: suiteName)
-    #expect(reloaded.projects.map(\.repoRoot) == ["/tmp/two", "/tmp/one"])
+    #expect(reloaded.projects.map(\.repoRoot) == [two.path, one.path])
+  }
+
+  @Test("missing recent projects are pruned on load")
+  @MainActor
+  func missingRecentProjectsArePrunedOnLoad() throws {
+    let suiteName = "RecentProjectsTests.pruneOnLoad"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defaults.removePersistentDomain(forName: suiteName)
+
+    let fixtureRoot = FileManager.default.temporaryDirectory
+      .appendingPathComponent("RecentProjectsTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: fixtureRoot, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: fixtureRoot) }
+
+    let existingRepo = fixtureRoot.appendingPathComponent("existing").path
+    try FileManager.default.createDirectory(
+      at: URL(fileURLWithPath: existingRepo),
+      withIntermediateDirectories: true
+    )
+
+    let missingRepo = fixtureRoot.appendingPathComponent("missing").path
+
+    let encoder = JSONEncoder()
+    let seeded = [
+      RecentProject(repoRoot: existingRepo, repoName: "existing", lastOpened: .distantPast),
+      RecentProject(repoRoot: missingRepo, repoName: "missing", lastOpened: .distantPast),
+    ]
+    defaults.set(try encoder.encode(seeded), forKey: suiteName)
+
+    let reloaded = RecentProjects(userDefaults: defaults, storageKey: suiteName)
+
+    #expect(reloaded.projects.map(\.repoRoot) == [existingRepo])
+  }
+
+  @Test("pruneMissingProjects removes stale entries after initialization")
+  @MainActor
+  func pruneMissingProjectsRemovesStaleEntriesAfterInitialization() throws {
+    let suiteName = "RecentProjectsTests.pruneAfterInit"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defaults.removePersistentDomain(forName: suiteName)
+
+    let fixtureRoot = FileManager.default.temporaryDirectory
+      .appendingPathComponent("RecentProjectsTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: fixtureRoot, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: fixtureRoot) }
+
+    let repo = fixtureRoot.appendingPathComponent("repo")
+    try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+
+    let recents = RecentProjects(userDefaults: defaults, storageKey: suiteName)
+    recents.add(repoRoot: repo.path)
+    try FileManager.default.removeItem(at: repo)
+
+    recents.pruneMissingProjects()
+
+    #expect(recents.projects.isEmpty)
   }
 
   @Test("open recent menu titles include the full path for duplicate repo names")

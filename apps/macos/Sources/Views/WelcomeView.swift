@@ -26,8 +26,9 @@ struct WelcomeView: View {
       }
       .padding(20)
     }
-    .frame(minWidth: 560, minHeight: 420)
+    .frame(minWidth: 640, minHeight: 560)
     .onAppear {
+      recentProjects.pruneMissingProjects()
       if let launchRequest = pendingLaunchRequest {
         pendingLaunchRequest = nil
         switch launchRequest {
