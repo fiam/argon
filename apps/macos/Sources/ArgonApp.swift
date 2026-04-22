@@ -14,6 +14,7 @@ struct ArgonApp: App {
   @State private var workspaceWindowRegistry = WorkspaceWindowRegistry()
   @State private var terminalAttentionNotifier = WorkspaceTerminalAttentionNotifier()
   @State private var cliInstallStartupPrompt = ArgonCLIInstallStartupPrompt()
+  @StateObject private var appUpdateController = AppUpdateController()
 
   init() {
     AppSignalHandling.installEmbeddedTerminalHandlers()
@@ -125,6 +126,8 @@ struct ArgonApp: App {
         .keyboardShortcut("2", modifiers: .command)
         .disabled(focusedAppState == nil)
       }
+
+      AppUpdateCommands(appUpdateController: appUpdateController)
     }
 
     Settings {
@@ -132,6 +135,7 @@ struct ArgonApp: App {
         .environment(commandContext)
         .environment(savedAgents)
         .environment(agentAvailability)
+        .environmentObject(appUpdateController)
         .task(id: savedAgents.profiles) {
           agentAvailability.refresh(for: savedAgents.profiles)
         }
@@ -181,6 +185,19 @@ struct ArgonApp: App {
       .task {
         await cliInstallStartupPrompt.presentIfNeeded()
       }
+  }
+}
+
+private struct AppUpdateCommands: Commands {
+  @ObservedObject var appUpdateController: AppUpdateController
+
+  var body: some Commands {
+    CommandGroup(after: .appInfo) {
+      Button("Check for Updates…") {
+        appUpdateController.checkForUpdates()
+      }
+      .disabled(!appUpdateController.canCheckForUpdates)
+    }
   }
 }
 

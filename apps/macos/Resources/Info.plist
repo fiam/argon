@@ -28,6 +28,10 @@
 	<string>public.app-category.developer-tools</string>
 	<key>ArgonGhosttyResourcesPath</key>
 	<string>$(ARGON_GHOSTTY_RESOURCES_PATH)</string>
+	<key>SUFeedURL</key>
+	<string>$(ARGON_APPCAST_FEED_URL)</string>
+	<key>SUPublicEDKey</key>
+	<string>$(SPARKLE_PUBLIC_ED_KEY)</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

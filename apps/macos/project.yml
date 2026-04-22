@@ -6,6 +6,11 @@ options:
   xcodeVersion: "16.0"
   minimumXcodeGenVersion: "2.40"
 
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.9.0
+
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -94,6 +99,7 @@ targets:
     dependencies:
       - sdk: Carbon.framework
       - sdk: GameController.framework
+      - package: Sparkle
       - framework: ../../target/libghostty/native/macos/GhosttyKit.xcframework
         embed: false
     settings:
@@ -113,6 +119,8 @@ targets:
         # Embedded Ghostty runtime paths used by the terminal renderer.
         ARGON_GHOSTTYKIT_PATH: "$(SRCROOT)/../../target/libghostty/native/macos/GhosttyKit.xcframework"
         ARGON_GHOSTTY_RESOURCES_PATH: "$(SRCROOT)/../../target/libghostty/native/share/ghostty"
+        ARGON_APPCAST_FEED_URL: ""
+        SPARKLE_PUBLIC_ED_KEY: ""
 
   ArgonTests:
     type: bundle.unit-test

@@ -60,6 +60,7 @@ struct SettingsView: View {
   @Environment(\.colorScheme) private var colorScheme
   @Environment(SavedAgentProfiles.self) private var savedAgents
   @Environment(AgentAvailability.self) private var agentAvailability
+  @EnvironmentObject private var appUpdateController: AppUpdateController
   @AppStorage("defaultDiffViewMode") private var defaultDiffViewMode = "unified"
   @AppStorage("diffFontSize") private var diffFontSize = 13.0
   @AppStorage(CommentFontSettings.storageKey)
@@ -119,6 +120,25 @@ struct SettingsView: View {
       Section("Workspace") {
         Toggle("Close finished terminals automatically", isOn: autoCloseFinishedTerminalsBinding)
           .help(selectedFinishedTerminalBehavior.helpText)
+      }
+
+      Section("Updates") {
+        VStack(alignment: .leading, spacing: 8) {
+          HStack(alignment: .center, spacing: 8) {
+            Text("Argon \(appUpdateController.currentVersion)")
+
+            Spacer(minLength: 0)
+
+            Button("Check for Updates…") {
+              appUpdateController.checkForUpdates()
+            }
+            .disabled(!appUpdateController.canCheckForUpdates)
+          }
+
+          Text(appUpdateController.statusText)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
       }
 
       Section("Command Line Tool") {
