@@ -1,4 +1,4 @@
-use crate::{EnvDefault, ExecDefault, FsAccess, FsDefault, SandboxError};
+use crate::{EnvDefault, ExecDefault, FsAccess, FsDefault, NetDefault, NetProtocol, SandboxError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ParsedProgram {
@@ -15,22 +15,68 @@ pub(crate) struct Statement {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StatementKind {
     Version(u32),
-    Set { name: String, value: String },
-    Use { module: String },
-    Warn { message: String },
-    Info { message: String },
-    EnvDefault { value: EnvDefault },
-    EnvAllow { name: String },
-    EnvSet { name: String, value: String },
-    EnvUnset { name: String },
-    FsDefault { value: FsDefault },
-    FsAllow { access: FsAccess, value: String },
-    ExecDefault { value: ExecDefault },
-    ExecAllow { value: String },
-    ExecIntercept { command: String, handler: String },
-    IfTest { args: Vec<String> },
-    Switch { value: String },
-    Case { value: String },
+    Set {
+        name: String,
+        value: String,
+    },
+    Use {
+        module: String,
+    },
+    Warn {
+        message: String,
+    },
+    Info {
+        message: String,
+    },
+    EnvDefault {
+        value: EnvDefault,
+    },
+    EnvAllow {
+        name: String,
+    },
+    EnvSet {
+        name: String,
+        value: String,
+    },
+    EnvUnset {
+        name: String,
+    },
+    FsDefault {
+        value: FsDefault,
+    },
+    FsAllow {
+        access: FsAccess,
+        value: String,
+    },
+    ExecDefault {
+        value: ExecDefault,
+    },
+    ExecAllow {
+        value: String,
+    },
+    ExecIntercept {
+        command: String,
+        handler: String,
+    },
+    NetDefault {
+        value: NetDefault,
+    },
+    NetAllowProxy {
+        value: String,
+    },
+    NetAllowConnect {
+        protocol: NetProtocol,
+        value: String,
+    },
+    IfTest {
+        args: Vec<String>,
+    },
+    Switch {
+        value: String,
+    },
+    Case {
+        value: String,
+    },
     Default,
     Else,
     End,
@@ -153,6 +199,7 @@ fn parse_tokens(
         Some("ENV") => parse_env(source_name, line_number, tokens),
         Some("FS") => parse_fs(source_name, line_number, tokens),
         Some("EXEC") => parse_exec(source_name, line_number, tokens),
+        Some("NET") => parse_net(source_name, line_number, tokens),
         Some("IF") => {
             if token(1) != Some("TEST") || tokens.len() < 3 {
                 return Err(parse_error(
@@ -435,6 +482,106 @@ fn parse_exec(
     }
 }
 
+fn parse_net(
+    source_name: &str,
+    line_number: usize,
+    tokens: &[String],
+) -> Result<StatementKind, SandboxError> {
+    match tokens.get(1).map(String::as_str) {
+        Some("DEFAULT") => {
+            if tokens.len() != 3 {
+                return Err(parse_error(
+                    source_name,
+                    line_number,
+                    "NET DEFAULT expects exactly one value",
+                ));
+            }
+            let value = match tokens[2].as_str() {
+                "ALLOW" => NetDefault::Allow,
+                "NONE" => NetDefault::None,
+                other => {
+                    return Err(parse_error(
+                        source_name,
+                        line_number,
+                        format!("invalid NET DEFAULT value: {other}"),
+                    ));
+                }
+            };
+            Ok(StatementKind::NetDefault { value })
+        }
+        Some("ALLOW") => match tokens.get(2).map(String::as_str) {
+            Some("PROXY") => {
+                if tokens.len() != 4 {
+                    return Err(parse_error(
+                        source_name,
+                        line_number,
+                        "NET ALLOW PROXY expects exactly one host pattern",
+                    ));
+                }
+                Ok(StatementKind::NetAllowProxy {
+                    value: tokens[3].clone(),
+                })
+            }
+            Some("CONNECT") => {
+                let (protocol, value) = match tokens.len() {
+                    4 => (NetProtocol::Tcp, tokens[3].clone()),
+                    5 => {
+                        let protocol = match tokens[3].as_str() {
+                            "tcp" | "TCP" => NetProtocol::Tcp,
+                            "udp" | "UDP" => NetProtocol::Udp,
+                            other => {
+                                return Err(parse_error(
+                                    source_name,
+                                    line_number,
+                                    format!("invalid NET ALLOW CONNECT protocol: {other}"),
+                                ));
+                            }
+                        };
+                        (protocol, tokens[4].clone())
+                    }
+                    _ => {
+                        return Err(parse_error(
+                            source_name,
+                            line_number,
+                            "NET ALLOW CONNECT expects a target or `<proto> <target>`",
+                        ));
+                    }
+                };
+
+                if value == "*" {
+                    return Err(parse_error(
+                        source_name,
+                        line_number,
+                        "NET ALLOW CONNECT `*` is invalid; use `*:port` or `NET DEFAULT ALLOW` instead",
+                    ));
+                }
+
+                Ok(StatementKind::NetAllowConnect { protocol, value })
+            }
+            Some(other) => Err(parse_error(
+                source_name,
+                line_number,
+                format!("unknown NET ALLOW instruction: {other}"),
+            )),
+            None => Err(parse_error(
+                source_name,
+                line_number,
+                "NET ALLOW requires a subcommand",
+            )),
+        },
+        Some(other) => Err(parse_error(
+            source_name,
+            line_number,
+            format!("unknown NET instruction: {other}"),
+        )),
+        None => Err(parse_error(
+            source_name,
+            line_number,
+            "NET requires a subcommand",
+        )),
+    }
+}
+
 pub(crate) fn tokenize_line(line: &str) -> Result<Vec<String>, String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
@@ -549,5 +696,31 @@ mod tests {
     fn tokenize_comments_and_quotes() {
         let tokens = tokenize_line(r#"WARN "hello # world" # trailing"#).expect("tokens");
         assert_eq!(tokens, vec!["WARN", "hello # world"]);
+    }
+
+    #[test]
+    fn parse_net_connect_defaults_to_tcp() {
+        let program =
+            parse_program("builtin", "NET ALLOW CONNECT 127.0.0.1:8080").expect("program");
+
+        assert_eq!(program.statements.len(), 1);
+        assert!(matches!(
+            program.statements[0].kind,
+            StatementKind::NetAllowConnect {
+                protocol: NetProtocol::Tcp,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_net_allow_connect_rejects_bare_star() {
+        let error = parse_program("builtin", "NET ALLOW CONNECT *").expect_err("parse error");
+
+        assert!(matches!(
+            error,
+            SandboxError::Parse { ref message, .. }
+            if message.contains("NET ALLOW CONNECT `*` is invalid")
+        ));
     }
 }

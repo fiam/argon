@@ -14,6 +14,7 @@ struct SandboxfileHelpContentTests {
   @Test("default scaffold includes git builtin")
   func defaultScaffoldIncludesGitBuiltin() {
     #expect(SandboxfileHelpContent.defaultScaffold.contains("USE git"))
+    #expect(SandboxfileHelpContent.defaultScaffold.contains("NET DEFAULT ALLOW"))
   }
 
   @Test("home sandboxfile note explains parent-directory ordering")

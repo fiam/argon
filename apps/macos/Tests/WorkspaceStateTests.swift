@@ -67,6 +67,30 @@ struct WorkspaceStateTests {
     #expect(state.activeAgentCount(for: "/tmp/repo") == 0)
   }
 
+  @Test("sandboxed tabs pass their tab id into the launch environment")
+  @MainActor
+  func sandboxedTabsPassTheirTabIDIntoTheLaunchEnvironment() throws {
+    let state = makeState()
+    state.openShellTab()
+    let shellTab = try #require(state.selectedTerminalTab)
+    #expect(
+      shellTab.launch.environment["ARGON_TERMINAL_TAB_ID"] == shellTab.id.uuidString.lowercased()
+    )
+
+    let agentTab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          sandboxEnabled: true
+        ))
+    )
+    #expect(
+      agentTab.launch.environment["ARGON_TERMINAL_TAB_ID"] == agentTab.id.uuidString.lowercased()
+    )
+  }
+
   @Test("requesting a sandboxed shell prompts before launch when the repo Sandboxfile is missing")
   @MainActor
   func requestingSandboxedShellPromptsBeforeLaunchWhenSandboxfileIsMissing() async {

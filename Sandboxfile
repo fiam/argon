@@ -4,6 +4,7 @@
 ENV DEFAULT NONE # Start from a minimal process environment by default.
 FS DEFAULT NONE # Start from no filesystem access by default.
 EXEC DEFAULT ALLOW # Allow running any command by default.
+NET DEFAULT ALLOW # Allow outbound network access by default.
 FS ALLOW READ . # Allow reading files inside this repository.
 FS ALLOW WRITE . # Allow edits inside this repository.
 USE os # Allow access to the operating system's shared filesystem without exposing personal directories.

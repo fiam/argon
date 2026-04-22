@@ -7,7 +7,7 @@ Today that means:
 - the policy language is `Sandboxfile`
 - the shared implementation lives in `crates/sandbox`
 - enforcement exists on macOS only
-- network policy is not implemented yet
+- network policy supports direct socket rules and HTTP(S) proxy mediation
 
 The low-level entrypoint is `argon sandbox exec`.
 
@@ -61,6 +61,7 @@ The generated scaffold is intentionally small:
 ENV DEFAULT NONE # Start from a minimal process environment by default.
 FS DEFAULT NONE # Start from no filesystem access by default.
 EXEC DEFAULT ALLOW # Allow running any command by default.
+NET DEFAULT ALLOW # Allow outbound network access by default.
 FS ALLOW READ . # Allow reading files inside this repository.
 FS ALLOW WRITE . # Allow edits inside this repository.
 USE os # Allow access to the operating system's shared filesystem without exposing personal directories.
@@ -131,11 +132,20 @@ EXEC DEFAULT DENY
 EXEC ALLOW git
 EXEC ALLOW ./bin
 EXEC INTERCEPT aws WITH .argon/sandbox/intercepts/aws.sh
+
+NET DEFAULT ALLOW
+NET DEFAULT NONE
+NET ALLOW PROXY api.openai.com
+NET ALLOW PROXY *.githubusercontent.com
+NET ALLOW PROXY *
+NET ALLOW CONNECT 127.0.0.1:3000
+NET ALLOW CONNECT udp *:53
 ```
 
 Notes:
 
-- if omitted, `ENV DEFAULT`, `FS DEFAULT`, and `EXEC DEFAULT` all default to `NONE`
+- if omitted, `ENV DEFAULT`, `FS DEFAULT`, `EXEC DEFAULT`, and `NET DEFAULT`
+  all default to `NONE`
 - `FS ALLOW READ` and `FS ALLOW WRITE` accept either files or directories
 - directory-vs-file is inferred from the existing path, or forced by a trailing `/`
 - directory-style paths must already exist; optional directories should be
@@ -155,6 +165,76 @@ Notes:
 - builtins use the same language as normal repo files
 - legacy `VERSION 1` lines are still accepted for compatibility, but new files
   should omit them
+
+## Network Policy
+
+Network rules live under `NET`:
+
+```text
+NET DEFAULT NONE
+NET ALLOW PROXY api.openai.com
+NET ALLOW PROXY *.githubusercontent.com
+NET ALLOW PROXY *
+NET ALLOW CONNECT localhost:3000
+NET ALLOW CONNECT 127.0.0.1:3000
+NET ALLOW CONNECT udp *:53
+```
+
+Rules:
+
+- `NET DEFAULT NONE` denies outbound network access unless a later
+  `NET ALLOW` rule matches
+- `NET DEFAULT ALLOW` keeps the previous broad outbound network behavior
+- `NET ALLOW PROXY ...` routes HTTP(S) traffic through an Argon-managed local
+  proxy and injects `HTTP_PROXY` / `HTTPS_PROXY` when `NET DEFAULT NONE`
+  makes the proxy necessary
+- sandboxed workspace tabs show observed proxied requests in the Argon
+  inspector
+- `NET ALLOW PROXY *` forces all proxyable HTTP(S) traffic through that proxy
+  when proxy injection is active
+- `NET ALLOW CONNECT ...` allows direct socket access for supported direct
+  targets
+- bare `NET ALLOW CONNECT *` is invalid; use `NET DEFAULT ALLOW` or a ported
+  wildcard such as `*:443`
+- `NET ALLOW CONNECT` is for direct socket policy only; hostnames belong under
+  `NET ALLOW PROXY`
+
+`NET ALLOW PROXY` currently applies to proxy-aware HTTP(S) clients. Raw TCP or
+UDP traffic still needs an explicit `NET ALLOW CONNECT` rule. With
+`NET DEFAULT ALLOW`, proxy rules stay passive and do not automatically force
+traffic through the proxy.
+
+### Current macOS Syntax
+
+Argon validates the current macOS seatbelt backend before launch, so the
+usable `NET` syntax is narrower than the long-term model:
+
+- `NET DEFAULT NONE`
+- `NET DEFAULT ALLOW`
+- `NET ALLOW PROXY <host>`
+- `NET ALLOW PROXY <*.wildcard>`
+- `NET ALLOW PROXY *`
+- `NET ALLOW CONNECT localhost`
+- `NET ALLOW CONNECT localhost:<port>`
+- `NET ALLOW CONNECT 127.0.0.1:<port>`
+- `NET ALLOW CONNECT ::1:<port>`
+- `NET ALLOW CONNECT <proto> *:<port>`
+
+Notes:
+
+- loopback IPs such as `127.0.0.1` and `::1` are accepted in `Sandboxfile`
+  and normalized to `localhost` for seatbelt enforcement
+- bare `NET ALLOW CONNECT *` is invalid
+- hostnames are only valid with `NET ALLOW PROXY`
+- non-loopback IP literals and CIDRs such as `10.0.0.15:443` or
+  `10.0.0.0/24:443` are not supported by the current macOS seatbelt backend
+  and will fail validation before launch
+
+So, on macOS today:
+
+- use `PROXY` for hostname-based policy and logging
+- use `CONNECT localhost:...` for local services
+- use `CONNECT *:port` only for coarse direct port exceptions
 
 ## Conditionals
 

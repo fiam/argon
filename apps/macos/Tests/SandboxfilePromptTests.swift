@@ -66,6 +66,9 @@ struct SandboxfilePromptTests {
     #expect(
       rendered.contains(
         "EXEC DEFAULT ALLOW # Allow running any command by default."))
+    #expect(
+      rendered.contains(
+        "NET DEFAULT ALLOW # Allow outbound network access by default."))
     #expect(rendered.contains("FS ALLOW READ . # Allow reading files inside this repository."))
     #expect(rendered.contains("FS ALLOW WRITE . # Allow edits inside this repository."))
     #expect(
@@ -123,6 +126,9 @@ struct SandboxfilePromptTests {
     #expect(
       contents.contains(
         "EXEC DEFAULT ALLOW # Allow running any command by default."))
+    #expect(
+      contents.contains(
+        "NET DEFAULT ALLOW # Allow outbound network access by default."))
     #expect(
       contents.contains(
         "USE git # Allow git and read standard git configuration files."))

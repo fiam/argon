@@ -1,8 +1,11 @@
 #![cfg(target_os = "macos")]
 
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
@@ -14,6 +17,45 @@ fn shell_quote(path: &Path) -> String {
 
 fn run_argon(command: &mut Command) -> Result<Output> {
     command.output().context("failed to run argon")
+}
+
+fn start_http_server(body: &'static str) -> Result<(u16, thread::JoinHandle<()>)> {
+    let listener = TcpListener::bind("127.0.0.1:0").context("failed to bind test HTTP server")?;
+    listener
+        .set_nonblocking(true)
+        .context("failed to mark test HTTP server nonblocking")?;
+    let port = listener
+        .local_addr()
+        .context("failed to read HTTP server address")?
+        .port();
+    let handle = thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+                    let mut buffer = [0u8; 4096];
+                    let _ = stream.read(&mut buffer);
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                    let _ = stream.flush();
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    Ok((port, handle))
 }
 
 #[test]
@@ -141,6 +183,7 @@ fn sandbox_init_creates_default_sandboxfile() -> Result<()> {
     assert!(contents.contains("# This file describes the Argon Sandbox configuration"));
     assert!(contents.contains("# Full docs: https://github.com/fiam/argon/blob/main/SANDBOX.md"));
     assert!(contents.contains("ENV DEFAULT NONE"));
+    assert!(contents.contains("NET DEFAULT ALLOW"));
     assert!(contents.contains("FS ALLOW READ ."));
     assert!(contents.contains("USE os"));
     assert!(contents.contains("USE git"));
@@ -252,6 +295,31 @@ fn sandbox_check_reports_invalid_paths_with_line_numbers() -> Result<()> {
 }
 
 #[test]
+fn sandbox_check_rejects_bare_net_connect_star() -> Result<()> {
+    let temp = tempdir()?;
+    let repo_root = temp.path().join("repo");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&home)?;
+    std::fs::write(repo_root.join("Sandboxfile"), "NET ALLOW CONNECT *\n")?;
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("SHELL", "/bin/zsh")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("check"),
+    )?;
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("NET ALLOW CONNECT `*` is invalid"));
+    assert!(stderr.contains("Sandboxfile:1"));
+    Ok(())
+}
+
+#[test]
 fn sandbox_explain_reports_env_policy() -> Result<()> {
     let temp = tempdir()?;
     let repo_root = temp.path().join("repo");
@@ -293,8 +361,55 @@ ENV SET FOO sandboxed
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("\"environmentDefault\": \"none\""));
+    assert!(stdout.contains("\"netDefault\": \"none\""));
     assert!(stdout.contains("\"allowedEnvironmentPatterns\""));
     assert!(stdout.contains("\"FOO\": \"sandboxed\""));
+    Ok(())
+}
+
+#[test]
+fn sandbox_explain_reports_network_policy() -> Result<()> {
+    let temp = tempdir()?;
+    let repo_root = temp.path().join("repo");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&home)?;
+    std::fs::write(
+        repo_root.join("Sandboxfile"),
+        r#"
+NET DEFAULT NONE
+NET ALLOW PROXY api.openai.com
+NET ALLOW CONNECT 127.0.0.1:3000
+NET ALLOW CONNECT udp *:53
+"#,
+    )?;
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("SHELL", "/bin/zsh")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("explain"),
+    )?;
+
+    if !output.status.success() {
+        bail!(
+            "sandbox explain failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Network:"));
+    assert!(stdout.contains("- default: None"));
+    assert!(stdout.contains("- proxy:"));
+    assert!(stdout.contains("api.openai.com"));
+    assert!(stdout.contains("- connect:"));
+    assert!(stdout.contains("tcp 127.0.0.1:3000"));
+    assert!(stdout.contains("udp *:53"));
     Ok(())
 }
 
@@ -402,6 +517,7 @@ END
     assert!(stdout.contains("Sources:"));
     assert!(stdout.contains("Filesystem:"));
     assert!(stdout.contains("Exec:"));
+    assert!(stdout.contains("Network:"));
     assert!(stdout.contains("Environment:"));
     assert!(stdout.contains("config:"));
     assert!(stdout.contains("builtin: os"));
@@ -415,6 +531,47 @@ END
     assert!(stdout.contains("FOO=sandboxed"));
     assert!(stdout.contains("allow:"));
     assert!(stdout.contains("unset:"));
+    Ok(())
+}
+
+#[test]
+fn sandbox_seatbelt_prints_network_connect_parameters() -> Result<()> {
+    let temp = tempdir()?;
+    let repo_root = temp.path().join("repo");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&home)?;
+    std::fs::write(
+        repo_root.join("Sandboxfile"),
+        r#"
+NET DEFAULT NONE
+NET ALLOW CONNECT 127.0.0.1:3000
+NET ALLOW CONNECT udp *:53
+"#,
+    )?;
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("SHELL", "/bin/zsh")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("seatbelt")
+            .arg("--json"),
+    )?;
+
+    if !output.status.success() {
+        bail!(
+            "sandbox seatbelt failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("(remote tcp \\\"localhost:3000\\\")"));
+    assert!(stdout.contains("(remote udp \\\"*:53\\\")"));
     Ok(())
 }
 
@@ -602,6 +759,233 @@ USE os
     assert!(stderr.contains("Operation not permitted"));
     std::fs::remove_file(&outside_file)?;
 
+    Ok(())
+}
+
+#[test]
+fn sandbox_exec_allows_direct_connect_rules() -> Result<()> {
+    let temp = tempdir()?;
+    let repo_root = temp.path().join("repo");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&home)?;
+    let (port, server) = start_http_server("direct-ok\n")?;
+    std::fs::write(
+        repo_root.join("Sandboxfile"),
+        format!(
+            "ENV DEFAULT NONE\nFS DEFAULT NONE\nEXEC DEFAULT ALLOW\nNET DEFAULT NONE\nNET ALLOW CONNECT 127.0.0.1:{port}\nUSE os\n"
+        ),
+    )?;
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("SHELL", "/bin/zsh")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("exec")
+            .arg("--")
+            .arg("/usr/bin/curl")
+            .arg("-qfsS")
+            .arg("--max-time")
+            .arg("5")
+            .arg(format!("http://127.0.0.1:{port}/")),
+    )?;
+    let _ = server.join();
+
+    if !output.status.success() {
+        bail!(
+            "sandbox exec direct connect failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("direct-ok"));
+    Ok(())
+}
+
+#[test]
+fn sandbox_exec_routes_proxy_rules_through_local_helper() -> Result<()> {
+    let temp = tempdir()?;
+    let repo_root = temp.path().join("repo");
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&home)?;
+    let (port, server) = start_http_server("proxy-ok\n")?;
+    std::fs::write(
+        repo_root.join("Sandboxfile"),
+        r#"
+ENV DEFAULT NONE
+FS DEFAULT NONE
+EXEC DEFAULT ALLOW
+NET DEFAULT NONE
+NET ALLOW PROXY *
+USE os
+"#,
+    )?;
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("SHELL", "/bin/zsh")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("exec")
+            .arg("--")
+            .arg("/usr/bin/curl")
+            .arg("-qfsS")
+            .arg("--max-time")
+            .arg("5")
+            .arg(format!("http://127.0.0.1:{port}/")),
+    )?;
+    let _ = server.join();
+
+    if !output.status.success() {
+        bail!(
+            "sandbox exec proxy connect failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("proxy-ok"));
+    Ok(())
+}
+
+#[test]
+fn sandbox_exec_records_proxied_requests_by_tab_id() -> Result<()> {
+    let temp = tempdir()?;
+    let repo_root = temp.path().join("repo");
+    let home = temp.path().join("home");
+    let tmpdir = temp.path().join("tmp");
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&home)?;
+    std::fs::create_dir_all(&tmpdir)?;
+    let (port, server) = start_http_server("network-log-ok\n")?;
+    std::fs::write(
+        repo_root.join("Sandboxfile"),
+        r#"
+ENV DEFAULT NONE
+FS DEFAULT NONE
+EXEC DEFAULT ALLOW
+NET DEFAULT NONE
+NET ALLOW PROXY *
+USE os
+"#,
+    )?;
+
+    let tab_id = "3c270c64-3553-4e21-b0db-8ef874bf7eb5";
+    let log_path = tmpdir
+        .join("argon-sandbox-network")
+        .join(format!("{tab_id}.ndjson"));
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("TMPDIR", &tmpdir)
+            .env("SHELL", "/bin/zsh")
+            .env("ARGON_TERMINAL_TAB_ID", tab_id)
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("exec")
+            .arg("--")
+            .arg("/usr/bin/curl")
+            .arg("-qfsS")
+            .arg("--max-time")
+            .arg("5")
+            .arg(format!("http://127.0.0.1:{port}/hello")),
+    )?;
+    let _ = server.join();
+
+    if !output.status.success() {
+        bail!(
+            "sandbox exec proxy logging failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let contents = std::fs::read_to_string(&log_path)
+        .with_context(|| format!("missing {}", log_path.display()))?;
+    assert!(contents.contains("\"kind\":\"http\""));
+    assert!(contents.contains("\"outcome\":\"proxied\""));
+    assert!(contents.contains("\"method\":\"GET\""));
+    assert!(contents.contains("\"host\":\"127.0.0.1\""));
+    assert!(contents.contains(&format!("\"port\":{port}")));
+    assert!(contents.contains("\"path\":\"/hello\""));
+    assert!(contents.contains("\"bytes_up\":"));
+    assert!(contents.contains("\"bytes_down\":"));
+    Ok(())
+}
+
+#[test]
+fn sandbox_exec_does_not_force_proxy_when_network_default_is_allow() -> Result<()> {
+    let temp = tempdir()?;
+    let repo_root = temp.path().join("repo");
+    let home = temp.path().join("home");
+    let tmpdir = temp.path().join("tmp");
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&home)?;
+    std::fs::create_dir_all(&tmpdir)?;
+    let (port, server) = start_http_server("network-default-allow\n")?;
+    std::fs::write(
+        repo_root.join("Sandboxfile"),
+        r#"
+ENV DEFAULT NONE
+FS DEFAULT NONE
+EXEC DEFAULT ALLOW
+NET DEFAULT ALLOW
+NET ALLOW PROXY *
+USE os
+"#,
+    )?;
+
+    let tab_id = "1cbab8e9-616f-48be-af7f-c47b0e099e40";
+    let log_path = tmpdir
+        .join("argon-sandbox-network")
+        .join(format!("{tab_id}.ndjson"));
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("TMPDIR", &tmpdir)
+            .env("SHELL", "/bin/zsh")
+            .env("ARGON_TERMINAL_TAB_ID", tab_id)
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("exec")
+            .arg("--")
+            .arg("/usr/bin/curl")
+            .arg("-qfsS")
+            .arg("--max-time")
+            .arg("5")
+            .arg(format!("http://127.0.0.1:{port}/open")),
+    )?;
+    let _ = server.join();
+
+    if !output.status.success() {
+        bail!(
+            "sandbox exec net default allow failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("network-default-allow"));
+    let contents = std::fs::read_to_string(&log_path)
+        .with_context(|| format!("missing {}", log_path.display()))?;
+    assert!(
+        contents.trim().is_empty(),
+        "unexpected proxy log contents: {contents}"
+    );
     Ok(())
 }
 

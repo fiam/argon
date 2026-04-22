@@ -743,7 +743,9 @@ final class WorkspaceState {
       return false
     }
 
+    let tabID = UUID()
     let tab = WorkspaceTerminalTab(
+      id: tabID,
       worktreePath: worktreePath,
       worktreeLabel: worktree.branchName ?? repoName,
       title: sandboxed ? "Shell \(ordinal)" : "Privileged Shell \(ordinal)",
@@ -755,9 +757,10 @@ final class WorkspaceState {
       launch: sandboxed
         ? TerminalLaunchConfiguration.sandboxedShell(
           currentDirectory: worktree.path,
-          writableRoots: [worktree.path]
+          writableRoots: [worktree.path],
+          tabID: tabID
         )
-        : TerminalLaunchConfiguration.shell(currentDirectory: worktree.path),
+        : TerminalLaunchConfiguration.shell(currentDirectory: worktree.path, tabID: tabID),
       isSandboxed: sandboxed,
       writableRoots: sandboxed ? [normalizedPath(worktree.path)] : [],
       isRestorableAfterRelaunch: true
@@ -832,6 +835,7 @@ final class WorkspaceState {
         additionalRoots: request.additionalWritableRoots
       )
       : []
+    let tabID = UUID()
     let launch =
       request.sandboxEnabled
       ? TerminalLaunchConfiguration.sandboxedCommand(
@@ -839,9 +843,14 @@ final class WorkspaceState {
         currentDirectory: worktree.path,
         writableRoots: writableRoots,
         launchKind: "agent",
-        agentFamily: sandboxAgentFamily(from: request.command)
+        agentFamily: sandboxAgentFamily(from: request.command),
+        tabID: tabID
       )
-      : TerminalLaunchConfiguration.command(request.command, currentDirectory: worktree.path)
+      : TerminalLaunchConfiguration.command(
+        request.command,
+        currentDirectory: worktree.path,
+        tabID: tabID
+      )
     let resumeArgumentTemplate =
       request.isRestorableAfterRelaunch
       ? request.resumeArgumentTemplate
@@ -853,6 +862,7 @@ final class WorkspaceState {
     )
 
     let tab = WorkspaceTerminalTab(
+      id: tabID,
       worktreePath: worktreePath,
       worktreeLabel: worktree.branchName ?? repoName,
       title: agentTabTitle(for: request, ordinal: ordinal),
@@ -1141,9 +1151,13 @@ final class WorkspaceState {
         persistedTab.isSandboxed
         ? TerminalLaunchConfiguration.sandboxedShell(
           currentDirectory: persistedTab.worktreePath,
-          writableRoots: persistedTab.writableRoots
+          writableRoots: persistedTab.writableRoots,
+          tabID: persistedTab.id
         )
-        : TerminalLaunchConfiguration.shell(currentDirectory: persistedTab.worktreePath)
+        : TerminalLaunchConfiguration.shell(
+          currentDirectory: persistedTab.worktreePath,
+          tabID: persistedTab.id
+        )
     case .agent(let profileName, let icon):
       kind = .agent(profileName: profileName, icon: icon)
       launch =
@@ -1153,11 +1167,13 @@ final class WorkspaceState {
           currentDirectory: persistedTab.worktreePath,
           writableRoots: persistedTab.writableRoots,
           launchKind: "agent",
-          agentFamily: sandboxAgentFamily(from: launchCommandDescription)
+          agentFamily: sandboxAgentFamily(from: launchCommandDescription),
+          tabID: persistedTab.id
         )
         : TerminalLaunchConfiguration.command(
           launchCommandDescription,
-          currentDirectory: persistedTab.worktreePath
+          currentDirectory: persistedTab.worktreePath,
+          tabID: persistedTab.id
         )
     }
 

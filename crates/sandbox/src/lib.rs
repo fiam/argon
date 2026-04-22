@@ -46,6 +46,13 @@ pub enum ExecDefault {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum NetDefault {
+    Allow,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EnvDefault {
     Inherit,
     None,
@@ -55,6 +62,20 @@ pub enum EnvDefault {
 pub(crate) enum FsAccess {
     Read,
     Write,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetProtocol {
+    Tcp,
+    Udp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetConnectRule {
+    pub protocol: NetProtocol,
+    pub target: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,12 +144,15 @@ pub struct ExplainedSource {
 pub struct EffectiveSandboxPolicy {
     pub fs_default: FsDefault,
     pub exec_default: ExecDefault,
+    pub net_default: NetDefault,
     pub readable_paths: Vec<PathBuf>,
     pub readable_roots: Vec<PathBuf>,
     pub writable_paths: Vec<PathBuf>,
     pub writable_roots: Vec<PathBuf>,
     pub executable_paths: Vec<PathBuf>,
     pub executable_roots: Vec<PathBuf>,
+    pub proxied_hosts: Vec<String>,
+    pub connect_rules: Vec<NetConnectRule>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -239,6 +263,12 @@ pub enum SandboxError {
     },
     #[error("primary command is not permitted by the current sandbox policy: {0}")]
     PrimaryCommandDenied(String),
+    #[error("invalid network rule in {origin}:{line}: {message}")]
+    InvalidNetwork {
+        origin: String,
+        line: usize,
+        message: String,
+    },
     #[error("invalid --write-root {path}: {message}")]
     InvalidWriteRoot { path: PathBuf, message: String },
     #[error("failed to resolve the current executable for intercept shims: {0}")]
@@ -349,12 +379,15 @@ impl Default for EffectiveSandboxPolicy {
         Self {
             fs_default: FsDefault::None,
             exec_default: ExecDefault::Deny,
+            net_default: NetDefault::None,
             readable_paths: Vec::new(),
             readable_roots: Vec::new(),
             writable_paths: Vec::new(),
             writable_roots: Vec::new(),
             executable_paths: Vec::new(),
             executable_roots: Vec::new(),
+            proxied_hosts: Vec::new(),
+            connect_rules: Vec::new(),
         }
     }
 }
@@ -635,8 +668,6 @@ pub fn profile_source(policy: &EffectiveSandboxPolicy) -> String {
         "(import \"com.apple.corefoundation.sb\")".to_string(),
         "(corefoundation)".to_string(),
         "(system-network)".to_string(),
-        "(allow network*)".to_string(),
-        "(allow network-outbound (remote ip))".to_string(),
         "(allow system-audit system-sched mach-task-name process-fork lsopen)".to_string(),
         "(allow process-info* (target self) (target children) (target same-sandbox))".to_string(),
         "(allow signal (target self) (target children) (target same-sandbox))".to_string(),
@@ -651,6 +682,25 @@ pub fn profile_source(policy: &EffectiveSandboxPolicy) -> String {
         "(allow file-read* file-write* file-ioctl (regex \"^/dev/ttys[0-9]*\"))".to_string(),
     ];
     let ancestor_literals = traversal_read_literals(policy);
+
+    if matches!(policy.net_default, NetDefault::Allow) {
+        lines.push("(allow network*)".to_string());
+        lines.push("(allow network-outbound (remote ip))".to_string());
+    }
+    if !policy.connect_rules.is_empty() {
+        lines.push("(allow network-outbound".to_string());
+        for rule in &policy.connect_rules {
+            let predicate = match rule.protocol {
+                NetProtocol::Tcp => "remote tcp",
+                NetProtocol::Udp => "remote udp",
+            };
+            lines.push(format!(
+                "       ({predicate} \"{}\")",
+                connect_rule_pattern(rule)
+            ));
+        }
+        lines.push(")".to_string());
+    }
 
     match policy.fs_default {
         FsDefault::None => {}
@@ -782,15 +832,18 @@ pub fn apply_current_process(policy: &EffectiveSandboxPolicy) -> Result<(), Sand
 
 fn macos_policy_summary(policy: &EffectiveSandboxPolicy) -> String {
     format!(
-        "fs_default={:?}, exec_default={:?}, read_files={}, read_dirs={}, write_files={}, write_dirs={}, exec_files={}, exec_dirs={}",
+        "fs_default={:?}, exec_default={:?}, net_default={:?}, read_files={}, read_dirs={}, write_files={}, write_dirs={}, exec_files={}, exec_dirs={}, proxied_hosts={}, connect_rules={}",
         policy.fs_default,
         policy.exec_default,
+        policy.net_default,
         policy.readable_paths.len(),
         policy.readable_roots.len(),
         policy.writable_paths.len(),
         policy.writable_roots.len(),
         policy.executable_paths.len(),
-        policy.executable_roots.len()
+        policy.executable_roots.len(),
+        policy.proxied_hosts.len(),
+        policy.connect_rules.len()
     )
 }
 
@@ -1299,6 +1352,35 @@ fn evaluate_source(
                         line_number: statement.line_number,
                     });
                 }
+                StatementKind::NetDefault { value } => {
+                    state.policy.net_default = *value;
+                }
+                StatementKind::NetAllowProxy { value } => {
+                    let expanded = expand_variables(
+                        value,
+                        &state.vars,
+                        &source_label(source),
+                        statement.line_number,
+                    )?;
+                    validate_proxy_pattern(&expanded, source, statement.line_number)?;
+                    push_unique_string(&mut state.policy.proxied_hosts, expanded);
+                }
+                StatementKind::NetAllowConnect { protocol, value } => {
+                    let expanded = expand_variables(
+                        value,
+                        &state.vars,
+                        &source_label(source),
+                        statement.line_number,
+                    )?;
+                    validate_connect_target(&expanded, source, statement.line_number)?;
+                    push_unique_connect_rule(
+                        &mut state.policy.connect_rules,
+                        NetConnectRule {
+                            protocol: *protocol,
+                            target: expanded,
+                        },
+                    );
+                }
             }
         }
 
@@ -1723,6 +1805,7 @@ fn default_sandboxfile_template() -> &'static str {
 ENV DEFAULT NONE # Start from a minimal process environment by default.
 FS DEFAULT NONE # Start from no filesystem access by default.
 EXEC DEFAULT ALLOW # Allow running any command by default.
+NET DEFAULT ALLOW # Allow outbound network access by default.
 FS ALLOW READ . # Allow reading files inside this repository.
 FS ALLOW WRITE . # Allow edits inside this repository.
 USE os # Allow access to the operating system's shared filesystem without exposing personal directories.
@@ -1986,6 +2069,214 @@ fn validate_exec_allowance(
             "executable directory does not exist",
         ),
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedConnectTarget {
+    address: String,
+    port: Option<String>,
+}
+
+fn validate_proxy_pattern(
+    value: &str,
+    source: &SourceFile,
+    line_number: usize,
+) -> Result<(), SandboxError> {
+    if value.is_empty() {
+        return Err(SandboxError::InvalidNetwork {
+            origin: source_label(source),
+            line: line_number,
+            message: "proxy host pattern expands to an empty string".to_string(),
+        });
+    }
+    if value.contains("://") || value.contains('/') {
+        return Err(SandboxError::InvalidNetwork {
+            origin: source_label(source),
+            line: line_number,
+            message: format!(
+                "proxy host patterns must be bare hosts or `*`, not URLs or paths: {value}"
+            ),
+        });
+    }
+    if value != "*" && value.contains('*') && !value.starts_with("*.") {
+        return Err(SandboxError::InvalidNetwork {
+            origin: source_label(source),
+            line: line_number,
+            message: format!(
+                "wildcard proxy host patterns must use the `*.example.com` form: {value}"
+            ),
+        });
+    }
+    if value == "*." {
+        return Err(SandboxError::InvalidNetwork {
+            origin: source_label(source),
+            line: line_number,
+            message: "proxy host pattern `*.` is invalid".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_connect_target(
+    value: &str,
+    source: &SourceFile,
+    line_number: usize,
+) -> Result<(), SandboxError> {
+    let parsed = parse_connect_target(value).map_err(|message| SandboxError::InvalidNetwork {
+        origin: source_label(source),
+        line: line_number,
+        message,
+    })?;
+    if parsed.address == "*" && parsed.port.as_deref() == Some("*") {
+        return Err(SandboxError::InvalidNetwork {
+            origin: source_label(source),
+            line: line_number,
+            message: "NET ALLOW CONNECT `*:*` is invalid; use `NET DEFAULT ALLOW` instead"
+                .to_string(),
+        });
+    }
+    #[cfg(target_os = "macos")]
+    validate_macos_connect_target(&parsed).map_err(|message| SandboxError::InvalidNetwork {
+        origin: source_label(source),
+        line: line_number,
+        message,
+    })?;
+    Ok(())
+}
+
+fn parse_connect_target(value: &str) -> Result<ParsedConnectTarget, String> {
+    if value.is_empty() {
+        return Err("connect target expands to an empty string".to_string());
+    }
+    if value == "*" {
+        return Err(
+            "NET ALLOW CONNECT `*` is invalid; use `*:port` or `NET DEFAULT ALLOW` instead"
+                .to_string(),
+        );
+    }
+
+    let (address, port) = split_connect_target(value)?;
+    validate_connect_address(&address)?;
+    validate_connect_port(port.as_deref())?;
+
+    Ok(ParsedConnectTarget { address, port })
+}
+
+fn split_connect_target(value: &str) -> Result<(String, Option<String>), String> {
+    if let Some(stripped) = value.strip_prefix('[') {
+        let Some((address, remainder)) = stripped.split_once(']') else {
+            return Err(format!("invalid bracketed connect target: {value}"));
+        };
+        if remainder.is_empty() {
+            return Ok((address.to_string(), None));
+        }
+        let Some(port) = remainder.strip_prefix(':') else {
+            return Err(format!("invalid connect target suffix: {value}"));
+        };
+        return Ok((address.to_string(), Some(port.to_string())));
+    }
+
+    if let Some((address, port)) = value.rsplit_once(':') {
+        let port_is_valid = port == "*" || port.parse::<u16>().is_ok();
+        if port_is_valid && !address.is_empty() && !address.contains(':') {
+            return Ok((address.to_string(), Some(port.to_string())));
+        }
+        if port_is_valid && address.contains('/') {
+            return Ok((address.to_string(), Some(port.to_string())));
+        }
+    }
+
+    Ok((value.to_string(), None))
+}
+
+fn validate_connect_address(address: &str) -> Result<(), String> {
+    if address == "*" {
+        return Ok(());
+    }
+    if address.eq_ignore_ascii_case("localhost") {
+        return Ok(());
+    }
+
+    if address.parse::<std::net::IpAddr>().is_ok() {
+        return Ok(());
+    }
+
+    if let Some((ip, prefix)) = address.split_once('/') {
+        let ip = ip
+            .parse::<std::net::IpAddr>()
+            .map_err(|_| format!("connect target must use an IP, CIDR, or `*`, got `{address}`"))?;
+        let prefix = prefix
+            .parse::<u8>()
+            .map_err(|_| format!("invalid CIDR prefix in connect target `{address}`"))?;
+        let max_prefix = match ip {
+            std::net::IpAddr::V4(_) => 32,
+            std::net::IpAddr::V6(_) => 128,
+        };
+        if prefix > max_prefix {
+            return Err(format!("invalid CIDR prefix in connect target `{address}`"));
+        }
+        return Ok(());
+    }
+
+    Err(format!(
+        "connect targets must use an IP, CIDR, or `*`, got `{address}`"
+    ))
+}
+
+fn validate_connect_port(port: Option<&str>) -> Result<(), String> {
+    let Some(port) = port else {
+        return Ok(());
+    };
+    if port == "*" {
+        return Ok(());
+    }
+    port.parse::<u16>()
+        .map(|_| ())
+        .map_err(|_| format!("invalid port in connect target: {port}"))
+}
+
+fn connect_rule_pattern(rule: &NetConnectRule) -> String {
+    let parsed = parse_connect_target(&rule.target)
+        .expect("validated connect rules should always parse successfully");
+    let address = normalize_connect_rule_address(&parsed.address);
+    match parsed.port {
+        Some(port) => format!("{address}:{port}"),
+        None => format!("{address}:*"),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn validate_macos_connect_target(target: &ParsedConnectTarget) -> Result<(), String> {
+    if target.address == "*" {
+        return Ok(());
+    }
+
+    if target.address.eq_ignore_ascii_case("localhost") {
+        return Ok(());
+    }
+
+    if let Ok(ip) = target.address.parse::<std::net::IpAddr>()
+        && ip.is_loopback()
+    {
+        return Ok(());
+    }
+
+    Err(format!(
+        "macOS currently supports NET ALLOW CONNECT only for localhost or `*:port`, not `{}`",
+        target.address
+    ))
+}
+
+fn normalize_connect_rule_address(address: &str) -> String {
+    if address.eq_ignore_ascii_case("localhost") {
+        return "localhost".to_string();
+    }
+    if let Ok(ip) = address.parse::<std::net::IpAddr>()
+        && ip.is_loopback()
+    {
+        return "localhost".to_string();
+    }
+    address.to_string()
 }
 
 fn validate_existing_non_directory_path(
@@ -2354,6 +2645,12 @@ fn push_unique_string(values: &mut Vec<String>, value: String) {
     }
 }
 
+fn push_unique_connect_rule(values: &mut Vec<NetConnectRule>, value: NetConnectRule) {
+    if !values.contains(&value) {
+        values.push(value);
+    }
+}
+
 fn path_aliases(path: &Path) -> Vec<PathBuf> {
     let mut aliases = Vec::new();
     let mut pending = vec![path.to_path_buf()];
@@ -2687,7 +2984,8 @@ mod tests {
         fs::create_dir_all(repo_root.join("home")).expect("home");
         fs::write(repo_root.join(REPO_SANDBOXFILE), "USE os\n").expect("sandbox");
 
-        let context = context_for(&repo_root, &["/bin/zsh"]);
+        let mut context = context_for(&repo_root, &["/bin/zsh"]);
+        context.argv.clear();
         let explain = explain(&context, &[]).expect("explain");
 
         assert!(
@@ -2818,7 +3116,8 @@ mod tests {
         fs::create_dir_all(repo_root.join("home")).expect("home");
         fs::write(repo_root.join(REPO_SANDBOXFILE), "USE shell\n").expect("sandbox");
 
-        let context = context_for(&repo_root, &["/bin/zsh"]);
+        let mut context = context_for(&repo_root, &["/bin/zsh"]);
+        context.argv.clear();
         let explain = explain(&context, &[]).expect("explain");
 
         assert!(
@@ -3071,6 +3370,101 @@ mod tests {
     }
 
     #[test]
+    fn net_rules_are_resolved_into_policy_and_profile_parameters() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        fs::create_dir_all(&repo_root).expect("repo");
+        fs::create_dir_all(repo_root.join("home")).expect("home");
+        fs::write(
+            repo_root.join(REPO_SANDBOXFILE),
+            r#"
+NET DEFAULT NONE
+NET ALLOW PROXY api.openai.com
+NET ALLOW PROXY *.githubusercontent.com
+NET ALLOW CONNECT 127.0.0.1:3000
+NET ALLOW CONNECT udp *:53
+"#,
+        )
+        .expect("sandbox");
+
+        let mut context = context_for(&repo_root, &["/bin/zsh"]);
+        context.argv.clear();
+        let explain = explain(&context, &[]).expect("explain");
+
+        assert_eq!(explain.policy.net_default, NetDefault::None);
+        assert_eq!(
+            explain.policy.proxied_hosts,
+            vec![
+                "api.openai.com".to_string(),
+                "*.githubusercontent.com".to_string()
+            ]
+        );
+        assert_eq!(
+            explain.policy.connect_rules,
+            vec![
+                NetConnectRule {
+                    protocol: NetProtocol::Tcp,
+                    target: "127.0.0.1:3000".to_string(),
+                },
+                NetConnectRule {
+                    protocol: NetProtocol::Udp,
+                    target: "*:53".to_string(),
+                }
+            ]
+        );
+
+        let profile = profile_source(&explain.policy);
+        assert!(profile.contains("(allow network-outbound"));
+        assert!(profile.contains("(remote tcp \"localhost:3000\")"));
+        assert!(profile.contains("(remote udp \"*:53\")"));
+    }
+
+    #[test]
+    fn net_allow_connect_rejects_hostname_targets() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        fs::create_dir_all(&repo_root).expect("repo");
+        fs::create_dir_all(repo_root.join("home")).expect("home");
+        fs::write(
+            repo_root.join(REPO_SANDBOXFILE),
+            "NET ALLOW CONNECT api.openai.com:443\n",
+        )
+        .expect("sandbox");
+
+        let context = context_for(&repo_root, &["/bin/zsh"]);
+        let error = explain(&context, &[]).expect_err("hostname connect should fail");
+        assert!(matches!(
+            error,
+            SandboxError::InvalidNetwork { ref message, .. }
+            if message.contains("connect targets must use an IP, CIDR, or `*`")
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn net_allow_connect_rejects_non_loopback_ip_targets_on_macos() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        fs::create_dir_all(&repo_root).expect("repo");
+        fs::create_dir_all(repo_root.join("home")).expect("home");
+        fs::write(
+            repo_root.join(REPO_SANDBOXFILE),
+            "NET ALLOW CONNECT 10.0.0.15:5432\n",
+        )
+        .expect("sandbox");
+
+        let mut context = context_for(&repo_root, &["/bin/zsh"]);
+        context.argv.clear();
+
+        let error = explain(&context, &[]).expect_err("non-loopback connect should fail");
+        assert!(matches!(
+            error,
+            SandboxError::InvalidNetwork { ref message, .. }
+            if message.contains("macOS currently supports NET ALLOW CONNECT only for localhost or `*:port`")
+        ));
+    }
+
+    #[test]
     fn use_agent_dispatches_to_agent_specific_module() {
         let temp = tempdir().expect("tempdir");
         let repo_root = temp.path().join("repo");
@@ -3234,6 +3628,7 @@ END
         assert!(
             contents.contains("# Full docs: https://github.com/fiam/argon/blob/main/SANDBOX.md")
         );
+        assert!(contents.contains("NET DEFAULT ALLOW"));
         assert!(contents.contains("USE os"));
         assert!(contents.contains("USE git"));
         assert!(contents.contains("USE shell"));
@@ -3257,6 +3652,7 @@ END
         let explain = explain(&context, &[]).expect("explain");
         assert_eq!(explain.policy.fs_default, FsDefault::None);
         assert_eq!(explain.policy.exec_default, ExecDefault::Deny);
+        assert_eq!(explain.policy.net_default, NetDefault::None);
         assert_eq!(explain.environment_default, EnvDefault::None);
     }
 
@@ -3271,8 +3667,8 @@ END
         assert!(profile.contains("(deny default)"));
         assert!(profile.contains("(import \"system.sb\")"));
         assert!(profile.contains("(system-network)"));
-        assert!(profile.contains("(allow network*)"));
-        assert!(profile.contains("(allow network-outbound (remote ip))"));
+        assert!(!profile.contains("(allow network*)"));
+        assert!(!profile.contains("(allow network-outbound (remote ip))"));
         assert!(profile.contains("(global-name \"com.apple.securityd.xpc\")"));
         assert!(profile.contains("(global-name \"com.apple.SecurityServer\")"));
         assert!(profile.contains("(global-name \"com.apple.TrustEvaluationAgent\")"));
@@ -3283,6 +3679,11 @@ END
         policy.fs_default = FsDefault::Read;
         let read_profile = profile_source(&policy);
         assert!(read_profile.contains("(allow file-read* file-test-existence)"));
+
+        policy.net_default = NetDefault::Allow;
+        let network_profile = profile_source(&policy);
+        assert!(network_profile.contains("(allow network*)"));
+        assert!(network_profile.contains("(allow network-outbound (remote ip))"));
     }
 
     #[test]
@@ -3308,6 +3709,7 @@ END
             contents.contains("# Full docs: https://github.com/fiam/argon/blob/main/SANDBOX.md")
         );
         assert!(contents.contains("FS ALLOW READ ."));
+        assert!(contents.contains("NET DEFAULT ALLOW"));
         assert!(contents.contains("USE git"));
         assert!(contents.contains("IF TEST -f ./Sandboxfile.local"));
     }

@@ -5,6 +5,8 @@ struct TerminalLaunchConfiguration: Sendable {
   let environment: [String: String]
   let currentDirectory: String
 
+  private static let terminalTabIDEnvironmentKey = "ARGON_TERMINAL_TAB_ID"
+
   private static let strippedTerminalIdentityKeys = [
     "NO_COLOR",
     "TERM",
@@ -40,11 +42,15 @@ struct TerminalLaunchConfiguration: Sendable {
 
   static func shell(
     currentDirectory: String,
+    tabID: UUID? = nil,
     environment: [String: String] = ProcessInfo.processInfo.environment
   ) -> Self {
     Self(
       processSpec: UserShell.interactiveLaunchSpec(environment: environment),
-      environment: terminalEnvironment(base: environment),
+      environment: terminalEnvironment(
+        base: environment,
+        extraEnvironment: terminalTabEnvironment(tabID: tabID)
+      ),
       currentDirectory: currentDirectory
     )
   }
@@ -52,6 +58,7 @@ struct TerminalLaunchConfiguration: Sendable {
   static func sandboxedShell(
     currentDirectory: String,
     writableRoots: [String],
+    tabID: UUID? = nil,
     environment: [String: String] = ProcessInfo.processInfo.environment
   ) -> Self {
     let cli = ArgonCLI.cliPath()
@@ -65,7 +72,10 @@ struct TerminalLaunchConfiguration: Sendable {
 
     return Self(
       processSpec: SandboxedProcessSpec(executable: cli, args: args),
-      environment: terminalEnvironment(base: environment),
+      environment: terminalEnvironment(
+        base: environment,
+        extraEnvironment: terminalTabEnvironment(tabID: tabID)
+      ),
       currentDirectory: currentDirectory
     )
   }
@@ -73,11 +83,15 @@ struct TerminalLaunchConfiguration: Sendable {
   static func command(
     _ command: String,
     currentDirectory: String,
+    tabID: UUID? = nil,
     environment: [String: String] = ProcessInfo.processInfo.environment
   ) -> Self {
     Self(
       processSpec: UserShell.launchSpec(command: command, environment: environment),
-      environment: terminalEnvironment(base: environment),
+      environment: terminalEnvironment(
+        base: environment,
+        extraEnvironment: terminalTabEnvironment(tabID: tabID)
+      ),
       currentDirectory: currentDirectory
     )
   }
@@ -89,6 +103,7 @@ struct TerminalLaunchConfiguration: Sendable {
     launchKind: String = "command",
     agentFamily: String? = nil,
     sessionDirectory: String? = nil,
+    tabID: UUID? = nil,
     environment: [String: String] = ProcessInfo.processInfo.environment
   ) -> Self {
     let cli = ArgonCLI.cliPath()
@@ -109,7 +124,10 @@ struct TerminalLaunchConfiguration: Sendable {
 
     return Self(
       processSpec: SandboxedProcessSpec(executable: cli, args: args),
-      environment: terminalEnvironment(base: environment),
+      environment: terminalEnvironment(
+        base: environment,
+        extraEnvironment: terminalTabEnvironment(tabID: tabID)
+      ),
       currentDirectory: currentDirectory
     )
   }
@@ -161,6 +179,11 @@ struct TerminalLaunchConfiguration: Sendable {
     }
 
     return launchEnvironment
+  }
+
+  private static func terminalTabEnvironment(tabID: UUID?) -> [String: String] {
+    guard let tabID else { return [:] }
+    return [terminalTabIDEnvironmentKey: tabID.uuidString.lowercased()]
   }
 
   var shellCommand: String {

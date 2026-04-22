@@ -1944,6 +1944,13 @@ private struct WorkspaceInspectorPane: View {
             }
             .fixedSize(horizontal: false, vertical: true)
 
+            if let selectedTerminalTab = workspaceState.selectedTerminalTab,
+              selectedTerminalTab.isSandboxed
+            {
+              WorkspaceSandboxNetworkPane(tab: selectedTerminalTab)
+                .frame(maxWidth: .infinity)
+            }
+
             WorkspaceChangedFilesPane()
               .frame(maxWidth: .infinity, maxHeight: .infinity)
           }
@@ -1966,6 +1973,131 @@ private struct WorkspaceInspectorPane: View {
         .fill(Color(nsColor: .separatorColor))
         .frame(width: 0.5)
     }
+  }
+}
+
+private struct WorkspaceSandboxNetworkPane: View {
+  let tab: WorkspaceTerminalTab
+
+  @State private var events: [SandboxNetworkActivityEvent] = []
+  @State private var lastVisibleEventID: String?
+
+  var body: some View {
+    WorkspaceSurface {
+      VStack(alignment: .leading, spacing: 12) {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+          Label("Network", systemImage: "network")
+            .font(.headline)
+          Spacer()
+          Text(tab.title)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+
+        if events.isEmpty {
+          Text("No proxied network activity yet.")
+            .font(.subheadline.weight(.medium))
+        } else {
+          ScrollViewReader { proxy in
+            ScrollView {
+              VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(events.enumerated()), id: \.element.id) { index, event in
+                  WorkspaceSandboxNetworkRow(event: event)
+                    .id(event.id)
+                  if index < events.count - 1 {
+                    Divider()
+                      .padding(.vertical, 10)
+                  }
+                }
+              }
+              .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onAppear {
+              scrollToNewestEvent(with: proxy, animated: false)
+            }
+            .onChange(of: events.map(\.id)) { _, _ in
+              scrollToNewestEvent(with: proxy, animated: true)
+            }
+          }
+          .frame(minHeight: 96, maxHeight: 220)
+        }
+      }
+    }
+    .task(id: tab.id) {
+      await refreshLoop(for: tab.id)
+    }
+  }
+
+  private func refreshLoop(for tabID: UUID) async {
+    while !Task.isCancelled {
+      let updatedEvents = SandboxNetworkActivityLogStore.loadEvents(for: tabID)
+      if updatedEvents != events {
+        withAnimation(.easeInOut(duration: 0.2)) {
+          events = updatedEvents
+        }
+      }
+      try? await Task.sleep(for: .seconds(1))
+    }
+  }
+
+  private func scrollToNewestEvent(
+    with proxy: ScrollViewProxy,
+    animated: Bool
+  ) {
+    guard let newestEventID = events.last?.id, newestEventID != lastVisibleEventID else { return }
+    lastVisibleEventID = newestEventID
+    let action = {
+      proxy.scrollTo(newestEventID, anchor: .bottom)
+    }
+    if animated {
+      withAnimation(.easeInOut(duration: 0.2), action)
+    } else {
+      action()
+    }
+  }
+}
+
+private struct WorkspaceSandboxNetworkRow: View {
+  let event: SandboxNetworkActivityEvent
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(alignment: .firstTextBaseline, spacing: 10) {
+        Text(event.title)
+          .font(.subheadline.monospaced())
+          .lineLimit(1)
+          .truncationMode(.middle)
+        Spacer(minLength: 8)
+        Text(event.occurredAt, style: .time)
+          .font(.caption.monospacedDigit())
+          .foregroundStyle(.secondary)
+      }
+
+      if let path = event.path, !path.isEmpty {
+        Text(path)
+          .font(.caption.monospaced())
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .truncationMode(.middle)
+      } else if let detail = event.detail, !detail.isEmpty {
+        Text(detail)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+      }
+
+      HStack(spacing: 10) {
+        Text(event.statusLabel)
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(event.outcome == "denied" ? .orange : .secondary)
+        Text(event.transferLabel)
+          .font(.caption.monospacedDigit())
+          .foregroundStyle(.secondary)
+      }
+    }
+    .contentShape(Rectangle())
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 

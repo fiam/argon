@@ -74,7 +74,8 @@ Argon can launch reviewer agents inside a local sandbox on macOS.
 That sandbox is driven by `Sandboxfile` discovery up the parent-directory
 chain, including `.Sandboxfile` and legacy `.Sanboxfile` variants. It
 currently covers filesystem writes, executable policy, environment shaping,
-and command interception. Network policy is not implemented yet. Repo
+command interception, and network policy through direct socket rules or a
+local HTTP(S) proxy. Repo
 policies can also include optional relative modules such as
 `./Sandboxfile.local`, and users can create `$HOME/.Sandboxfile` for
 policy that should apply after repo-local sandbox files. Use
@@ -83,6 +84,14 @@ policy stack for the current launch context. In the macOS app, requesting a
 sandboxed shell or agent with no resolved `Sandboxfile` shows a confirmation
 dialog that explains the default scaffold, including the built-in `git`
 module, and creates it before launch.
+
+On macOS today, direct `NET ALLOW CONNECT` rules are intentionally narrow:
+localhost or `*:port` shapes only. Hostname-based policy belongs under
+`NET ALLOW PROXY ...`. See [SANDBOX.md](SANDBOX.md) for the exact currently
+supported syntax. When a sandboxed workspace tab uses proxy-backed network
+rules, the app inspector shows the observed proxied requests for that tab.
+With `NET DEFAULT ALLOW`, proxy rules stay passive instead of forcing
+traffic through the proxy.
 
 Sandbox documentation:
 

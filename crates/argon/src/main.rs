@@ -9,6 +9,8 @@ use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod sandbox_proxy;
+
 use anyhow::{Context, Result, bail};
 use argon_core::{
     AgentEvent, AgentEventKind, CliCommand, CliResponse, CommentAnchor, CommentAuthor, CommentKind,
@@ -133,6 +135,8 @@ enum SandboxCommands {
     Explain(SandboxExplainArgs),
     #[command(hide = true)]
     Seatbelt(SandboxSeatbeltArgs),
+    #[command(hide = true)]
+    ProxyHelper(SandboxProxyHelperArgs),
     /// Run a command inside Argon's sandbox.
     Exec(SandboxExecArgs),
 }
@@ -318,6 +322,12 @@ struct SandboxSeatbeltArgs {
     /// Emit machine-readable JSON.
     #[arg(long)]
     json: bool,
+}
+
+#[derive(clap::Args, Debug)]
+struct SandboxProxyHelperArgs {
+    #[arg(long)]
+    config: PathBuf,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -853,6 +863,7 @@ fn run_sandbox(command: SandboxCommands, runtime: &RuntimeOptions) -> Result<()>
         SandboxCommands::Check(args) => run_sandbox_check(args),
         SandboxCommands::Explain(args) => run_sandbox_explain(args),
         SandboxCommands::Seatbelt(args) => run_sandbox_seatbelt(args),
+        SandboxCommands::ProxyHelper(args) => sandbox_proxy::run_proxy_helper(&args.config),
         SandboxCommands::Exec(args) => run_sandbox_exec(args),
     }
 }
@@ -2107,6 +2118,7 @@ fn run_sandbox_explain(args: SandboxExplainArgs) -> Result<()> {
         print_explained_sources(&explain.sources);
         print_filesystem_policy(&explain.policy);
         print_exec_policy(&explain.policy, &explain.intercepts);
+        print_network_policy(&explain.policy);
         print_environment_policy(
             explain.environment_default,
             &explain.allowed_environment_patterns,
@@ -2226,6 +2238,39 @@ fn print_exec_policy(
         if let Some(path) = intercept.shim_path.as_ref() {
             println!("  shim: {}", path.display());
         }
+    }
+}
+
+fn print_network_policy(policy: &sandbox::EffectiveSandboxPolicy) {
+    println!("Network:");
+    println!("- default: {:?}", policy.net_default);
+    if policy.proxied_hosts.is_empty() {
+        println!("- proxy: (none)");
+    } else {
+        println!("- proxy:");
+        for value in &policy.proxied_hosts {
+            println!("  - {value}");
+        }
+    }
+
+    if policy.connect_rules.is_empty() {
+        println!("- connect: (none)");
+    } else {
+        println!("- connect:");
+        for rule in &policy.connect_rules {
+            println!(
+                "  - {} {}",
+                network_protocol_label(rule.protocol),
+                rule.target
+            );
+        }
+    }
+}
+
+fn network_protocol_label(protocol: sandbox::NetProtocol) -> &'static str {
+    match protocol {
+        sandbox::NetProtocol::Tcp => "tcp",
+        sandbox::NetProtocol::Udp => "udp",
     }
 }
 
@@ -2352,9 +2397,28 @@ fn run_sandbox_exec(args: SandboxExecArgs) -> Result<()> {
         eprintln!("created Sandboxfile at {}", init.path.display());
     }
 
-    let plan = sandbox::build_execution_plan(&context, &args.context.write_roots)?;
+    let mut plan = sandbox::build_execution_plan(&context, &args.context.write_roots)?;
+    let mut runtime_policy = plan.policy.clone();
+    let network_log_path = sandbox_proxy::prepare_network_log_for_current_tab()?;
+    let requires_proxy_injection = matches!(runtime_policy.net_default, sandbox::NetDefault::None)
+        && !runtime_policy.proxied_hosts.is_empty();
+    if requires_proxy_injection {
+        let current_exe =
+            std::env::current_exe().context("failed to resolve the current argon executable")?;
+        let proxy = sandbox_proxy::spawn_proxy_helper(
+            &current_exe,
+            &runtime_policy.proxied_hosts,
+            network_log_path,
+        )?;
+        for (key, value) in proxy.environment {
+            plan.environment.insert(key, value);
+        }
+        runtime_policy
+            .connect_rules
+            .push(sandbox_proxy::runtime_connect_rule(proxy.port));
+    }
     print_sandbox_messages(&plan.infos, &plan.warnings);
-    sandbox::apply_current_process(&plan.policy)?;
+    sandbox::apply_current_process(&runtime_policy)?;
     exec_command(program, command_args, &plan)
 }
 
