@@ -894,11 +894,11 @@ USE os
             .arg("sandbox")
             .arg("exec")
             .arg("--")
-            .arg("/usr/bin/curl")
-            .arg("-qfsS")
-            .arg("--max-time")
-            .arg("5")
-            .arg(format!("http://127.0.0.1:{port}/hello")),
+            .arg("/bin/sh")
+            .arg("-lc")
+            .arg(format!(
+                "exec /usr/bin/curl -qfsS --proxy \"$http_proxy\" --max-time 5 http://127.0.0.1:{port}/hello"
+            )),
     )?;
     let _ = server.join();
 

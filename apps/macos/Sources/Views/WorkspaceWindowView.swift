@@ -2020,8 +2020,13 @@ private struct WorkspaceSandboxNetworkPane: View {
         }
 
         if events.isEmpty {
-          Text("No proxied network activity yet.")
-            .font(.subheadline.weight(.medium))
+          VStack(alignment: .leading, spacing: 4) {
+            Text("No proxied network activity yet.")
+              .font(.subheadline.weight(.medium))
+            Text("Only traffic routed through `NET ALLOW PROXY` appears here.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
         } else {
           ScrollViewReader { proxy in
             ScrollView {
