@@ -350,6 +350,44 @@ struct WorkspaceStateTests {
     #expect(state.selectedReviewSummaryText?.contains("Testing:\nmake check") == true)
   }
 
+  @Test("typed review summary responses update the persisted draft")
+  @MainActor
+  func typedReviewSummaryResponsesUpdateThePersistedDraft() async throws {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+
+    let prompt = try state.prepareReviewSummaryPrompt(
+      for: "/tmp/repo/feature",
+      agentTabID: UUID()
+    )
+    let pending = try #require(
+      state.pendingReviewSummaryRequest(for: "/tmp/repo/feature")
+    )
+
+    #expect(prompt.contains(pending.responseFilePath))
+    #expect(state.isRequestingReviewSummary(for: "/tmp/repo/feature"))
+
+    let response = WorkspaceAgentControlResponse.reviewSummary(
+      requestID: pending.request.id,
+      status: .success,
+      message: "Summary drafted from the current diff.",
+      draft: WorkspaceReviewSummaryDraft(
+        title: "Review workspace",
+        summary: "Summarize the diff before review.",
+        testing: "make check",
+        risks: "Need more UI coverage."
+      )
+    )
+    try write(agentControlResponse: response, to: pending.responseFilePath)
+
+    #expect(
+      await waitUntil {
+        state.reviewSummaryDraft(for: "/tmp/repo/feature")?.title == "Review workspace"
+      })
+    #expect(state.isRequestingReviewSummary(for: "/tmp/repo/feature") == false)
+    #expect(state.launchWarningMessage == "Summary drafted from the current diff.")
+  }
+
   @Test("launching an agent from review preparation stages the draft and opens the agent sheet")
   @MainActor
   func launchingAgentFromReviewPreparationStagesTheDraftAndOpensTheAgentSheet() {
@@ -590,6 +628,41 @@ struct WorkspaceStateTests {
       prompt.contains(
         "Suggested compare URL: https://github.com/example/repo/compare/main...feature/window?expand=1"
       ))
+  }
+
+  @Test("typed finalize failure responses surface an error and clear pending state")
+  @MainActor
+  func typedFinalizeFailureResponsesSurfaceAnError() async throws {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+
+    let prompt = try state.prepareFinalizePrompt(
+      for: .openPullRequest,
+      sourceTabID: UUID()
+    )
+    let pending = try #require(
+      state.pendingFinalizeRequest(for: .openPullRequest, worktreePath: "/tmp/repo/feature")
+    )
+
+    #expect(prompt.contains(pending.responseFilePath))
+
+    let response = WorkspaceAgentControlResponse.finalize(
+      requestID: pending.request.id,
+      action: .openPullRequest,
+      status: .failed,
+      message: "GitHub authentication is not configured.",
+      branchHead: nil,
+      pullRequestURL: nil,
+      followUp: nil
+    )
+    try write(agentControlResponse: response, to: pending.responseFilePath)
+
+    #expect(
+      await waitUntil {
+        state.errorMessage == "GitHub authentication is not configured."
+      })
+    #expect(
+      state.pendingFinalizeRequest(for: .openPullRequest, worktreePath: "/tmp/repo/feature") == nil)
   }
 
   @Test("staged review launches activate after the agent sheet dismisses")
@@ -1565,6 +1638,18 @@ struct WorkspaceStateTests {
     encoder.dateEncodingStrategy = .iso8601
     let data = try encoder.encode(session)
     try data.write(to: url)
+  }
+
+  private func write(agentControlResponse: WorkspaceAgentControlResponse, to path: String) throws {
+    let url = URL(fileURLWithPath: path)
+    try FileManager.default.createDirectory(
+      at: url.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+    let data = try encoder.encode(agentControlResponse)
+    try data.write(to: url, options: .atomic)
   }
 
   private func waitUntil(

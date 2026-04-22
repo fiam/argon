@@ -180,6 +180,8 @@ private struct WorkspaceContentView: View {
         WorkspaceReviewPreparationSheet(
           preparation: preparation,
           candidates: workspaceState.reviewAgentCandidates,
+          isRequestingSummary: workspaceState.isRequestingReviewSummary(
+            for: preparation.worktreePath),
           onChange: { workspaceState.updatePendingReviewPreparation($0) },
           onRequestSummary: { preparation in
             requestReviewSummary(for: preparation)
@@ -362,11 +364,13 @@ private struct WorkspaceContentView: View {
 
     Task {
       do {
-        let request = try workspaceState.reviewSummaryControlRequest(
-          for: preparation.worktreePath
+        let prompt = try workspaceState.prepareReviewSummaryPrompt(
+          for: preparation.worktreePath,
+          agentTabID: agentTabID
         )
-        let injected = await GhosttyTerminalView.injectPrompt(request.prompt, into: agentTabID)
+        let injected = await GhosttyTerminalView.injectPrompt(prompt, into: agentTabID)
         if !injected {
+          workspaceState.cancelReviewSummaryRequest(for: preparation.worktreePath)
           workspaceState.errorMessage =
             "Argon could not hand off the review summary prompt to the selected agent tab."
         }
@@ -385,9 +389,13 @@ private struct WorkspaceContentView: View {
       guard let action = workspaceState.activeFinalizeAction else { return }
 
       do {
-        let prompt = try workspaceState.finalizePrompt(for: action)
+        let prompt = try workspaceState.prepareFinalizePrompt(
+          for: action,
+          sourceTabID: agentTabID
+        )
         let injected = await GhosttyTerminalView.injectPrompt(prompt, into: agentTabID)
         if !injected {
+          workspaceState.cancelFinalizeRequest(for: action)
           workspaceState.errorMessage =
             "Argon could not hand off the \(action.title.lowercased()) prompt to the selected agent tab."
         }
@@ -1175,6 +1183,7 @@ private struct WorkspaceReviewPreparationSheet: View {
   @State private var preparation: WorkspaceReviewPreparation
 
   let candidates: [WorkspaceTerminalTab]
+  let isRequestingSummary: Bool
   let onChange: (WorkspaceReviewPreparation) -> Void
   let onRequestSummary: (WorkspaceReviewPreparation) -> Void
   let onLaunchAgent: () -> Void
@@ -1184,6 +1193,7 @@ private struct WorkspaceReviewPreparationSheet: View {
   init(
     preparation: WorkspaceReviewPreparation,
     candidates: [WorkspaceTerminalTab],
+    isRequestingSummary: Bool,
     onChange: @escaping (WorkspaceReviewPreparation) -> Void,
     onRequestSummary: @escaping (WorkspaceReviewPreparation) -> Void,
     onLaunchAgent: @escaping () -> Void,
@@ -1192,6 +1202,7 @@ private struct WorkspaceReviewPreparationSheet: View {
   ) {
     self._preparation = State(initialValue: preparation)
     self.candidates = candidates
+    self.isRequestingSummary = isRequestingSummary
     self.onChange = onChange
     self.onRequestSummary = onRequestSummary
     self.onLaunchAgent = onLaunchAgent
@@ -1259,10 +1270,10 @@ private struct WorkspaceReviewPreparationSheet: View {
       }
 
       HStack {
-        Button("Ask Agent to Draft") {
+        Button(isRequestingSummary ? "Waiting for Agent…" : "Ask Agent to Draft") {
           onRequestSummary(preparation.normalized())
         }
-        .disabled(preparation.selectedAgentTabID == nil)
+        .disabled(preparation.selectedAgentTabID == nil || isRequestingSummary)
 
         Button("Launch Agent…") {
           onChange(preparation.normalized())

@@ -48,6 +48,7 @@ final class WorkspaceState {
   var isPresentingMergeBackOptions = false
   var reviewAgentCandidates: [WorkspaceTerminalTab] = []
   var pendingReviewPreparation: WorkspaceReviewPreparation?
+  var activeReviewSummaryRequestWorktreePath: String?
   var finalizeAgentCandidates: [WorkspaceTerminalTab] = []
   var mergeBackOptions: [WorktreeFinalizeAction] = []
   var pendingReviewAgentTabID: UUID?
@@ -68,6 +69,8 @@ final class WorkspaceState {
   private var pendingSandboxedShellLaunchCount = 0
   private var isResolvingSandboxedShellLaunch = false
   private var terminalBellTasksByTabID: [UUID: Task<Void, Never>] = [:]
+  private var activeAgentControlRequestsByID: [UUID: PendingWorkspaceAgentControlRequest] = [:]
+  private var agentControlWatchTasksByRequestID: [UUID: Task<Void, Never>] = [:]
   private var pendingRestorableTabsByWorktreePath: [String: [PersistedWorkspaceTerminalTab]] = [:]
   private var pendingTabRestoreTasksByWorktreePath: [String: Task<Void, Never>] = [:]
   private var selectionLoadRequestID: UUID?
@@ -637,6 +640,19 @@ final class WorkspaceState {
     reviewAgentCandidates = []
   }
 
+  func isRequestingReviewSummary(for worktreePath: String) -> Bool {
+    activeReviewSummaryRequestWorktreePath == normalizedPath(worktreePath)
+  }
+
+  func pendingReviewSummaryRequest(
+    for worktreePath: String
+  ) -> PendingWorkspaceAgentControlRequest? {
+    let normalizedWorktreePath = normalizedPath(worktreePath)
+    return activeAgentControlRequestsByID.values.first { pending in
+      pending.worktreePath == normalizedWorktreePath && pending.request.action == .reviewSummary
+    }
+  }
+
   func launchAgentForPendingReviewPreparation() {
     guard let preparation = pendingReviewPreparation else { return }
     pendingReviewPreparationAfterAgentLaunch = preparation
@@ -657,6 +673,27 @@ final class WorkspaceState {
     pendingReviewPreparation = nil
     reviewAgentCandidates = []
     return preparation
+  }
+
+  func prepareReviewSummaryPrompt(
+    for worktreePath: String,
+    agentTabID: UUID?
+  ) throws -> String {
+    let request = try reviewSummaryControlRequest(for: worktreePath)
+    let pendingRequest = try beginAgentControlRequest(
+      request,
+      worktreePath: worktreePath,
+      sourceTabID: agentTabID
+    )
+    activeReviewSummaryRequestWorktreePath = normalizedPath(worktreePath)
+    return try request.promptWithResponseContract(responseFilePath: pendingRequest.responseFilePath)
+  }
+
+  func cancelReviewSummaryRequest(for worktreePath: String) {
+    cancelConflictingAgentControlRequests(
+      for: normalizedPath(worktreePath),
+      action: .reviewSummary
+    )
   }
 
   func beginRebaseFlow() {
@@ -751,7 +788,7 @@ final class WorkspaceState {
   func launchAgent(using options: WorkspaceAgentLaunchOptions) async throws {
     guard shouldLaunchReviewAfterNextAgentTab else {
       if let finalizeAction = activeFinalizeAction {
-        let prompt = try finalizePrompt(for: finalizeAction)
+        let prompt = try prepareFinalizePrompt(for: finalizeAction, sourceTabID: nil)
         let additionalWritableRoots =
           finalizeAction.requiresBaseRepoWriteAccess ? [target.repoRoot] : []
         guard
@@ -2037,6 +2074,38 @@ final class WorkspaceState {
     try finalizeControlRequest(for: action).prompt
   }
 
+  func prepareFinalizePrompt(
+    for action: WorktreeFinalizeAction,
+    sourceTabID: UUID?
+  ) throws -> String {
+    let request = try finalizeControlRequest(for: action)
+    let pendingRequest = try beginAgentControlRequest(
+      request,
+      worktreePath: request.worktreePath,
+      sourceTabID: sourceTabID
+    )
+    return try request.promptWithResponseContract(responseFilePath: pendingRequest.responseFilePath)
+  }
+
+  func cancelFinalizeRequest(for action: WorktreeFinalizeAction) {
+    guard let selectedWorktree else { return }
+    cancelConflictingAgentControlRequests(
+      for: normalizedPath(selectedWorktree.path),
+      action: .finalize(action)
+    )
+  }
+
+  func pendingFinalizeRequest(
+    for action: WorktreeFinalizeAction,
+    worktreePath: String? = nil
+  ) -> PendingWorkspaceAgentControlRequest? {
+    let normalizedWorktreePath = normalizedPath(worktreePath ?? selectedWorktree?.path ?? "")
+    return activeAgentControlRequestsByID.values.first { pending in
+      pending.worktreePath == normalizedWorktreePath
+        && pending.request.action == .finalize(action)
+    }
+  }
+
   func reviewSummaryControlRequest(
     for worktreePath: String
   ) throws -> WorkspaceAgentControlRequest {
@@ -2090,6 +2159,212 @@ final class WorkspaceState {
       baseRef: target.baseRef,
       compareURL: selectedPullRequestURL
     )
+  }
+
+  private func beginAgentControlRequest(
+    _ request: WorkspaceAgentControlRequest,
+    worktreePath: String,
+    sourceTabID: UUID?
+  ) throws -> PendingWorkspaceAgentControlRequest {
+    let normalizedWorktreePath = normalizedPath(worktreePath)
+    cancelConflictingAgentControlRequests(
+      for: normalizedWorktreePath,
+      action: request.action
+    )
+
+    let directoryURL = Self.agentControlDirectoryURL(for: normalizedWorktreePath)
+    try FileManager.default.createDirectory(
+      at: directoryURL,
+      withIntermediateDirectories: true
+    )
+
+    let responseFileURL =
+      directoryURL
+      .appendingPathComponent(request.id.uuidString.lowercased())
+      .appendingPathExtension("json")
+    try? FileManager.default.removeItem(at: responseFileURL)
+
+    let pendingRequest = PendingWorkspaceAgentControlRequest(
+      request: request,
+      worktreePath: normalizedWorktreePath,
+      responseFilePath: responseFileURL.path,
+      sourceTabID: sourceTabID
+    )
+
+    activeAgentControlRequestsByID[request.id] = pendingRequest
+    agentControlWatchTasksByRequestID[request.id] = Task { [weak self] in
+      guard
+        let response = await Self.waitForAgentControlResponse(
+          at: responseFileURL,
+          requestID: request.id
+        ),
+        !Task.isCancelled
+      else {
+        return
+      }
+
+      await MainActor.run {
+        self?.consumeAgentControlResponse(response, responseFileURL: responseFileURL)
+      }
+    }
+
+    return pendingRequest
+  }
+
+  private func cancelConflictingAgentControlRequests(
+    for worktreePath: String,
+    action: WorkspaceAgentControlAction
+  ) {
+    let conflictingRequestIDs = activeAgentControlRequestsByID.compactMap {
+      (entry: Dictionary<UUID, PendingWorkspaceAgentControlRequest>.Element) -> UUID? in
+      let (requestID, pending) = entry
+      guard pending.worktreePath == worktreePath, pending.request.action == action else {
+        return nil
+      }
+      return requestID
+    }
+
+    for requestID in conflictingRequestIDs {
+      cancelAgentControlRequest(requestID)
+    }
+  }
+
+  private func cancelAgentControlRequest(_ requestID: UUID) {
+    agentControlWatchTasksByRequestID.removeValue(forKey: requestID)?.cancel()
+    guard let pending = activeAgentControlRequestsByID.removeValue(forKey: requestID) else {
+      return
+    }
+    if case .reviewSummary = pending.request.action,
+      activeReviewSummaryRequestWorktreePath == pending.worktreePath
+    {
+      activeReviewSummaryRequestWorktreePath = nil
+    }
+  }
+
+  private func consumeAgentControlResponse(
+    _ response: WorkspaceAgentControlResponse,
+    responseFileURL: URL
+  ) {
+    defer { try? FileManager.default.removeItem(at: responseFileURL) }
+
+    guard let pending = activeAgentControlRequestsByID[response.requestID] else { return }
+    cancelAgentControlRequest(response.requestID)
+
+    switch (pending.request.action, response) {
+    case (
+      .reviewSummary,
+      .reviewSummary(_, let status, let message, let draft)
+    ):
+      handleReviewSummaryResponse(
+        status: status,
+        message: message,
+        draft: draft,
+        pendingRequest: pending
+      )
+    case (
+      .finalize(let expectedAction),
+      .finalize(_, let action, let status, let message, _, let pullRequestURL, let followUp)
+    ):
+      guard action == expectedAction else {
+        errorMessage = "Agent returned a finalize response for the wrong action."
+        return
+      }
+      handleFinalizeResponse(
+        status: status,
+        message: message,
+        pullRequestURL: pullRequestURL,
+        followUp: followUp,
+        pendingRequest: pending
+      )
+    default:
+      errorMessage = "Agent returned a response for the wrong request kind."
+    }
+  }
+
+  private func handleReviewSummaryResponse(
+    status: WorkspaceAgentControlStatus,
+    message: String,
+    draft: WorkspaceReviewSummaryDraft?,
+    pendingRequest: PendingWorkspaceAgentControlRequest
+  ) {
+    activeReviewSummaryRequestWorktreePath = nil
+
+    switch status {
+    case .success:
+      guard let draft else {
+        errorMessage = "Agent returned a successful review summary response without a draft."
+        return
+      }
+      let normalizedDraft = draft.normalized()
+      persistReviewSummaryDraft(normalizedDraft, for: pendingRequest.worktreePath)
+      if var preparation = pendingReviewPreparation,
+        normalizedPath(preparation.worktreePath) == pendingRequest.worktreePath
+      {
+        preparation.draft = normalizedDraft
+        pendingReviewPreparation = preparation
+      }
+      if !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        launchWarningMessage = message
+      }
+    case .failed:
+      errorMessage = message
+    }
+  }
+
+  private func handleFinalizeResponse(
+    status: WorkspaceAgentControlStatus,
+    message: String,
+    pullRequestURL: String?,
+    followUp: String?,
+    pendingRequest: PendingWorkspaceAgentControlRequest
+  ) {
+    switch status {
+    case .success:
+      let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
+      let trimmedFollowUp = followUp?.trimmingCharacters(in: .whitespacesAndNewlines)
+      if let pullRequestURL, !pullRequestURL.isEmpty,
+        normalizedSelectedWorktreePath == pendingRequest.worktreePath
+      {
+        selectedPullRequestURL = pullRequestURL
+      }
+      let statusParts = [trimmedMessage] + (trimmedFollowUp.map { [$0] } ?? [])
+      let displayMessage = statusParts.filter { !$0.isEmpty }.joined(separator: " ")
+      if !displayMessage.isEmpty {
+        launchWarningMessage = displayMessage
+      }
+      Task { @MainActor [weak self] in
+        await self?.refreshWorktree(path: pendingRequest.worktreePath)
+        self?.refreshReviewSnapshot(for: pendingRequest.worktreePath)
+      }
+    case .failed:
+      errorMessage = message
+    }
+  }
+
+  nonisolated private static func waitForAgentControlResponse(
+    at responseFileURL: URL,
+    requestID: UUID
+  ) async -> WorkspaceAgentControlResponse? {
+    let decoder = JSONDecoder()
+
+    while !Task.isCancelled {
+      if let data = try? Data(contentsOf: responseFileURL),
+        let response = try? decoder.decode(WorkspaceAgentControlResponse.self, from: data),
+        response.requestID == requestID
+      {
+        return response
+      }
+
+      try? await Task.sleep(for: .milliseconds(250))
+    }
+
+    return nil
+  }
+
+  nonisolated private static func agentControlDirectoryURL(for worktreePath: String) -> URL {
+    URL(fileURLWithPath: worktreePath)
+      .appendingPathComponent(".tmp", isDirectory: true)
+      .appendingPathComponent("argon-agent-control", isDirectory: true)
   }
 
   private func mergeBackOptions(for topology: BranchTopology) -> [WorktreeFinalizeAction] {
