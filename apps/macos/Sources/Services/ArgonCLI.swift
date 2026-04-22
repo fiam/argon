@@ -24,6 +24,26 @@ enum ArgonCLI {
     let lines: [[StyledSpan]]
   }
 
+  struct SandboxExplainResponse: Decodable, Sendable {
+    let policy: SandboxExplainPolicy
+  }
+
+  struct SandboxExplainPolicy: Decodable, Equatable, Sendable {
+    let netDefault: SandboxNetDefault
+    let proxiedHosts: [String]
+    let connectRules: [SandboxConnectRule]
+  }
+
+  enum SandboxNetDefault: String, Decodable, Equatable, Sendable {
+    case allow
+    case none
+  }
+
+  struct SandboxConnectRule: Decodable, Equatable, Sendable {
+    let `protocol`: String
+    let target: String
+  }
+
   // MARK: - Session Creation
 
   static func cliPath() -> String {
@@ -282,6 +302,33 @@ enum ArgonCLI {
       args: ["sandbox", "init", "--repo-root", repoRoot, "--json"]
     )
     return try decode(SandboxInitResult.self, from: output)
+  }
+
+  static func sandboxExplain(
+    repoRoot: String,
+    sandboxExecArguments: [String]
+  ) throws -> SandboxExplainResponse {
+    let args = try sandboxExplainArguments(fromSandboxExecArguments: sandboxExecArguments)
+    let output = try run(repoRoot: repoRoot, args: args)
+    return try decode(SandboxExplainResponse.self, from: output)
+  }
+
+  static func sandboxExplainArguments(
+    fromSandboxExecArguments sandboxExecArguments: [String]
+  ) throws -> [String] {
+    guard sandboxExecArguments.count >= 2,
+      sandboxExecArguments[0] == "sandbox",
+      sandboxExecArguments[1] == "exec"
+    else {
+      throw CLIError.commandFailed("Expected sandbox exec launch arguments")
+    }
+
+    let contextArguments = Array(
+      sandboxExecArguments
+        .dropFirst(2)
+        .prefix { $0 != "--" }
+    )
+    return ["sandbox", "explain", "--json"] + contextArguments
   }
 
   static func extractAgentPromptText(from output: String) -> String {

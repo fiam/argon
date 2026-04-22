@@ -2005,6 +2005,7 @@ private struct WorkspaceSandboxNetworkPane: View {
   let tab: WorkspaceTerminalTab
 
   @State private var events: [SandboxNetworkActivityEvent] = []
+  @State private var statusSummary: SandboxNetworkStatusSummary?
   @State private var lastVisibleEventID: String?
 
   var body: some View {
@@ -2021,11 +2022,13 @@ private struct WorkspaceSandboxNetworkPane: View {
 
         if events.isEmpty {
           VStack(alignment: .leading, spacing: 4) {
-            Text("No proxied network activity yet.")
+            Text(statusSummary?.headline ?? "No network activity yet.")
               .font(.subheadline.weight(.medium))
-            Text("Only traffic routed through `NET ALLOW PROXY` appears here.")
-              .font(.caption)
-              .foregroundStyle(.secondary)
+            if let detail = statusSummary?.detail, !detail.isEmpty {
+              Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
           }
         } else {
           ScrollViewReader { proxy in
@@ -2055,8 +2058,27 @@ private struct WorkspaceSandboxNetworkPane: View {
       }
     }
     .task(id: tab.id) {
+      statusSummary = nil
+      events = []
+      lastVisibleEventID = nil
+      await loadNetworkStatus(for: tab)
       await refreshLoop(for: tab.id)
     }
+  }
+
+  private func loadNetworkStatus(for tab: WorkspaceTerminalTab) async {
+    let repoRoot = tab.worktreePath
+    let processExecutable = tab.launch.processSpec.executable
+    let processArguments = tab.launch.processSpec.args
+    let summary = await Task.detached(priority: .userInitiated) {
+      try? SandboxNetworkStatusLoader.load(
+        repoRoot: repoRoot,
+        processExecutable: processExecutable,
+        processArguments: processArguments
+      )
+    }.value
+    guard !Task.isCancelled else { return }
+    statusSummary = summary
   }
 
   private func refreshLoop(for tabID: UUID) async {
