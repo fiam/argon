@@ -252,9 +252,9 @@ struct WorkspaceStateTests {
     #expect(second.title == "codex #2")
   }
 
-  @Test("review handoff auto-selects a single running agent tab")
+  @Test("review preparation auto-selects a single running agent tab")
   @MainActor
-  func reviewHandoffAutoSelectsSingleRunningAgentTab() throws {
+  func reviewPreparationAutoSelectsSingleRunningAgentTab() throws {
     let state = makeState()
     let tab = try #require(
       state.openAgentTab(
@@ -268,14 +268,14 @@ struct WorkspaceStateTests {
 
     state.beginReviewLaunchFlow()
 
-    #expect(state.pendingReviewAgentTabID == tab.id)
-    #expect(state.isPresentingReviewAgentPicker == false)
+    #expect(state.pendingReviewPreparation?.selectedAgentTabID == tab.id)
+    #expect(state.isPresentingReviewPreparationSheet == true)
     #expect(state.isPresentingAgentLaunchSheet == false)
   }
 
-  @Test("review handoff asks when multiple running agent tabs exist")
+  @Test("review preparation allows manual choice when multiple running agent tabs exist")
   @MainActor
-  func reviewHandoffAsksWhenMultipleRunningAgentTabsExist() throws {
+  func reviewPreparationAllowsManualChoiceWhenMultipleRunningAgentTabsExist() throws {
     let state = makeState()
     _ = state.openAgentTab(
       WorkspaceAgentLaunchRequest(
@@ -297,27 +297,116 @@ struct WorkspaceStateTests {
 
     state.beginReviewLaunchFlow()
 
-    #expect(state.pendingReviewAgentTabID == nil)
-    #expect(state.isPresentingReviewAgentPicker == true)
+    #expect(state.pendingReviewPreparation?.selectedAgentTabID == nil)
+    #expect(state.isPresentingReviewPreparationSheet == true)
     #expect(state.reviewAgentCandidates.count == 2)
-
-    state.chooseReviewAgentTab(second.id)
-
-    #expect(state.pendingReviewAgentTabID == second.id)
-    #expect(state.isPresentingReviewAgentPicker == false)
-    #expect(state.reviewAgentCandidates.isEmpty)
+    state.updatePendingReviewPreparation(
+      WorkspaceReviewPreparation(
+        worktreePath: "/tmp/repo",
+        draft: .empty,
+        selectedAgentTabID: second.id
+      )
+    )
+    #expect(state.pendingReviewPreparation?.selectedAgentTabID == second.id)
   }
 
-  @Test("review handoff falls back to launching a new agent when none are attached")
+  @Test("review preparation allows manual summary when no running agent tabs exist")
   @MainActor
-  func reviewHandoffFallsBackToLaunchingNewAgentWhenNoneAreAttached() {
+  func reviewPreparationAllowsManualSummaryWhenNoRunningAgentTabsExist() {
     let state = makeState()
     state.openShellTab()
 
     state.beginReviewLaunchFlow()
 
-    #expect(state.pendingReviewAgentTabID == nil)
+    #expect(state.pendingReviewPreparation?.selectedAgentTabID == nil)
+    #expect(state.isPresentingReviewPreparationSheet == true)
+    #expect(state.isPresentingAgentLaunchSheet == false)
+    #expect(state.reviewAgentCandidates.isEmpty)
+  }
+
+  @Test("review preparation persists the normalized summary draft")
+  @MainActor
+  func reviewPreparationPersistsTheNormalizedSummaryDraft() {
+    let state = makeState()
+    state.beginReviewLaunchFlow()
+    state.updatePendingReviewPreparation(
+      WorkspaceReviewPreparation(
+        worktreePath: "/tmp/repo",
+        draft: WorkspaceReviewSummaryDraft(
+          title: "  Tighten review flow  ",
+          summary: "  Added a summary-first review path.  ",
+          testing: "  make check  ",
+          risks: "  Need more UI coverage  "
+        ),
+        selectedAgentTabID: nil
+      )
+    )
+
+    let committed = state.commitPendingReviewPreparation()
+
+    #expect(committed?.draft.title == "Tighten review flow")
+    #expect(
+      state.reviewSummaryDraft(for: "/tmp/repo")?.summary == "Added a summary-first review path.")
+    #expect(state.selectedReviewSummaryText?.contains("Testing:\nmake check") == true)
+  }
+
+  @Test("launching an agent from review preparation stages the draft and opens the agent sheet")
+  @MainActor
+  func launchingAgentFromReviewPreparationStagesTheDraftAndOpensTheAgentSheet() {
+    let state = makeState()
+    state.beginReviewLaunchFlow()
+    state.updatePendingReviewPreparation(
+      WorkspaceReviewPreparation(
+        worktreePath: "/tmp/repo",
+        draft: WorkspaceReviewSummaryDraft(
+          title: "Review workspace",
+          summary: "Summarize the diff before review.",
+          testing: "",
+          risks: ""
+        ),
+        selectedAgentTabID: nil
+      )
+    )
+
+    state.launchAgentForPendingReviewPreparation()
+
+    #expect(state.isPresentingReviewPreparationSheet == false)
     #expect(state.isPresentingAgentLaunchSheet == true)
+    #expect(state.reviewSummaryDraft(for: "/tmp/repo")?.title == "Review workspace")
+  }
+
+  @Test("review snapshots are hidden when the selected target changes")
+  @MainActor
+  func reviewSnapshotsAreHiddenWhenTheSelectedTargetChanges() {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+    let updatedAt = Date(timeIntervalSince1970: 1_717_171_717)
+    let staleSession = ReviewSession(
+      id: UUID(),
+      repoRoot: "/tmp/repo/feature",
+      mode: .branch,
+      baseRef: "origin/main",
+      headRef: "feature/old-window",
+      mergeBaseSha: "old123",
+      changeSummary: "Old summary",
+      status: .approved,
+      threads: [],
+      decision: ReviewDecision(
+        outcome: .approved,
+        summary: "Old decision",
+        createdAt: updatedAt
+      ),
+      agentLastSeenAt: nil,
+      createdAt: updatedAt,
+      updatedAt: updatedAt
+    )
+    state.reviewSnapshotsByWorktreePath["/tmp/repo/feature"] = WorkspaceReviewSnapshot(
+      session: staleSession
+    )
+
+    #expect(state.reviewSnapshot(for: "/tmp/repo/feature") == nil)
+    #expect(state.selectedReviewSnapshot == nil)
+    #expect(state.selectedReviewSummaryText == nil)
   }
 
   @Test("finalize flow auto-selects a single eligible running agent tab")
@@ -1219,6 +1308,12 @@ struct WorkspaceStateTests {
     setenv("ARGON_HOME", storageRoot.path, 1)
 
     let state = makeState()
+    state.reviewTargetsByWorktreePath["/tmp/repo"] = ResolvedTarget(
+      mode: .branch,
+      baseRef: "origin/main",
+      headRef: "feature/workspace",
+      mergeBaseSha: "abc123"
+    )
     let sessionsDirectory =
       storageRoot
       .appendingPathComponent("sessions")

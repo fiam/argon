@@ -44,6 +44,13 @@ struct WorktreeDiffSummary: Hashable, Sendable {
 
 enum GitService {
   private static let emptyTreeSHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+  nonisolated(unsafe) static var commandRunner:
+    (
+      @Sendable (
+        _ executable: String, _ arguments: [String], _ currentDirectoryPath: String?,
+        _ environment: [String: String]?
+      ) -> CommandResult
+    )?
 
   enum GitError: LocalizedError {
     case commandFailed(String)
@@ -294,6 +301,26 @@ enum GitService {
     return "\(repositoryURL)/compare/\(baseBranch)...\(headBranch)?expand=1"
   }
 
+  static func pullRequestURL(
+    repoRoot: String,
+    mode: ReviewMode,
+    baseRef: String,
+    headRef: String
+  ) -> String? {
+    guard mode == .branch else { return nil }
+    return existingPullRequestURL(
+      repoRoot: repoRoot,
+      baseRef: baseRef,
+      headRef: headRef
+    )
+      ?? pullRequestCompareURL(
+        repoRoot: repoRoot,
+        mode: mode,
+        baseRef: baseRef,
+        headRef: headRef
+      )
+  }
+
   static func formatDiffStat(files: [FileDiff]) -> String {
     guard !files.isEmpty else { return "" }
 
@@ -470,6 +497,45 @@ enum GitService {
       .replacingOccurrences(of: "refs/heads/", with: "")
       .replacingOccurrences(of: "refs/remotes/", with: "")
       .replacingOccurrences(of: "origin/", with: "")
+  }
+
+  private static func existingPullRequestURL(
+    repoRoot: String,
+    baseRef: String,
+    headRef: String
+  ) -> String? {
+    guard githubRepositoryURL(repoRoot: repoRoot) != nil else { return nil }
+
+    let baseBranch = githubBranchName(baseRef)
+    let headBranch = githubBranchName(headRef)
+    guard !baseBranch.isEmpty, !headBranch.isEmpty, baseBranch != headBranch else { return nil }
+
+    let result = runCommand(
+      executable: "/usr/bin/env",
+      arguments: [
+        "gh", "pr", "view",
+        "--json", "url",
+        "--head", headBranch,
+        "--base", baseBranch,
+      ],
+      currentDirectoryPath: repoRoot,
+      environment: [
+        "GH_PROMPT_DISABLED": "1",
+        "NO_COLOR": "1",
+      ]
+    )
+
+    guard result.terminationStatus == 0, !result.stdout.isEmpty else { return nil }
+    guard
+      let data = result.stdout.data(using: .utf8),
+      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      let url = object["url"] as? String,
+      !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+      return nil
+    }
+
+    return url
   }
 
   static func diff(session: ReviewSession) -> String {
@@ -798,6 +864,51 @@ enum GitService {
     URL(fileURLWithPath: path).standardizedFileURL.path
   }
 
+  private static func runCommand(
+    executable: String,
+    arguments: [String],
+    currentDirectoryPath: String? = nil,
+    environment: [String: String]? = nil
+  ) -> CommandResult {
+    if let commandRunner {
+      return commandRunner(executable, arguments, currentDirectoryPath, environment)
+    }
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = arguments
+    if let currentDirectoryPath {
+      process.currentDirectoryURL = URL(fileURLWithPath: currentDirectoryPath)
+    }
+    if let environment {
+      var merged = ProcessInfo.processInfo.environment
+      for (key, value) in environment {
+        merged[key] = value
+      }
+      process.environment = merged
+    }
+
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardOutput = stdout
+    process.standardError = stderr
+
+    do {
+      try process.run()
+    } catch {
+      return CommandResult(terminationStatus: -1, stdout: "", stderr: error.localizedDescription)
+    }
+
+    let stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
+    let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    return CommandResult(
+      terminationStatus: process.terminationStatus,
+      stdout: String(decoding: stdoutData, as: UTF8.self),
+      stderr: String(decoding: stderrData, as: UTF8.self)
+    )
+  }
+
   static func requireGit(_ args: [String]) throws -> String {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
@@ -850,4 +961,10 @@ enum GitService {
     process.waitUntilExit()
     return String(data: data, encoding: .utf8) ?? ""
   }
+}
+
+struct CommandResult: Equatable, Sendable {
+  let terminationStatus: Int32
+  let stdout: String
+  let stderr: String
 }

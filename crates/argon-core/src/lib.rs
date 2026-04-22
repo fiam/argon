@@ -1,3 +1,4 @@
+pub mod agent_control;
 pub mod diff;
 pub mod highlight;
 pub mod model;
@@ -5,6 +6,9 @@ pub mod protocol;
 pub mod store;
 pub mod target;
 
+pub use agent_control::{
+    AgentControlAction, AgentControlRequest, FinalizeAction, ReviewSummaryDraft,
+};
 pub use diff::{
     DiffError, DiffHunk, DiffLine, DiffLineKind, FileDiff, ReviewDiff, anchor_at,
     anchor_for_diff_line, build_review_diff, parse_unified_diff,

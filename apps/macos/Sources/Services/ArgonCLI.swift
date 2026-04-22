@@ -52,11 +52,19 @@ enum ArgonCLI {
 
   /// Creates a new review session for the given repo path.
   /// Returns the session ID and repo root from the CLI output.
-  static func createSession(repoRoot: String) throws -> ReviewTarget {
+  static func createSession(
+    repoRoot: String,
+    changeSummary: String? = nil
+  ) throws -> ReviewTarget {
     let cli = findCLI()
     let process = Process()
     process.executableURL = URL(fileURLWithPath: cli)
-    process.arguments = ["review", "--repo", repoRoot, "--json"]
+    var arguments = ["review", "--repo", repoRoot]
+    if let changeSummary, !changeSummary.isEmpty {
+      arguments += ["--description", changeSummary]
+    }
+    arguments.append("--json")
+    process.arguments = arguments
     process.currentDirectoryURL = URL(fileURLWithPath: repoRoot)
 
     // Prevent the CLI from trying to launch the desktop app (we are it).

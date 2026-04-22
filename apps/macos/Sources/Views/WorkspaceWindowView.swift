@@ -158,7 +158,7 @@ private struct WorkspaceContentView: View {
         WorkspaceToolbarItems(
           showsFinalizeControls: workspaceState.canFinalizeSelectedWorktree,
           showsReviewProgress: isPreparingSelectedWorktreeReview,
-          isReviewDisabled: workspaceState.isPresentingReviewAgentPicker,
+          isReviewDisabled: workspaceState.isPresentingReviewPreparationSheet,
           canRebase: workspaceState.canRebaseSelectedWorktree,
           canMergeBack: workspaceState.canMergeBackSelectedWorktree,
           canOpenPR: workspaceState.canOpenPullRequestForSelectedWorktree,
@@ -171,22 +171,36 @@ private struct WorkspaceContentView: View {
       }
     }
     .sheet(
-      isPresented: $workspaceState.isPresentingReviewAgentPicker,
+      isPresented: $workspaceState.isPresentingReviewPreparationSheet,
       onDismiss: {
-        workspaceState.dismissReviewAgentPicker()
+        workspaceState.dismissReviewPreparationSheet()
       }
     ) {
-      WorkspaceAgentPickerSheet(
-        title: "Choose Agent",
-        subtitle: "Select the live agent tab that should receive the review handoff.",
-        candidates: workspaceState.reviewAgentCandidates,
-        onSelect: { tabID in
-          workspaceState.chooseReviewAgentTab(tabID)
-        },
-        onCancel: {
-          workspaceState.dismissReviewAgentPicker()
-        }
-      )
+      if let preparation = workspaceState.pendingReviewPreparation {
+        WorkspaceReviewPreparationSheet(
+          preparation: preparation,
+          candidates: workspaceState.reviewAgentCandidates,
+          onChange: { workspaceState.updatePendingReviewPreparation($0) },
+          onRequestSummary: { preparation in
+            requestReviewSummary(for: preparation)
+          },
+          onLaunchAgent: {
+            workspaceState.launchAgentForPendingReviewPreparation()
+          },
+          onStartReview: { preparation in
+            startReview(using: preparation)
+          },
+          onCancel: {
+            workspaceState.dismissReviewPreparationSheet()
+          }
+        )
+      } else {
+        Color.clear
+          .frame(width: 1, height: 1)
+          .onAppear {
+            workspaceState.dismissReviewPreparationSheet()
+          }
+      }
     }
     .sheet(
       isPresented: $workspaceState.isPresentingFinalizeAgentPicker,
@@ -282,13 +296,20 @@ private struct WorkspaceContentView: View {
   }
 
   private func launchReview(using agentTabID: UUID) {
+    launchReview(using: agentTabID, changeSummary: nil)
+  }
+
+  private func launchReview(using agentTabID: UUID, changeSummary: String?) {
     Task {
       do {
         let target: ReviewTarget
         if let preparedTarget = workspaceState.consumePreparedReviewTarget(for: agentTabID) {
           target = preparedTarget
         } else {
-          target = try await workspaceState.createReviewTarget(launchContext: .coderHandoff)
+          target = try await workspaceState.createReviewTarget(
+            launchContext: .coderHandoff,
+            changeSummary: changeSummary
+          )
           do {
             let prompt = try await Task.detached {
               try ArgonCLI.agentPrompt(sessionId: target.sessionId, repoRoot: target.repoRoot)
@@ -305,6 +326,49 @@ private struct WorkspaceContentView: View {
         }
         reviewWindowRegistry.open(target: target) { target in
           openWindow(value: target)
+        }
+      } catch {
+        workspaceState.errorMessage = error.localizedDescription
+      }
+    }
+  }
+
+  private func startReview(using preparation: WorkspaceReviewPreparation) {
+    let normalizedPreparation = preparation.normalized()
+    if let agentTabID = normalizedPreparation.selectedAgentTabID {
+      launchReview(
+        using: agentTabID,
+        changeSummary: normalizedPreparation.draft.renderedSummary
+      )
+      return
+    }
+
+    Task {
+      do {
+        let target = try await workspaceState.createReviewTarget(
+          changeSummary: normalizedPreparation.draft.renderedSummary
+        )
+        reviewWindowRegistry.open(target: target) { target in
+          openWindow(value: target)
+        }
+      } catch {
+        workspaceState.errorMessage = error.localizedDescription
+      }
+    }
+  }
+
+  private func requestReviewSummary(for preparation: WorkspaceReviewPreparation) {
+    guard let agentTabID = preparation.selectedAgentTabID else { return }
+
+    Task {
+      do {
+        let request = try workspaceState.reviewSummaryControlRequest(
+          for: preparation.worktreePath
+        )
+        let injected = await GhosttyTerminalView.injectPrompt(request.prompt, into: agentTabID)
+        if !injected {
+          workspaceState.errorMessage =
+            "Argon could not hand off the review summary prompt to the selected agent tab."
         }
       } catch {
         workspaceState.errorMessage = error.localizedDescription
@@ -438,6 +502,14 @@ private struct WorkspaceSidebarRow: View {
           HStack(spacing: 10) {
             WorkspaceCompactDiffSummary(summary: summary)
 
+            if let reviewStatusLabel {
+              WorkspaceSidebarMetadataItem(
+                label: reviewStatusLabel,
+                symbolTint: reviewStatusTint,
+                accessibilityIdentifier: "workspace-sidebar-review-status"
+              )
+            }
+
             if needsAttention {
               WorkspaceSidebarMetadataItem(
                 label: "Needs attention",
@@ -518,6 +590,38 @@ private struct WorkspaceSidebarRow: View {
 
   private var activeAgentCount: Int {
     workspaceState.activeAgentCount(for: worktree.path)
+  }
+
+  private var reviewSnapshot: WorkspaceReviewSnapshot? {
+    workspaceState.reviewSnapshot(for: worktree.path)
+  }
+
+  private var reviewStatusLabel: String? {
+    guard let reviewSnapshot else { return nil }
+    switch reviewSnapshot.status {
+    case .awaitingReviewer:
+      return "awaiting review"
+    case .awaitingAgent:
+      return "awaiting agent"
+    case .approved:
+      return "approved"
+    case .closed:
+      return "closed"
+    }
+  }
+
+  private var reviewStatusTint: Color {
+    guard let reviewSnapshot else { return .secondary }
+    switch reviewSnapshot.status {
+    case .awaitingReviewer:
+      return .orange
+    case .awaitingAgent:
+      return .blue
+    case .approved:
+      return .green
+    case .closed:
+      return .secondary
+    }
   }
 }
 
@@ -833,7 +937,10 @@ private struct WorkspaceTerminalDeck: View {
 
   private func launchExternalReview() async -> Bool {
     do {
-      let target = try await workspaceState.createReviewTarget(launchContext: .externalHandoff)
+      let target = try await workspaceState.createReviewTarget(
+        launchContext: .externalHandoff,
+        changeSummary: workspaceState.selectedReviewSummaryText
+      )
       do {
         let prompt = try await Task.detached {
           try ArgonCLI.agentPrompt(sessionId: target.sessionId, repoRoot: target.repoRoot)
@@ -1060,6 +1167,225 @@ private struct WorkspaceDecisionPill: View {
       .orange
     case .commented:
       .blue
+    }
+  }
+}
+
+private struct WorkspaceReviewPreparationSheet: View {
+  @State private var preparation: WorkspaceReviewPreparation
+
+  let candidates: [WorkspaceTerminalTab]
+  let onChange: (WorkspaceReviewPreparation) -> Void
+  let onRequestSummary: (WorkspaceReviewPreparation) -> Void
+  let onLaunchAgent: () -> Void
+  let onStartReview: (WorkspaceReviewPreparation) -> Void
+  let onCancel: () -> Void
+
+  init(
+    preparation: WorkspaceReviewPreparation,
+    candidates: [WorkspaceTerminalTab],
+    onChange: @escaping (WorkspaceReviewPreparation) -> Void,
+    onRequestSummary: @escaping (WorkspaceReviewPreparation) -> Void,
+    onLaunchAgent: @escaping () -> Void,
+    onStartReview: @escaping (WorkspaceReviewPreparation) -> Void,
+    onCancel: @escaping () -> Void
+  ) {
+    self._preparation = State(initialValue: preparation)
+    self.candidates = candidates
+    self.onChange = onChange
+    self.onRequestSummary = onRequestSummary
+    self.onLaunchAgent = onLaunchAgent
+    self.onStartReview = onStartReview
+    self.onCancel = onCancel
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 20) {
+      HStack(spacing: 10) {
+        Image(systemName: "text.badge.checkmark")
+          .font(.title2)
+          .foregroundStyle(.blue)
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Prepare Review")
+            .font(.title2.weight(.semibold))
+          Text("Edit the change summary before opening review.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      VStack(alignment: .leading, spacing: 12) {
+        if !candidates.isEmpty {
+          VStack(alignment: .leading, spacing: 6) {
+            Text("Coder")
+              .font(.callout.weight(.medium))
+              .foregroundStyle(.secondary)
+
+            Picker("Coder", selection: selectedAgentBinding) {
+              Text("Manual summary").tag(UUID?.none)
+              ForEach(candidates) { tab in
+                Text(tab.title).tag(UUID?.some(tab.id))
+              }
+            }
+            .pickerStyle(.menu)
+          }
+        }
+
+        VStack(alignment: .leading, spacing: 6) {
+          Text("Title")
+            .font(.callout.weight(.medium))
+            .foregroundStyle(.secondary)
+          TextField("One-line summary", text: draftTitleBinding)
+            .textFieldStyle(.roundedBorder)
+        }
+
+        reviewSection(
+          title: "Summary",
+          text: draftSummaryBinding,
+          prompt: "Intent and implementation details"
+        )
+
+        reviewSection(
+          title: "Testing",
+          text: draftTestingBinding,
+          prompt: "Tests run or validation performed"
+        )
+
+        reviewSection(
+          title: "Risks",
+          text: draftRisksBinding,
+          prompt: "Risks, follow-ups, or open questions"
+        )
+      }
+
+      HStack {
+        Button("Ask Agent to Draft") {
+          onRequestSummary(preparation.normalized())
+        }
+        .disabled(preparation.selectedAgentTabID == nil)
+
+        Button("Launch Agent…") {
+          onChange(preparation.normalized())
+          onLaunchAgent()
+        }
+
+        Spacer()
+
+        Button("Cancel", action: onCancel)
+          .keyboardShortcut(.cancelAction)
+
+        Button("Open Review") {
+          let normalizedPreparation = preparation.normalized()
+          onChange(normalizedPreparation)
+          onStartReview(normalizedPreparation)
+        }
+        .keyboardShortcut(.defaultAction)
+      }
+    }
+    .padding(24)
+    .frame(width: 620)
+  }
+
+  private var selectedAgentBinding: Binding<UUID?> {
+    Binding(
+      get: { preparation.selectedAgentTabID },
+      set: { newValue in
+        preparation.selectedAgentTabID = newValue
+        onChange(preparation)
+      }
+    )
+  }
+
+  private var draftTitleBinding: Binding<String> {
+    draftBinding(\.title)
+  }
+
+  private var draftSummaryBinding: Binding<String> {
+    draftBinding(\.summary)
+  }
+
+  private var draftTestingBinding: Binding<String> {
+    draftBinding(\.testing)
+  }
+
+  private var draftRisksBinding: Binding<String> {
+    draftBinding(\.risks)
+  }
+
+  private func draftBinding(
+    _ keyPath: WritableKeyPath<WorkspaceReviewSummaryDraft, String>
+  ) -> Binding<String> {
+    Binding(
+      get: { preparation.draft[keyPath: keyPath] },
+      set: { newValue in
+        preparation.draft[keyPath: keyPath] = newValue
+        onChange(preparation)
+      }
+    )
+  }
+
+  @ViewBuilder
+  private func reviewSection(title: String, text: Binding<String>, prompt: String) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(title)
+        .font(.callout.weight(.medium))
+        .foregroundStyle(.secondary)
+
+      TextEditor(text: text)
+        .font(.system(.body, design: .monospaced))
+        .frame(minHeight: 86)
+        .padding(4)
+        .background(Color(nsColor: .textBackgroundColor))
+        .overlay(
+          RoundedRectangle(cornerRadius: 6)
+            .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+        )
+
+      if text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        Text(prompt)
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+      }
+    }
+  }
+}
+
+private struct WorkspaceReviewInspectorPane: View {
+  let summaryText: String?
+  let snapshot: WorkspaceReviewSnapshot?
+
+  var body: some View {
+    WorkspaceSurface {
+      VStack(alignment: .leading, spacing: 12) {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+          Label("Review", systemImage: "text.magnifyingglass")
+            .font(.headline)
+          Spacer()
+          if let snapshot {
+            WorkspaceReviewStatusPill(status: snapshot.status)
+          } else {
+            WorkspaceStatusPill(label: "draft", tint: .secondary)
+          }
+        }
+
+        if let snapshot, let outcome = snapshot.decisionOutcome {
+          WorkspaceDecisionPill(outcome: outcome)
+        }
+
+        if let summaryText, !summaryText.isEmpty {
+          Text(summaryText)
+            .font(.subheadline)
+            .textSelection(.enabled)
+            .lineLimit(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
+        if let snapshot {
+          Text("Updated \(snapshot.updatedAt, style: .relative) ago")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
     }
   }
 }
@@ -1968,6 +2294,16 @@ private struct WorkspaceInspectorPane: View {
               }
             }
             .fixedSize(horizontal: false, vertical: true)
+
+            if workspaceState.selectedReviewSnapshot != nil
+              || workspaceState.selectedReviewSummaryText != nil
+            {
+              WorkspaceReviewInspectorPane(
+                summaryText: workspaceState.selectedReviewSummaryText,
+                snapshot: workspaceState.selectedReviewSnapshot
+              )
+              .frame(maxWidth: .infinity)
+            }
 
             if let selectedTerminalTab = workspaceState.selectedTerminalTab,
               selectedTerminalTab.isSandboxed

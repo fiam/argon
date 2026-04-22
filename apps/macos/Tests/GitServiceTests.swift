@@ -587,6 +587,71 @@ struct GitServiceTests {
     )
   }
 
+  @Test("pullRequestURL prefers an existing GitHub pull request when gh returns one")
+  func pullRequestURLPrefersExistingGitHubPullRequest() throws {
+    let repo = try makeRepo()
+    defer { try? FileManager.default.removeItem(at: repo) }
+
+    try git(repo, ["init"])
+    try git(repo, ["remote", "add", "origin", "git@github.com:openai/argon-native.git"])
+
+    let previousRunner = GitService.commandRunner
+    defer { GitService.commandRunner = previousRunner }
+    GitService.commandRunner = { executable, arguments, currentDirectoryPath, environment in
+      #expect(executable == "/usr/bin/env")
+      #expect(
+        arguments == [
+          "gh", "pr", "view",
+          "--json", "url",
+          "--head", "feature/workspace-window",
+          "--base", "main",
+        ])
+      #expect(currentDirectoryPath == repo.path)
+      #expect(environment?["GH_PROMPT_DISABLED"] == "1")
+      return CommandResult(
+        terminationStatus: 0,
+        stdout: #"{"url":"https://github.com/openai/argon-native/pull/42"}"#,
+        stderr: ""
+      )
+    }
+
+    let url = GitService.pullRequestURL(
+      repoRoot: repo.path,
+      mode: .branch,
+      baseRef: "origin/main",
+      headRef: "feature/workspace-window"
+    )
+
+    #expect(url == "https://github.com/openai/argon-native/pull/42")
+  }
+
+  @Test("pullRequestURL falls back to compare URL when gh cannot resolve a PR")
+  func pullRequestURLFallsBackToCompareURLWhenGhCannotResolvePR() throws {
+    let repo = try makeRepo()
+    defer { try? FileManager.default.removeItem(at: repo) }
+
+    try git(repo, ["init"])
+    try git(repo, ["remote", "add", "origin", "git@github.com:openai/argon-native.git"])
+
+    let previousRunner = GitService.commandRunner
+    defer { GitService.commandRunner = previousRunner }
+    GitService.commandRunner = { _, _, _, _ in
+      CommandResult(terminationStatus: 1, stdout: "", stderr: "not found")
+    }
+
+    let url = GitService.pullRequestURL(
+      repoRoot: repo.path,
+      mode: .branch,
+      baseRef: "origin/main",
+      headRef: "feature/workspace-window"
+    )
+
+    #expect(
+      url
+        == "https://github.com/openai/argon-native/compare/main...feature/workspace-window?expand=1"
+    )
+  }
+
   private func makeRepo() throws -> URL {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

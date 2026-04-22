@@ -19,7 +19,9 @@ final class WorkspaceState {
 
   var worktrees: [DiscoveredWorktree] = []
   var worktreeSummaries: [String: WorktreeDiffSummary] = [:]
+  var reviewTargetsByWorktreePath: [String: ResolvedTarget?] = [:]
   var reviewSnapshotsByWorktreePath: [String: WorkspaceReviewSnapshot] = [:]
+  var reviewSummaryDraftsByWorktreePath: [String: WorkspaceReviewSummaryDraft] = [:]
   var conflictStatesByWorktreePath: [String: Bool] = [:]
   var selectedWorktreePath: String?
   var selectedSummary: WorktreeDiffSummary = .empty
@@ -40,10 +42,12 @@ final class WorkspaceState {
   var isRemovingWorktree = false
   var isPresentingTabCreationSheet = false
   var isPresentingAgentLaunchSheet = false
+  var isPresentingReviewPreparationSheet = false
   var isPresentingReviewAgentPicker = false
   var isPresentingFinalizeAgentPicker = false
   var isPresentingMergeBackOptions = false
   var reviewAgentCandidates: [WorkspaceTerminalTab] = []
+  var pendingReviewPreparation: WorkspaceReviewPreparation?
   var finalizeAgentCandidates: [WorkspaceTerminalTab] = []
   var mergeBackOptions: [WorktreeFinalizeAction] = []
   var pendingReviewAgentTabID: UUID?
@@ -68,6 +72,7 @@ final class WorkspaceState {
   private var pendingTabRestoreTasksByWorktreePath: [String: Task<Void, Never>] = [:]
   private var selectionLoadRequestID: UUID?
   private var shouldLaunchReviewAfterNextAgentTab = false
+  private var pendingReviewPreparationAfterAgentLaunch: WorkspaceReviewPreparation?
   private var stagedReviewLaunch: StagedReviewLaunch?
   private var preparedReviewTargetsByAgentTabID: [UUID: ReviewTarget] = [:]
   nonisolated(unsafe) private var reviewSessionCloseObserver: NSObjectProtocol?
@@ -187,7 +192,16 @@ final class WorkspaceState {
 
   var selectedReviewSnapshot: WorkspaceReviewSnapshot? {
     guard let path = normalizedSelectedWorktreePath else { return nil }
-    return reviewSnapshotsByWorktreePath[path]
+    guard let snapshot = reviewSnapshotsByWorktreePath[path] else { return nil }
+    return snapshot.matches(target: reviewTargetsByWorktreePath[path] ?? nil) ? snapshot : nil
+  }
+
+  var selectedReviewSummaryText: String? {
+    guard let path = normalizedSelectedWorktreePath else { return nil }
+    if let draft = reviewSummaryDraftsByWorktreePath[path]?.renderedSummary, !draft.isEmpty {
+      return draft
+    }
+    return selectedReviewSnapshot?.changeSummary
   }
 
   var selectedTerminalFocusRequestID: UUID? {
@@ -198,7 +212,9 @@ final class WorkspaceState {
   var canSeedFromPersistedWindowSnapshot: Bool {
     worktrees.isEmpty
       && worktreeSummaries.isEmpty
+      && reviewTargetsByWorktreePath.isEmpty
       && reviewSnapshotsByWorktreePath.isEmpty
+      && reviewSummaryDraftsByWorktreePath.isEmpty
       && conflictStatesByWorktreePath.isEmpty
       && terminalTabsByWorktreePath.isEmpty
       && pendingRestorableTabsByWorktreePath.isEmpty
@@ -238,7 +254,13 @@ final class WorkspaceState {
     return PersistedWorkspaceWindowSnapshot(
       target: target,
       terminalTabsByWorktreePath: terminalTabsByWorktreePath,
-      selectedTerminalTabIDsByWorktreePath: selectedTerminalTabIDsByWorktreePath
+      selectedTerminalTabIDsByWorktreePath: selectedTerminalTabIDsByWorktreePath,
+      reviewSummaryDraftsByWorktreePath:
+        reviewSummaryDraftsByWorktreePath
+        .compactMapValues { draft in
+          let normalized = draft.normalized()
+          return normalized.isEmpty ? nil : normalized
+        }
     )
   }
 
@@ -284,6 +306,15 @@ final class WorkspaceState {
         $0.id == tabID
       })
         == true
+    }
+
+    reviewSummaryDraftsByWorktreePath = snapshot.reviewSummaryDraftsByWorktreePath.reduce(
+      into: [String: WorkspaceReviewSummaryDraft]()
+    ) { partialResult, entry in
+      let normalized = entry.value.normalized()
+      if !normalized.isEmpty {
+        partialResult[normalizedPath(entry.key)] = normalized
+      }
     }
   }
 
@@ -345,7 +376,10 @@ final class WorkspaceState {
     loadSelectedWorktreeDetails(for: normalizedPath)
   }
 
-  func createReviewTarget(launchContext: ReviewLaunchContext = .standalone) async throws
+  func createReviewTarget(
+    launchContext: ReviewLaunchContext = .standalone,
+    changeSummary: String? = nil
+  ) async throws
     -> ReviewTarget
   {
     guard let selectedWorktree else {
@@ -356,7 +390,7 @@ final class WorkspaceState {
     defer { isLaunchingReview = false }
     let worktreePath = normalizedPath(selectedWorktree.path)
     var reviewTarget = try await Task.detached {
-      try ArgonCLI.createSession(repoRoot: selectedWorktree.path)
+      try ArgonCLI.createSession(repoRoot: selectedWorktree.path, changeSummary: changeSummary)
     }.value
     reviewTarget = ReviewTarget(
       sessionId: reviewTarget.sessionId,
@@ -513,7 +547,14 @@ final class WorkspaceState {
   }
 
   func reviewSnapshot(for worktreePath: String) -> WorkspaceReviewSnapshot? {
-    reviewSnapshotsByWorktreePath[normalizedPath(worktreePath)]
+    let normalizedPath = normalizedPath(worktreePath)
+    guard let snapshot = reviewSnapshotsByWorktreePath[normalizedPath] else { return nil }
+    return snapshot.matches(target: reviewTargetsByWorktreePath[normalizedPath] ?? nil)
+      ? snapshot : nil
+  }
+
+  func reviewSummaryDraft(for worktreePath: String) -> WorkspaceReviewSummaryDraft? {
+    reviewSummaryDraftsByWorktreePath[normalizedPath(worktreePath)]
   }
 
   func hasConflicts(for worktreePath: String) -> Bool {
@@ -568,22 +609,54 @@ final class WorkspaceState {
   func dismissAgentLaunchSheet() {
     isPresentingAgentLaunchSheet = false
     shouldLaunchReviewAfterNextAgentTab = false
+    pendingReviewPreparationAfterAgentLaunch = nil
     activeFinalizeAction = nil
     dismissMergeBackOptions()
   }
 
   func beginReviewLaunchFlow() {
+    guard let selectedWorktree else { return }
+    let worktreePath = normalizedPath(selectedWorktree.path)
     let candidates = eligibleReviewAgentTabs()
+    reviewAgentCandidates = candidates
+    pendingReviewPreparation = WorkspaceReviewPreparation(
+      worktreePath: worktreePath,
+      draft: reviewSummaryDraftsByWorktreePath[worktreePath] ?? .empty,
+      selectedAgentTabID: candidates.count == 1 ? candidates[0].id : nil
+    )
+    isPresentingReviewPreparationSheet = true
+  }
 
-    switch candidates.count {
-    case 0:
-      presentAgentLaunchSheet(reviewAfterLaunch: true)
-    case 1:
-      pendingReviewAgentTabID = candidates[0].id
-    default:
-      reviewAgentCandidates = candidates
-      isPresentingReviewAgentPicker = true
-    }
+  func updatePendingReviewPreparation(_ preparation: WorkspaceReviewPreparation) {
+    pendingReviewPreparation = preparation
+  }
+
+  func dismissReviewPreparationSheet() {
+    isPresentingReviewPreparationSheet = false
+    pendingReviewPreparation = nil
+    reviewAgentCandidates = []
+  }
+
+  func launchAgentForPendingReviewPreparation() {
+    guard let preparation = pendingReviewPreparation else { return }
+    pendingReviewPreparationAfterAgentLaunch = preparation
+    persistReviewSummaryDraft(
+      preparation.draft,
+      for: preparation.worktreePath
+    )
+    isPresentingReviewPreparationSheet = false
+    pendingReviewPreparation = nil
+    presentAgentLaunchSheet(reviewAfterLaunch: true)
+  }
+
+  func commitPendingReviewPreparation() -> WorkspaceReviewPreparation? {
+    guard var preparation = pendingReviewPreparation else { return nil }
+    preparation.draft = preparation.draft.normalized()
+    persistReviewSummaryDraft(preparation.draft, for: preparation.worktreePath)
+    isPresentingReviewPreparationSheet = false
+    pendingReviewPreparation = nil
+    reviewAgentCandidates = []
+    return preparation
   }
 
   func beginRebaseFlow() {
@@ -701,7 +774,11 @@ final class WorkspaceState {
       return
     }
 
-    let target = try await createReviewTarget(launchContext: .coderHandoff)
+    let changeSummary = pendingReviewPreparationAfterAgentLaunch?.draft.renderedSummary
+    let target = try await createReviewTarget(
+      launchContext: .coderHandoff,
+      changeSummary: changeSummary
+    )
 
     do {
       let prompt = try await Task.detached {
@@ -714,11 +791,13 @@ final class WorkspaceState {
 
       stageReviewLaunch(target: target, agentTabID: tab.id)
       shouldLaunchReviewAfterNextAgentTab = false
+      pendingReviewPreparationAfterAgentLaunch = nil
     } catch {
       try? await Task.detached {
         try ArgonCLI.closeSession(sessionId: target.sessionId, repoRoot: target.repoRoot)
       }.value
       refreshReviewSnapshot(for: target.repoRoot)
+      pendingReviewPreparationAfterAgentLaunch = nil
       throw error
     }
   }
@@ -990,6 +1069,7 @@ final class WorkspaceState {
       case .success(let details):
         if selectionLoadRequestID == requestID, normalizedSelectedWorktreePath == path {
           worktreeSummaries[path] = details.summary
+          reviewTargetsByWorktreePath[path] = details.reviewTarget
           selectedSummary = details.summary
           selectedFiles = details.files
           selectedDiffStat = details.diffStat
@@ -1021,6 +1101,12 @@ final class WorkspaceState {
         return (normalized, GitService.diffSummary(repoRoot: worktree.path))
       }
     )
+    let reviewTargetsByWorktreePath = Dictionary(
+      uniqueKeysWithValues: worktrees.map { worktree in
+        let normalized = normalizedPath(worktree.path)
+        return (normalized, GitService.autoDetectTarget(repoRoot: worktree.path))
+      }
+    )
     let reviewSnapshotsByWorktreePath = SessionLoader.latestReviewSnapshots(
       forRepoRoots: normalizedPaths)
     let conflictStatesByWorktreePath = Dictionary(
@@ -1041,6 +1127,7 @@ final class WorkspaceState {
     return LoadedWorkspace(
       worktrees: worktrees,
       worktreeSummaries: worktreeSummaries,
+      reviewTargetsByWorktreePath: reviewTargetsByWorktreePath,
       reviewSnapshotsByWorktreePath: reviewSnapshotsByWorktreePath,
       conflictStatesByWorktreePath: conflictStatesByWorktreePath,
       selectedWorktreePath: selectedWorktreePath,
@@ -1091,7 +1178,7 @@ final class WorkspaceState {
       files: files,
       diffStat: GitService.formatDiffStat(files: files),
       pullRequestURL: reviewTarget.flatMap { target in
-        GitService.pullRequestCompareURL(
+        GitService.pullRequestURL(
           repoRoot: path,
           mode: target.mode,
           baseRef: target.baseRef,
@@ -1601,6 +1688,7 @@ final class WorkspaceState {
   private func applyLoadedWorkspace(_ data: LoadedWorkspace) {
     worktrees = data.worktrees
     worktreeSummaries = data.worktreeSummaries
+    reviewTargetsByWorktreePath = data.reviewTargetsByWorktreePath
     reviewSnapshotsByWorktreePath = data.reviewSnapshotsByWorktreePath
     conflictStatesByWorktreePath = data.conflictStatesByWorktreePath
     selectedWorktreePath = data.selectedWorktreePath
@@ -1667,6 +1755,7 @@ final class WorkspaceState {
 
   func applyRefreshedWorktree(_ refreshedWorktree: RefreshedWorktree, for path: String) {
     worktreeSummaries[path] = refreshedWorktree.summary
+    reviewTargetsByWorktreePath[path] = refreshedWorktree.reviewTarget
     conflictStatesByWorktreePath[path] = refreshedWorktree.hasConflicts
 
     guard normalizedSelectedWorktreePath == path else { return }
@@ -1815,8 +1904,14 @@ final class WorkspaceState {
     worktreeSummaries =
       worktreeSummaries
       .filter { validPaths.contains($0.key) }
+    reviewTargetsByWorktreePath =
+      reviewTargetsByWorktreePath
+      .filter { validPaths.contains($0.key) }
     reviewSnapshotsByWorktreePath =
       reviewSnapshotsByWorktreePath
+      .filter { validPaths.contains($0.key) }
+    reviewSummaryDraftsByWorktreePath =
+      reviewSummaryDraftsByWorktreePath
       .filter { validPaths.contains($0.key) }
     conflictStatesByWorktreePath =
       conflictStatesByWorktreePath
@@ -1939,6 +2034,39 @@ final class WorkspaceState {
   }
 
   func finalizePrompt(for action: WorktreeFinalizeAction) throws -> String {
+    try finalizeControlRequest(for: action).prompt
+  }
+
+  func reviewSummaryControlRequest(
+    for worktreePath: String
+  ) throws -> WorkspaceAgentControlRequest {
+    guard let selectedWorktree else {
+      throw GitService.GitError.commandFailed("Select a worktree before preparing review.")
+    }
+    guard normalizedPath(selectedWorktree.path) == normalizedPath(worktreePath) else {
+      throw GitService.GitError.commandFailed("Select the worktree you want to review first.")
+    }
+    guard let branchName = selectedWorktree.branchName, !branchName.isEmpty else {
+      throw GitService.GitError.commandFailed("Review summaries require a branch-backed worktree.")
+    }
+    guard let target = selectedReviewTarget, target.mode == .branch else {
+      throw GitService.GitError.commandFailed(
+        "Review summaries require a branch-based worktree target."
+      )
+    }
+
+    return WorkspaceAgentControlRequest.reviewSummary(
+      repoRoot: self.target.repoRoot,
+      worktreePath: selectedWorktree.path,
+      branchName: branchName,
+      baseRef: target.baseRef,
+      compareURL: selectedPullRequestURL
+    )
+  }
+
+  func finalizeControlRequest(
+    for action: WorktreeFinalizeAction
+  ) throws -> WorkspaceAgentControlRequest {
     guard let selectedWorktree else {
       throw GitService.GitError.commandFailed("Select a worktree before finalizing it.")
     }
@@ -1954,7 +2082,8 @@ final class WorkspaceState {
       )
     }
 
-    return action.prompt(
+    return WorkspaceAgentControlRequest.finalize(
+      action: action,
       repoRoot: self.target.repoRoot,
       worktreePath: selectedWorktree.path,
       branchName: branchName,
@@ -1988,6 +2117,20 @@ final class WorkspaceState {
     }
 
     return options
+  }
+
+  private func persistReviewSummaryDraft(
+    _ draft: WorkspaceReviewSummaryDraft,
+    for worktreePath: String
+  ) {
+    let normalizedPath = normalizedPath(worktreePath)
+    let normalizedDraft = draft.normalized()
+    if normalizedDraft.isEmpty {
+      reviewSummaryDraftsByWorktreePath.removeValue(forKey: normalizedPath)
+    } else {
+      reviewSummaryDraftsByWorktreePath[normalizedPath] = normalizedDraft
+    }
+    notifyRestorableStateChanged()
   }
 
   private func requiredWritableRoots(for action: WorktreeFinalizeAction) -> [String] {
@@ -2092,6 +2235,7 @@ struct RefreshedWorktree: Sendable {
 private struct LoadedWorkspace: Sendable {
   let worktrees: [DiscoveredWorktree]
   let worktreeSummaries: [String: WorktreeDiffSummary]
+  let reviewTargetsByWorktreePath: [String: ResolvedTarget?]
   let reviewSnapshotsByWorktreePath: [String: WorkspaceReviewSnapshot]
   let conflictStatesByWorktreePath: [String: Bool]
   let selectedWorktreePath: String

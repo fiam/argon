@@ -4,6 +4,44 @@ struct PersistedWorkspaceWindowSnapshot: Codable, Equatable {
   let target: WorkspaceTarget
   let terminalTabsByWorktreePath: [String: [PersistedWorkspaceTerminalTab]]
   let selectedTerminalTabIDsByWorktreePath: [String: UUID]
+  let reviewSummaryDraftsByWorktreePath: [String: WorkspaceReviewSummaryDraft]
+
+  init(
+    target: WorkspaceTarget,
+    terminalTabsByWorktreePath: [String: [PersistedWorkspaceTerminalTab]],
+    selectedTerminalTabIDsByWorktreePath: [String: UUID],
+    reviewSummaryDraftsByWorktreePath: [String: WorkspaceReviewSummaryDraft] = [:]
+  ) {
+    self.target = target
+    self.terminalTabsByWorktreePath = terminalTabsByWorktreePath
+    self.selectedTerminalTabIDsByWorktreePath = selectedTerminalTabIDsByWorktreePath
+    self.reviewSummaryDraftsByWorktreePath = reviewSummaryDraftsByWorktreePath
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case target
+    case terminalTabsByWorktreePath
+    case selectedTerminalTabIDsByWorktreePath
+    case reviewSummaryDraftsByWorktreePath
+  }
+
+  init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    target = try container.decode(WorkspaceTarget.self, forKey: .target)
+    terminalTabsByWorktreePath = try container.decode(
+      [String: [PersistedWorkspaceTerminalTab]].self,
+      forKey: .terminalTabsByWorktreePath
+    )
+    selectedTerminalTabIDsByWorktreePath = try container.decode(
+      [String: UUID].self,
+      forKey: .selectedTerminalTabIDsByWorktreePath
+    )
+    reviewSummaryDraftsByWorktreePath =
+      try container.decodeIfPresent(
+        [String: WorkspaceReviewSummaryDraft].self,
+        forKey: .reviewSummaryDraftsByWorktreePath
+      ) ?? [:]
+  }
 }
 
 enum PersistedWorkspaceTerminalTabKind: Codable, Equatable {

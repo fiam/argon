@@ -2,6 +2,10 @@ import Foundation
 
 struct WorkspaceReviewSnapshot: Hashable, Sendable {
   let sessionId: UUID
+  let mode: ReviewMode
+  let baseRef: String
+  let headRef: String
+  let mergeBaseSha: String
   let status: SessionStatus
   let changeSummary: String?
   let decisionOutcome: ReviewOutcome?
@@ -12,6 +16,10 @@ struct WorkspaceReviewSnapshot: Hashable, Sendable {
 
   init(session: ReviewSession) {
     self.sessionId = session.id
+    self.mode = session.mode
+    self.baseRef = session.baseRef
+    self.headRef = session.headRef
+    self.mergeBaseSha = session.mergeBaseSha
     self.status = session.status
     self.changeSummary = session.changeSummary?.trimmingCharacters(in: .whitespacesAndNewlines)
     self.decisionOutcome = session.decision?.outcome
@@ -32,5 +40,13 @@ struct WorkspaceReviewSnapshot: Hashable, Sendable {
 
   var hasDecisionSummary: Bool {
     decisionSummary?.isEmpty == false
+  }
+
+  func matches(target: ResolvedTarget?) -> Bool {
+    guard let target else { return false }
+    return mode == target.mode
+      && baseRef == target.baseRef
+      && headRef == target.headRef
+      && mergeBaseSha == target.mergeBaseSha
   }
 }
