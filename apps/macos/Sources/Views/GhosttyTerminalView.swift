@@ -1057,7 +1057,7 @@ final class GhosttyTerminalHostView: NSView {
   }
 
   private func handleAttention(_ event: TerminalAttentionEvent) {
-    if case .bell = event {
+    if onAttention == nil, case .bell = event {
       NSSound.beep()
     }
     onAttention?(event)

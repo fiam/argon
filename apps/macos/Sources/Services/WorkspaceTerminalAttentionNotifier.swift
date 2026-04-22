@@ -97,13 +97,57 @@ final class WorkspaceTerminalAttentionNotifier: NSObject, UNUserNotificationCent
     repoRoot: String,
     tab: WorkspaceTerminalTab
   ) -> UNMutableNotificationContent? {
+    guard let display = Self.notificationDisplay(for: event, repoRoot: repoRoot, tab: tab) else {
+      return nil
+    }
+
+    let content = UNMutableNotificationContent()
+    content.title = display.title
+    content.subtitle = display.subtitle
+    content.body = display.body
+    content.sound = .default
+    content.userInfo = [
+      UserInfoKey.repoRoot: repoRoot,
+      UserInfoKey.worktreePath: tab.worktreePath,
+      UserInfoKey.terminalTabID: tab.id.uuidString,
+    ]
+    return content
+  }
+
+  nonisolated private static func activationTarget(from userInfo: [AnyHashable: Any])
+    -> ActivationTarget?
+  {
+    guard
+      let repoRoot = userInfo[UserInfoKey.repoRoot] as? String,
+      let worktreePath = userInfo[UserInfoKey.worktreePath] as? String,
+      let terminalTabIDRaw = userInfo[UserInfoKey.terminalTabID] as? String,
+      let terminalTabID = UUID(uuidString: terminalTabIDRaw)
+    else {
+      return nil
+    }
+
+    return ActivationTarget(
+      repoRoot: repoRoot,
+      worktreePath: worktreePath,
+      terminalTabID: terminalTabID
+    )
+  }
+
+  static func notificationDisplay(
+    for event: TerminalAttentionEvent,
+    repoRoot: String,
+    tab: WorkspaceTerminalTab
+  ) -> WorkspaceTerminalAttentionNotificationDisplay? {
+    let workspaceName = URL(fileURLWithPath: repoRoot).lastPathComponent
+    let subtitle = "\(workspaceName) • \(tab.title)"
+
     let title: String
     let body: String
 
     switch event {
     case .bell:
-      title = "\(tab.title) needs attention"
-      body = "Terminal bell in \(tab.worktreeLabel)."
+      title = "Terminal bell"
+      body = "Bell in \(tab.worktreeLabel)."
     case .desktopNotification(let eventTitle, let eventBody):
       title =
         eventTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -140,34 +184,10 @@ final class WorkspaceTerminalAttentionNotifier: NSObject, UNUserNotificationCent
       }
     }
 
-    let content = UNMutableNotificationContent()
-    content.title = title
-    content.body = body
-    content.sound = .default
-    content.userInfo = [
-      UserInfoKey.repoRoot: repoRoot,
-      UserInfoKey.worktreePath: tab.worktreePath,
-      UserInfoKey.terminalTabID: tab.id.uuidString,
-    ]
-    return content
-  }
-
-  nonisolated private static func activationTarget(from userInfo: [AnyHashable: Any])
-    -> ActivationTarget?
-  {
-    guard
-      let repoRoot = userInfo[UserInfoKey.repoRoot] as? String,
-      let worktreePath = userInfo[UserInfoKey.worktreePath] as? String,
-      let terminalTabIDRaw = userInfo[UserInfoKey.terminalTabID] as? String,
-      let terminalTabID = UUID(uuidString: terminalTabIDRaw)
-    else {
-      return nil
-    }
-
-    return ActivationTarget(
-      repoRoot: repoRoot,
-      worktreePath: worktreePath,
-      terminalTabID: terminalTabID
+    return WorkspaceTerminalAttentionNotificationDisplay(
+      title: title,
+      subtitle: subtitle,
+      body: body
     )
   }
 }
@@ -176,4 +196,10 @@ private struct ActivationTarget {
   let repoRoot: String
   let worktreePath: String
   let terminalTabID: UUID
+}
+
+struct WorkspaceTerminalAttentionNotificationDisplay: Equatable {
+  let title: String
+  let subtitle: String
+  let body: String
 }

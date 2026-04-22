@@ -4,6 +4,7 @@ import Foundation
 @Observable
 final class WorkspaceState {
   nonisolated(unsafe) static var tabRestoreTestDelay: Duration?
+  nonisolated(unsafe) static var terminalBellFlashDuration: Duration = .seconds(1)
   nonisolated(unsafe) static var sessionRecordsProvider: (@Sendable () -> [AgentSessionRecord])?
   nonisolated(unsafe) static var sandboxfilePromptLoader:
     (@Sendable (String, SandboxfileLaunchKind) async throws -> SandboxfilePromptRequest?) = {
@@ -62,6 +63,7 @@ final class WorkspaceState {
   private var worktreeRefreshTasksByPath: [String: Task<Void, Never>] = [:]
   private var pendingSandboxedShellLaunchCount = 0
   private var isResolvingSandboxedShellLaunch = false
+  private var terminalBellTasksByTabID: [UUID: Task<Void, Never>] = [:]
   private var pendingRestorableTabsByWorktreePath: [String: [PersistedWorkspaceTerminalTab]] = [:]
   private var pendingTabRestoreTasksByWorktreePath: [String: Task<Void, Never>] = [:]
   private var selectionLoadRequestID: UUID?
@@ -919,7 +921,29 @@ final class WorkspaceState {
     notifyRestorableStateChanged()
   }
 
+  func flashTerminalBell(_ tabID: UUID) {
+    guard let tab = terminalTab(for: tabID) else { return }
+
+    terminalBellTasksByTabID.removeValue(forKey: tabID)?.cancel()
+    tab.isShowingBellIndicator = true
+
+    let flashDuration = Self.terminalBellFlashDuration
+    terminalBellTasksByTabID[tabID] = Task { @MainActor [weak self] in
+      do {
+        try await Task.sleep(for: flashDuration)
+      } catch {
+        return
+      }
+
+      guard let self else { return }
+      self.terminalBellTasksByTabID.removeValue(forKey: tabID)
+      self.terminalTab(for: tabID)?.isShowingBellIndicator = false
+    }
+  }
+
   func closeTerminalTab(_ tabID: UUID) {
+    terminalBellTasksByTabID.removeValue(forKey: tabID)?.cancel()
+
     for (worktreePath, tabs) in terminalTabsByWorktreePath {
       guard let index = tabs.firstIndex(where: { $0.id == tabID }) else { continue }
 

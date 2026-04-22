@@ -914,9 +914,19 @@ private struct WorkspaceTerminalTabItem: View {
               .font(.system(size: 11, weight: .medium))
           }
 
-          Circle()
-            .fill(attentionIndicatorColor)
-            .frame(width: 6, height: 6)
+          ZStack {
+            Circle()
+              .fill(attentionIndicatorColor)
+              .frame(width: 6, height: 6)
+              .opacity(tab.isShowingBellIndicator ? 0 : 1)
+
+            Image(systemName: "bell.fill")
+              .font(.system(size: 8, weight: .semibold))
+              .foregroundStyle(Color.orange)
+              .opacity(tab.isShowingBellIndicator ? 1 : 0)
+          }
+          .frame(width: 10, height: 10)
+          .animation(.easeInOut(duration: 0.15), value: tab.isShowingBellIndicator)
 
           Text(tab.title)
             .font(.caption)
@@ -1055,6 +1065,7 @@ private struct WorkspaceDecisionPill: View {
 }
 
 private struct WorkspaceTerminalStage: View {
+  @Environment(CommandContext.self) private var commandContext
   @Environment(WorkspaceState.self) private var workspaceState
   @Environment(WorkspaceTerminalAttentionNotifier.self) private var terminalAttentionNotifier
   @AppStorage("terminalFontSize") private var terminalFontSizeFallback = 12.0
@@ -1080,12 +1091,21 @@ private struct WorkspaceTerminalStage: View {
             )
           },
           onAttention: { event in
-            workspaceState.markTerminalNeedsAttention(tab.id)
-            terminalAttentionNotifier.postAttentionNotification(
-              event: event,
-              repoRoot: workspaceState.target.repoRoot,
-              tab: tab
-            )
+            switch WorkspaceTerminalAttentionRouting.disposition(
+              for: event,
+              isVisibleTerminal: isVisibleTerminal(tabID: tab.id)
+            ) {
+            case .localBell:
+              workspaceState.flashTerminalBell(tab.id)
+              NSSound.beep()
+            case .notifyAndMarkAttention:
+              workspaceState.markTerminalNeedsAttention(tab.id)
+              terminalAttentionNotifier.postAttentionNotification(
+                event: event,
+                repoRoot: workspaceState.target.repoRoot,
+                tab: tab
+              )
+            }
           },
           focusRequestID: isSelected ? workspaceState.selectedTerminalFocusRequestID : nil
         )
@@ -1114,6 +1134,11 @@ private struct WorkspaceTerminalStage: View {
 
   private var selectedFinishedTerminalBehavior: WorkspaceFinishedTerminalBehavior {
     WorkspaceFinishedTerminalBehavior(rawValue: finishedTerminalBehavior) ?? .autoClose
+  }
+
+  private func isVisibleTerminal(tabID: UUID) -> Bool {
+    commandContext.activeWorkspaceState === workspaceState
+      && workspaceState.selectedTerminalTab?.id == tabID
   }
 
   private var effectiveTerminalFontSize: Double {

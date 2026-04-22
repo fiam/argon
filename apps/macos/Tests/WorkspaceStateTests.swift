@@ -638,6 +638,29 @@ struct WorkspaceStateTests {
     #expect(state.worktreeNeedsAttention(for: "/tmp/repo/feature") == true)
   }
 
+  @Test("flashTerminalBell shows a transient bell indicator")
+  @MainActor
+  func flashTerminalBellShowsATransientBellIndicator() async throws {
+    let previousDuration = WorkspaceState.terminalBellFlashDuration
+    WorkspaceState.terminalBellFlashDuration = .milliseconds(50)
+    defer { WorkspaceState.terminalBellFlashDuration = previousDuration }
+
+    let state = makeState()
+    state.openShellTab()
+    let tab = try #require(state.selectedTerminalTab)
+
+    #expect(tab.isShowingBellIndicator == false)
+
+    state.flashTerminalBell(tab.id)
+
+    #expect(tab.isShowingBellIndicator == true)
+
+    try await Task.sleep(for: .milliseconds(120))
+
+    #expect(tab.isShowingBellIndicator == false)
+    #expect(tab.hasAttention == false)
+  }
+
   @Test("default shell tabs use sandbox exec and expose sandbox identity")
   @MainActor
   func defaultShellTabsUseSandboxExecAndExposeSandboxIdentity() {

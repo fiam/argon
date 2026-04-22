@@ -117,6 +117,7 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
   var resumeCommandDescription: String?
   var isRunning: Bool
   var hasAttention: Bool
+  var isShowingBellIndicator: Bool
   var lastDeselectedAt: Date?
 
   init(
@@ -136,6 +137,7 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
     resumeCommandDescription: String? = nil,
     isRunning: Bool = true,
     hasAttention: Bool = false,
+    isShowingBellIndicator: Bool = false,
     lastDeselectedAt: Date? = nil
   ) {
     self.id = id
@@ -154,6 +156,7 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
     self.resumeCommandDescription = resumeCommandDescription
     self.isRunning = isRunning
     self.hasAttention = hasAttention
+    self.isShowingBellIndicator = isShowingBellIndicator
     self.lastDeselectedAt = lastDeselectedAt
   }
 }
