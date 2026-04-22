@@ -38,6 +38,8 @@ Planned v2 direction:
 - an in-app MCP server so embedded agents can call Argon tools directly
 - typed workspace actions for creating worktrees
 - typed review actions for asking another saved agent profile to review
+- centrally managed connector support so agents can be connected to shared
+  services from one place through MCP and optional skill wrappers
 
 ## Command Line Tool
 

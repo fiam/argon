@@ -758,6 +758,9 @@ Future v2 direction:
   directly instead of relying only on copied prompts or shell commands
 - expose narrow workspace actions first, especially worktree creation and
   reviewer-agent requests
+- add centrally managed connector support so agents can be connected to
+  shared services from one place, with MCP as the primary surface and
+  optional skills as wrappers
 - keep saved agent profiles as the authority for which reviewer agents can
   be launched through that MCP surface
 
@@ -880,6 +883,8 @@ Exit criteria:
 - expose worktree creation / listing tools to embedded agents
 - expose reviewer-agent request tools so one agent can ask another saved
   agent profile for review
+- add connector management so shared service integrations can be configured
+  once and exposed consistently to embedded agents
 - keep approval / visibility boundaries explicit for privileged actions
 
 Exit criteria:
@@ -902,7 +907,7 @@ Exit criteria:
 | M8 | Conflict handling | Continuous conflict detection and `Fix Conflicts` action ship. |
 | M9 | GitHub / PR flow | GitHub detection and PR button ship for supported repos. |
 | M10 | Stabilization | Persistence, UX polish, and reliability hardening complete the transition. |
-| M11 | MCP workspace actions | Embedded agents can create worktrees and request reviewer agents through an in-app MCP server. |
+| M11 | MCP workspace actions | Embedded agents can create worktrees, request reviewer agents, and use centrally managed service connectors through an in-app MCP server. |
 
 ## 15. Testing and Validation Requirements
 
