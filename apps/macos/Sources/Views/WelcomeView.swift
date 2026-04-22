@@ -16,17 +16,16 @@ struct WelcomeView: View {
   }
 
   var body: some View {
-    ZStack {
-      WelcomeBackground()
+    HStack(spacing: 0) {
+      primaryPane
 
-      VStack(spacing: 18) {
-        heroCard
-        recentProjectsCard
-        actionBar
-      }
-      .padding(20)
+      Divider()
+        .overlay(Color.white.opacity(0.05))
+
+      recentProjectsPane
     }
-    .frame(minWidth: 640, minHeight: 560)
+    .background(WelcomeBackground())
+    .frame(minWidth: 760, minHeight: 560)
     .onAppear {
       recentProjects.pruneMissingProjects()
       if let launchRequest = pendingLaunchRequest {
@@ -53,146 +52,149 @@ struct WelcomeView: View {
     }
   }
 
-  private var heroCard: some View {
-    HStack(spacing: 20) {
-      Image(nsImage: NSApp.applicationIconImage)
-        .resizable()
-        .interpolation(.high)
-        .frame(width: 78, height: 78)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .shadow(color: .black.opacity(0.18), radius: 14, y: 8)
+  private var primaryPane: some View {
+    VStack(spacing: 0) {
+      Spacer(minLength: 0)
 
-      VStack(alignment: .leading, spacing: 8) {
-        Text("Argon")
-          .font(.system(size: 34, weight: .bold, design: .rounded))
-        Text("Workspace control for coding agents")
-          .font(.title3.weight(.medium))
-          .foregroundStyle(.secondary)
-        Text(
-          "Open a repository, switch worktrees, launch review when ready, and keep the entire coding loop inside one native workspace."
-        )
-        .font(.callout)
-        .foregroundStyle(.secondary)
-        .lineLimit(3)
+      VStack(spacing: 18) {
+        RoundedRectangle(cornerRadius: 28, style: .continuous)
+          .fill(Color.accentColor.opacity(0.10))
+          .frame(width: 156, height: 156)
+          .overlay {
+            Image(nsImage: NSApp.applicationIconImage)
+              .resizable()
+              .interpolation(.high)
+              .frame(width: 112, height: 112)
+          }
 
-        HStack(spacing: 8) {
-          WelcomeBadge(icon: "square.stack.3d.up", label: "Worktrees")
-          WelcomeBadge(icon: "terminal", label: "Embedded Terminals")
-          WelcomeBadge(icon: "arrow.trianglehead.branch", label: "Review Handoff")
+        VStack(spacing: 4) {
+          Text("Argon")
+            .font(.system(size: 40, weight: .semibold, design: .default))
+          Text("Version \(appVersion)")
+            .font(.title3.weight(.medium))
+            .foregroundStyle(.secondary)
+        }
+
+        VStack(spacing: 12) {
+          welcomeActionButton(
+            "Open Repository or Worktree…",
+            systemImage: "folder"
+          ) {
+            pickDirectory()
+          }
+          .keyboardShortcut("o", modifiers: .command)
+          .disabled(isCreatingSession)
+        }
+
+        if let errorMessage {
+          Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+            .font(.caption)
+            .foregroundStyle(.red)
+            .lineLimit(3)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: 360)
+        }
+
+        if isCreatingSession {
+          ProgressView()
+            .controlSize(.small)
         }
       }
+      .padding(.horizontal, 40)
 
       Spacer(minLength: 0)
+
+      Text("Press Command-O to open a repository or worktree.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.bottom, 18)
     }
-    .padding(24)
-    .background(
-      RoundedRectangle(cornerRadius: 24, style: .continuous)
-        .fill(
-          LinearGradient(
-            colors: [
-              Color(nsColor: .windowBackgroundColor).opacity(0.92),
-              Color.accentColor.opacity(0.10),
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-          )
-        )
-    )
-    .overlay(
-      RoundedRectangle(cornerRadius: 24, style: .continuous)
-        .stroke(Color.white.opacity(0.10), lineWidth: 1)
-    )
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
-  private var recentProjectsCard: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      HStack {
-        Text("Recent Projects")
-          .font(.headline)
-        Spacer()
-        Text("\(recentProjects.projects.count)")
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(.secondary)
-          .padding(.horizontal, 8)
-          .padding(.vertical, 4)
-          .background(Color.white.opacity(0.06), in: Capsule())
-      }
+  private var recentProjectsPane: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Text("Recent Projects")
+        .font(.headline)
+        .padding(.horizontal, 20)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
 
       if recentProjects.projects.isEmpty {
+        Spacer()
+
         VStack(spacing: 10) {
-          Image(systemName: "folder.badge.plus")
+          Image(systemName: "folder")
             .font(.system(size: 24))
             .foregroundStyle(.secondary)
-          Text("No recent projects yet")
+          Text("No recent projects")
             .font(.headline)
-          Text(
-            "Open a repository or worktree to start a workspace. Your recent projects will appear here."
-          )
-          .font(.callout)
-          .foregroundStyle(.secondary)
-          .multilineTextAlignment(.center)
-          .frame(maxWidth: 320)
+            .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
+
+        Spacer()
       } else {
         ScrollView {
-          VStack(spacing: 10) {
-            ForEach(recentProjects.projects) { project in
-              RecentProjectRow(project: project) {
-                openProject(repoRoot: project.repoRoot)
-              }
-              .contextMenu {
-                Button("Remove from Recents") {
-                  recentProjects.remove(repoRoot: project.repoRoot)
+          LazyVStack(spacing: 0) {
+            ForEach(Array(recentProjects.projects.enumerated()), id: \.element.id) {
+              index, project in
+              VStack(spacing: 0) {
+                RecentProjectRow(project: project) {
+                  openProject(repoRoot: project.repoRoot)
+                }
+                .contextMenu {
+                  Button("Remove from Recents") {
+                    recentProjects.remove(repoRoot: project.repoRoot)
+                  }
+                }
+
+                if index < recentProjects.projects.count - 1 {
+                  Divider()
+                    .overlay(Color.white.opacity(0.04))
+                    .padding(.leading, 68)
+                    .padding(.trailing, 16)
                 }
               }
             }
           }
-          .padding(.vertical, 2)
+          .padding(.vertical, 4)
         }
         .scrollIndicators(.hidden)
       }
     }
-    .padding(18)
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .background(
-      RoundedRectangle(cornerRadius: 22, style: .continuous)
-        .fill(Color(nsColor: .controlBackgroundColor).opacity(0.86))
-    )
-    .overlay(
-      RoundedRectangle(cornerRadius: 22, style: .continuous)
-        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-    )
+    .frame(width: 340)
+    .frame(maxHeight: .infinity, alignment: .topLeading)
+    .background(Color.white.opacity(0.03))
   }
 
-  private var actionBar: some View {
-    HStack(spacing: 12) {
-      if let errorMessage {
-        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-          .font(.caption)
-          .foregroundStyle(.red)
-          .lineLimit(2)
-      } else {
-        Text("Press Command-O to open a repository or worktree.")
-          .font(.caption)
+  private func welcomeActionButton(
+    _ title: String,
+    systemImage: String,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      HStack(spacing: 20) {
+        Image(systemName: systemImage)
+          .font(.system(size: 20, weight: .semibold))
+          .frame(width: 24, height: 24)
           .foregroundStyle(.secondary)
-      }
 
-      Spacer()
+        Text(title)
+          .font(.headline)
+          .foregroundStyle(.primary)
 
-      Button("Open…") {
-        pickDirectory()
+        Spacer(minLength: 0)
       }
-      .buttonStyle(.borderedProminent)
-      .keyboardShortcut("o", modifiers: .command)
-      .disabled(isCreatingSession)
-
-      if isCreatingSession {
-        ProgressView()
-          .controlSize(.small)
-      }
+      .padding(.horizontal, 20)
+      .padding(.vertical, 18)
+      .frame(width: 360)
+      .background(
+        Color.white.opacity(0.04),
+        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+      )
     }
-    .padding(.horizontal, 4)
+    .buttonStyle(.plain)
   }
 
   private func pickDirectory() {
@@ -231,48 +233,29 @@ struct WelcomeView: View {
   }
 }
 
-private struct WelcomeBackground: View {
-  var body: some View {
-    Color(nsColor: .windowBackgroundColor)
-      .overlay(alignment: .topLeading) {
-        Circle()
-          .fill(Color.accentColor.opacity(0.18))
-          .frame(width: 280, height: 280)
-          .blur(radius: 70)
-          .offset(x: -80, y: -120)
-      }
-      .overlay(alignment: .topTrailing) {
-        Circle()
-          .fill(Color.blue.opacity(0.12))
-          .frame(width: 240, height: 240)
-          .blur(radius: 80)
-          .offset(x: 80, y: -70)
-      }
-      .overlay(alignment: .bottomTrailing) {
-        Circle()
-          .fill(Color.cyan.opacity(0.10))
-          .frame(width: 220, height: 220)
-          .blur(radius: 90)
-          .offset(x: 90, y: 120)
-      }
-      .ignoresSafeArea()
+extension WelcomeView {
+  fileprivate var appVersion: String {
+    let bundle = Bundle.main
+    return (bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
+      .trimmingCharacters(in: .whitespacesAndNewlines) ?? "0.1.0"
   }
 }
 
-private struct WelcomeBadge: View {
-  let icon: String
-  let label: String
-
+private struct WelcomeBackground: View {
   var body: some View {
-    Label(label, systemImage: icon)
-      .font(.caption.weight(.medium))
-      .padding(.horizontal, 10)
-      .padding(.vertical, 6)
-      .background(Color.white.opacity(0.06), in: Capsule())
-      .overlay(
-        Capsule()
-          .stroke(Color.white.opacity(0.08), lineWidth: 1)
-      )
+    Color(nsColor: .windowBackgroundColor)
+      .overlay(alignment: .top) {
+        LinearGradient(
+          colors: [
+            Color.accentColor.opacity(0.08),
+            .clear,
+          ],
+          startPoint: .top,
+          endPoint: .bottom
+        )
+        .frame(height: 140)
+      }
+      .ignoresSafeArea()
   }
 }
 
@@ -284,7 +267,7 @@ private struct RecentProjectRow: View {
   var body: some View {
     Button(action: onOpen) {
       HStack(spacing: 14) {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
           .fill(Color.accentColor.opacity(isHovered ? 0.22 : 0.14))
           .frame(width: 38, height: 38)
           .overlay {
@@ -309,21 +292,14 @@ private struct RecentProjectRow: View {
           Text("Last opened")
             .font(.caption2.weight(.medium))
             .foregroundStyle(.tertiary)
-          Text(project.lastOpened, style: .relative)
+          Text(RecentProjectLastOpenedFormatter.label(for: project.lastOpened))
             .font(.caption)
             .foregroundStyle(.secondary)
         }
       }
-      .padding(.horizontal, 14)
+      .padding(.horizontal, 16)
       .padding(.vertical, 12)
-      .background(
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
-          .fill(Color.white.opacity(isHovered ? 0.08 : 0.04))
-      )
-      .overlay(
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
-          .stroke(Color.white.opacity(isHovered ? 0.12 : 0.06), lineWidth: 1)
-      )
+      .background(Color.white.opacity(isHovered ? 0.04 : 0.0))
     }
     .buttonStyle(.plain)
     .onHover { hovering in

@@ -141,4 +141,46 @@ struct RecentProjectsTests {
         ),
       ])
   }
+
+  @Test("last opened formatter uses today and yesterday labels")
+  func lastOpenedFormatterUsesTodayAndYesterdayLabels() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+
+    let now = Date(timeIntervalSince1970: 1_713_840_000)  // 2024-04-22 12:00:00 UTC
+    let today = now
+    let yesterday = calendar.date(byAdding: .day, value: -1, to: now)!
+
+    #expect(
+      RecentProjectLastOpenedFormatter.label(
+        for: today,
+        relativeTo: now,
+        calendar: calendar
+      ) == "Today"
+    )
+    #expect(
+      RecentProjectLastOpenedFormatter.label(
+        for: yesterday,
+        relativeTo: now,
+        calendar: calendar
+      ) == "Yesterday"
+    )
+  }
+
+  @Test("last opened formatter uses day-granularity for older entries")
+  func lastOpenedFormatterUsesDayGranularityForOlderEntries() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+
+    let now = Date(timeIntervalSince1970: 1_713_840_000)  // 2024-04-22 12:00:00 UTC
+    let older = calendar.date(byAdding: .day, value: -3, to: now)!
+
+    #expect(
+      RecentProjectLastOpenedFormatter.label(
+        for: older,
+        relativeTo: now,
+        calendar: calendar
+      ) == "3 days ago"
+    )
+  }
 }

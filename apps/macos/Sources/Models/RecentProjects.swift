@@ -7,6 +7,31 @@ struct RecentProject: Codable, Identifiable, Hashable {
   let lastOpened: Date
 }
 
+enum RecentProjectLastOpenedFormatter {
+  static func label(
+    for date: Date,
+    relativeTo now: Date = .now,
+    calendar: Calendar = .current
+  ) -> String {
+    let startOfDate = calendar.startOfDay(for: date)
+    let startOfNow = calendar.startOfDay(for: now)
+    let dayDelta = calendar.dateComponents([.day], from: startOfNow, to: startOfDate).day ?? 0
+
+    switch dayDelta {
+    case 0:
+      return "Today"
+    case -1:
+      return "Yesterday"
+    case 1:
+      return "Tomorrow"
+    default:
+      let formatter = RelativeDateTimeFormatter()
+      formatter.unitsStyle = .full
+      return formatter.localizedString(from: DateComponents(day: dayDelta))
+    }
+  }
+}
+
 @MainActor
 @Observable
 final class RecentProjects {
