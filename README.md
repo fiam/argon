@@ -1,192 +1,103 @@
 # Argon
 
+<p align="center">
+  <img src="website/draft/assets/argon-icon.png" alt="Argon icon" width="128" height="128">
+</p>
+
 Argon is a native macOS workspace for coding agents.
 
-It combines:
+It gives you one place to:
 
-- a SwiftUI desktop app for managing worktrees, terminals, and review
-- a bundled `argon` CLI for convenient app launch and machine-readable
-  agent workflows
-- a local-first review loop that still works both from the app and from a shell
+- open the right repository or worktree from Terminal with `argon <dir>`
+- manage linked worktrees without juggling clone directories by hand
+- run shells and coding agents in embedded terminal tabs
+- review changes before they land, with explicit draft, approval, and
+  requested-changes states
+- ask other agents to review the branch before merge-back
+- launch agent work inside a local sandbox that is enabled by default
+- merge back or open a pull request from the same workspace
 
-Product detail lives in [PRD.md](PRD.md). The agent-facing review contract
-lives in [skills/argon-app-review/SKILL.md](skills/argon-app-review/SKILL.md).
-That skill is an optional wrapper, not the only supported agent path.
+Argon is currently macOS-only.
 
-## What Argon Does
+## Core Commands
 
-Argon gives the human a single place to coordinate agent work:
+Once the app is installed, Argon can install or repair the bundled
+`argon` command line tool for you on first launch.
 
-- open or focus the right Argon window from the terminal with `argon <dir>`
-- manage multiple worktrees in one repository window
-- work in embedded agent terminals or bare shell tabs
-- inspect diffs and launch formal review when ready
-- launch reviewer agents such as Claude, Codex, Gemini, or a custom command
-- keep review sessions explicit and machine-readable through the CLI
-
-The same review flow also works without the app initiating it. An agent can
-start a session from a shell, block for reviewer feedback, address comments,
-and wait for approval through `argon agent ...` commands.
-
-Humans can also start review directly from the app by clicking the
-workspace `Review` button, or from the terminal with `argon review <dir>`.
-Agents can be driven entirely by copied prompts and CLI commands; installed
-skills are optional convenience.
-
-Planned v2 direction:
-
-- an in-app MCP server so embedded agents can call Argon tools directly
-- typed workspace actions for creating worktrees
-- typed review actions for asking another saved agent profile to review
-- centrally managed connector support so agents can be connected to shared
-  services from one place through MCP and optional skill wrappers
-
-## Command Line Tool
-
-Argon bundles an `argon` CLI inside the app and expects a symlink at
-`/usr/local/bin/argon`.
-
-On launch, the macOS app checks that link. If it is missing or broken, Argon
-shows a startup dialog offering to install or fix it. That link enables:
-
-- `argon <dir>` to open Argon focused on a repository or worktree
-- `argon review <dir>` to open the review UI for a repository from the shell
-
-You can always inspect the current status or repair the link later in
-Settings > General.
-
-## Main Pieces
-
-- `apps/macos`
-  The native macOS app.
-- `crates/argon-core`
-  Review sessions, diffs, storage, and shared domain logic.
-- `crates/argon`
-  The CLI binary.
-- `crates/sandbox`
-  Cross-platform sandbox abstraction with a macOS implementation today.
-- `skills/`
-  Bundled optional skills that wrap the review loop for compatible agents.
-
-## Review Loop
-
-Typical CLI-driven review flow:
+The main entry points are:
 
 ```bash
-argon agent start --repo . --mode uncommitted \
-  --description "Review current changes" --wait --json
+argon <dir>
+argon review <dir>
 ```
 
-After the reviewer responds:
+- `argon <dir>` opens the workspace window for the repository containing
+  `<dir>`
+- `argon review <dir>` opens the standalone review window for the
+  repository containing `<dir>`
 
-```bash
-argon agent ack --session <session> --thread <thread> --json
-argon agent reply --session <session> --thread <thread> \
-  --message "Fixed in parser fallback" --addressed --json
-argon agent wait --session <session> --json
-```
+Argon also supports machine-readable review workflows through
+`argon agent ...` commands, so agents can participate in the same formal
+review loop without requiring a skill installation.
 
-Reviewer agents launched from the app are advisory reviewers. They can comment
-or request changes, but only the human reviewer can approve the session.
+## Screenshots
 
-## Sandbox
+### Workspace
 
-Argon can launch reviewer agents inside a local sandbox on macOS.
+![Argon workspace window](website/draft/assets/workspace-window.png)
 
-That sandbox is driven by `Sandboxfile` discovery up the parent-directory
-chain, including `.Sandboxfile` and legacy `.Sanboxfile` variants. It
-currently covers filesystem writes, executable policy, environment shaping,
-command interception, and network policy through direct socket rules or a
-local HTTP(S) proxy. Repo
-policies can also include optional relative modules such as
-`./Sandboxfile.local`, and users can create `$HOME/.Sandboxfile` for
-policy that should apply after repo-local sandbox files. Use
-`argon sandbox check` to validate the resolved
-policy stack for the current launch context. In the macOS app, requesting a
-sandboxed shell or agent with no resolved `Sandboxfile` shows a confirmation
-dialog that explains the default scaffold, including the built-in `git`
-module, and creates it before launch.
+### Review
 
-On macOS today, direct `NET ALLOW CONNECT` rules are intentionally narrow:
-localhost or `*:port` shapes only. Hostname-based policy belongs under
-`NET ALLOW PROXY ...`. See [SANDBOX.md](SANDBOX.md) for the exact currently
-supported syntax. When a sandboxed workspace tab uses proxy-backed network
-rules, the app inspector shows the observed proxied requests for that tab.
-With `NET DEFAULT ALLOW`, proxy rules stay passive instead of forcing
-traffic through the proxy.
+![Argon review window with agent reviewers](website/draft/assets/review-agents.png)
 
-Sandbox documentation:
+## How Argon Works
 
-- [SANDBOX.md](SANDBOX.md)
+### Worktree-Native Workspace
 
-## Development
+Each repository gets one workspace window. Inside it you can:
 
-Requirements:
+- switch between worktrees from a single sidebar
+- keep shell tabs and agent tabs tied to the selected worktree
+- inspect diff summary, review state, and changed files from the same
+  window
 
-- Rust toolchain with Cargo
-- Xcode
-- Homebrew `zig@0.15` for vendored Ghostty:
-  `brew install zig@0.15`
-- Xcode Metal Toolchain component for Ghostty:
-  `xcodebuild -downloadComponent MetalToolchain`
-- XcodeGen
-- `swift-format`
-- vendored Ghostty still pins Zig `0.15.2`. The supported local setup is
-  the Homebrew `zig@0.15` formula, which installs a patched `0.15.2` build
-  at `/opt/homebrew/opt/zig@0.15/bin/zig`
+### Formal Review Before Merge
 
-Recommended first-time macOS setup:
+Argon keeps review explicit and visible:
 
-```bash
-brew install zig@0.15 xcodegen swift-format
-xcodebuild -downloadComponent MetalToolchain
-git submodule update --init --recursive third_party/ghostty
-```
+- draft comments stay draft until submitted
+- approvals and requested changes are formal states
+- human reviewers stay in control of the final decision
+- reviewer agents can comment and request changes before the branch lands
 
-Before the first macOS app build:
+### Sandboxed Agent Launch
 
-```bash
-bash scripts/build-libghostty.sh
-```
+Sandboxing is on by default for sandboxed agent and shell launches.
 
-`scripts/build-libghostty.sh` auto-discovers the vendored Ghostty Zig
-requirement from `third_party/ghostty/build.zig.zon` and prefers the
-Homebrew `zig@0.15` install when it is available. You can still override
-that with `ZIG=/abs/path/to/zig`.
+The current macOS sandbox supports:
 
-Common commands:
+- filesystem write restrictions
+- executable policy
+- environment filtering
+- command interception
+- direct network rules and proxy-backed host rules
 
-```bash
-make build-libghostty
-make fmt
-make test
-make check
-bash scripts/dev-argon.sh .
-```
+See [SANDBOX.md](SANDBOX.md) for the exact policy format and current
+macOS behavior.
 
-Typical macOS build flow:
+## Docs
 
-- `make build-libghostty` or `bash scripts/build-libghostty.sh`
-  builds `target/libghostty/native/macos/GhosttyKit.xcframework` and
-  `target/libghostty/native/share/ghostty`
-- `bash scripts/dev-argon.sh .`
-  builds the Rust CLI, regenerates `apps/macos/Argon.xcodeproj`, builds
-  `Argon.app`, and launches the current repo workspace
-- `make build-release`
-  builds the release app and refreshes vendored Ghostty as part of that flow
+- [Sandbox reference](SANDBOX.md)
+- [Development and contributing](docs/development.md)
+- [Architecture and repo layout](docs/architecture.md)
+- [Ghostty integration notes](docs/ghostty-integration.md)
+- [Product requirements](PRD.md)
 
-Project rules worth keeping in mind:
+## Hacking On Argon
 
-- `make check` must pass before commits
-- unit tests and UI tests should ship with behavior changes
-- the CLI stays machine-readable first
-- review states stay explicit
+If you want to build, test, or contribute to Argon, start here:
 
-The macOS project is generated from `apps/macos/project.yml`. Regenerate it
-with XcodeGen instead of editing `.xcodeproj` by hand.
+- [docs/development.md](docs/development.md)
 
-The planned Ghostty terminal migration is documented in
-[docs/ghostty-integration.md](docs/ghostty-integration.md). The dev and
-release build scripts call `scripts/build-libghostty.sh` automatically, and
-`make build-libghostty` is the direct way to refresh the vendored
-`GhosttyKit.xcframework`.
+That document covers local setup, Ghostty prerequisites, build commands,
+checks, and contribution rules.
