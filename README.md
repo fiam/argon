@@ -52,35 +52,27 @@ review loop without requiring a skill installation.
 
 ## How Argon Works
 
-### Worktree-Native Workspace
+### One Window Per Repo
 
-Each repository gets one workspace window. Inside it you can:
+Each repository gets its own workspace window. Worktrees live in the
+sidebar, shell tabs and agent tabs stay attached to the selected
+worktree, and the diff, review status, and changed files stay visible in
+the same place.
 
-- switch between worktrees from a single sidebar
-- keep shell tabs and agent tabs tied to the selected worktree
-- inspect diff summary, review state, and changed files from the same
-  window
+### Review Before Merge
 
-### Formal Review Before Merge
+Argon is built around reviewing the change before the agent lands it.
+Draft comments stay draft until you submit them, approvals and requested
+changes are explicit, and the final decision stays with the human
+reviewer. If you want another pass before merge-back, reviewer agents
+can comment or ask for changes too.
 
-Argon keeps review explicit and visible:
+### Sandboxed By Default
 
-- draft comments stay draft until submitted
-- approvals and requested changes are formal states
-- human reviewers stay in control of the final decision
-- reviewer agents can comment and request changes before the branch lands
-
-### Sandboxed Agent Launch
-
-Sandboxing is on by default for sandboxed agent and shell launches.
-
-The current macOS sandbox supports:
-
-- filesystem write restrictions
-- executable policy
-- environment filtering
-- command interception
-- direct network rules and proxy-backed host rules
+Sandboxed shell and agent launches start locked down by default on
+macOS. The current sandbox can restrict filesystem writes, control what
+can be executed, shape the environment, intercept commands, and handle
+either direct network rules or proxy-backed host rules.
 
 See [SANDBOX.md](SANDBOX.md) for the exact policy format and current
 macOS behavior.
