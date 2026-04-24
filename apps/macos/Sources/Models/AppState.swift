@@ -1077,28 +1077,74 @@ final class AppState {
   }
 
   private func runUITestAutomationIfNeeded() {
-    guard !didRunUITestAutomation, let reviewerLaunch = uiTestAutomationConfig.reviewerLaunch else {
+    guard !didRunUITestAutomation else {
+      return
+    }
+    let reviewerLaunches = uiTestAutomationConfig.reviewerLaunches
+    guard !reviewerLaunches.isEmpty else {
       return
     }
     didRunUITestAutomation = true
 
-    let profile = AgentProfile(
-      id: "ui-test-reviewer",
-      name: "UI Test Reviewer",
-      command: reviewerLaunch.command,
-      icon: "terminal",
-      isDetected: false
-    )
-
     Task { @MainActor in
       await Task.yield()
-      launchReviewerAgent(
-        profile: profile,
-        focusPrompt: reviewerLaunch.focusPrompt,
-        sandboxEnabled: reviewerLaunch.sandboxEnabled
-      )
+      for (index, reviewerLaunch) in reviewerLaunches.enumerated() {
+        let profile = AgentProfile(
+          id: "ui-test-reviewer-\(index)",
+          name: uiTestReviewerProfileName(for: reviewerLaunch),
+          command: reviewerLaunch.command,
+          icon: uiTestReviewerProfileIcon(for: reviewerLaunch),
+          isDetected: false
+        )
+
+        launchReviewerAgent(
+          profile: profile,
+          focusPrompt: reviewerLaunch.focusPrompt,
+          sandboxEnabled: reviewerLaunch.sandboxEnabled
+        )
+      }
       UITestAutomationSignal.write("reviewer-launched", to: uiTestAutomationConfig.signalFilePath)
     }
+  }
+
+  private func uiTestReviewerProfileName(for launch: UITestAutomationConfig.ReviewerLaunch)
+    -> String
+  {
+    if let name = launch.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+      return name
+    }
+
+    let normalized = launch.command.lowercased()
+    if normalized.contains("codex") {
+      return "Codex"
+    }
+    if normalized.contains("gemini") {
+      return "Gemini"
+    }
+    if normalized.contains("claude") {
+      return "Claude"
+    }
+    return "UI Test Reviewer"
+  }
+
+  private func uiTestReviewerProfileIcon(for launch: UITestAutomationConfig.ReviewerLaunch)
+    -> String
+  {
+    if let icon = launch.icon?.trimmingCharacters(in: .whitespacesAndNewlines), !icon.isEmpty {
+      return icon
+    }
+
+    let normalized = launch.command.lowercased()
+    if normalized.contains("codex") {
+      return "codex"
+    }
+    if normalized.contains("gemini") {
+      return "gemini"
+    }
+    if normalized.contains("claude") {
+      return "claude"
+    }
+    return "terminal"
   }
 }
 

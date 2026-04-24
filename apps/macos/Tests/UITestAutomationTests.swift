@@ -6,7 +6,13 @@ final class UITestAutomationTests: XCTestCase {
   func testCurrentReturnsEmptyConfigWhenNoEnvironmentKeysExist() {
     XCTAssertEqual(
       UITestAutomationConfig.current(environment: [:]),
-      UITestAutomationConfig(reviewerLaunch: nil, signalFilePath: nil)
+      UITestAutomationConfig(
+        reviewerLaunch: nil,
+        reviewerExtraLaunches: [],
+        signalFilePath: nil,
+        websiteDemoEnabled: false,
+        websiteDemoUsesLiveAgentCommands: false
+      )
     )
   }
 
@@ -26,9 +32,43 @@ final class UITestAutomationTests: XCTestCase {
           focusPrompt: "verify ghostty startup",
           sandboxEnabled: true
         ),
-        signalFilePath: "/tmp/argon-ui-signal"
+        reviewerExtraLaunches: [],
+        signalFilePath: "/tmp/argon-ui-signal",
+        websiteDemoEnabled: false,
+        websiteDemoUsesLiveAgentCommands: false
       )
     )
+  }
+
+  func testCurrentParsesMultipleReviewerLaunchesConfiguration() throws {
+    let launches = [
+      UITestAutomationConfig.ReviewerLaunch(
+        name: "Codex",
+        command: "codex",
+        focusPrompt: "review merge-back safety",
+        sandboxEnabled: true,
+        icon: "codex"
+      ),
+      UITestAutomationConfig.ReviewerLaunch(
+        name: "Gemini",
+        command: "gemini",
+        focusPrompt: "review website copy",
+        sandboxEnabled: true,
+        icon: "gemini"
+      ),
+    ]
+    let data = try JSONEncoder().encode(launches)
+    let environment = [
+      UITestAutomationConfig.reviewersEnvironmentKey: String(
+        decoding: data,
+        as: UTF8.self
+      ),
+      UITestAutomationConfig.signalFileEnvironmentKey: "/tmp/argon-ui-signal",
+    ]
+
+    let config = UITestAutomationConfig.current(environment: environment)
+    XCTAssertEqual(config.reviewerLaunches, launches)
+    XCTAssertEqual(config.signalFilePath, "/tmp/argon-ui-signal")
   }
 
   func testCurrentIgnoresWhitespaceOnlyCommand() {
@@ -38,7 +78,13 @@ final class UITestAutomationTests: XCTestCase {
 
     XCTAssertEqual(
       UITestAutomationConfig.current(environment: environment),
-      UITestAutomationConfig(reviewerLaunch: nil, signalFilePath: nil)
+      UITestAutomationConfig(
+        reviewerLaunch: nil,
+        reviewerExtraLaunches: [],
+        signalFilePath: nil,
+        websiteDemoEnabled: false,
+        websiteDemoUsesLiveAgentCommands: false
+      )
     )
   }
 

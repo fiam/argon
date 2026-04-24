@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Argon — The Native Workspace for Coding Agents</title>
+    <meta
+      name="description"
+      content="Argon is a native macOS workspace for coding agents, with worktrees, embedded terminals, review, and sandboxed execution."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="site-shell">
+      <header class="topbar">
+        <a class="brand" href="#">
+          <img src="./assets/argon-icon.png" alt="Argon app icon" />
+          <span>Argon</span>
+        </a>
+        <div class="topbar-actions">
+          <div class="header-links">
+            <a class="button button-primary button-header" href="#download">Download</a>
+            <a
+              class="header-link"
+              href="https://github.com/fiam/argon"
+              target="_blank"
+              rel="noreferrer"
+              >GitHub</a
+            >
+          </div>
+          <nav class="topnav" aria-label="Primary">
+            <a href="#why">Why</a>
+            <a href="#workflow">Features</a>
+            <a href="#review">Review</a>
+            <a href="#sandbox">Sandbox</a>
+          </nav>
+        </div>
+      </header>
+
+      <main>
+        <section class="hero">
+          <div class="hero-copy">
+            <div class="eyebrow">native macOS workspace</div>
+            <h1>The control plane for local coding agents.</h1>
+            <p class="hero-lede">
+              Manage worktrees, run agent terminals, inspect diffs, launch
+              review, and keep the whole loop inside one native workspace.
+            </p>
+
+            <div class="hero-actions">
+              <a class="button button-primary" href="#download">Download 0.1</a>
+              <a class="button button-secondary" href="#workflow">See the flow</a>
+            </div>
+
+            <ul class="hero-points">
+              <li>Sandboxed agent launches are on by default, with policy defined in <code>Sandboxfile</code></li>
+              <li>Keep coding, review, merge-back, and PR creation inside one native workspace</li>
+              <li>Open the right repo from Terminal with <code>argon &lt;dir&gt;</code> or jump straight into review with <code>argon review &lt;dir&gt;</code></li>
+            </ul>
+          </div>
+
+          <div class="hero-stage">
+            <figure class="hero-screenshot">
+              <img
+                src="./assets/workspace-window.png"
+                alt="Argon workspace window showing worktrees, terminal tabs, and the network inspector."
+              />
+            </figure>
+          </div>
+        </section>
+
+        <section class="section-grid" id="why">
+          <div class="section-intro">
+            <div class="eyebrow">why argon</div>
+            <h2>One place for the human coordination work.</h2>
+          </div>
+
+          <div class="feature-grid">
+            <article class="feature-card">
+              <h3>Worktree-native</h3>
+              <p>
+                Keep multiple branches live in one repository window instead of
+                juggling shell tabs and hand-managed directories.
+              </p>
+            </article>
+            <article class="feature-card">
+              <h3>App + CLI together</h3>
+              <p>
+                Use the native app for active work and the bundled
+                <code>argon</code> CLI for fast launch and machine-readable
+                automation.
+              </p>
+            </article>
+            <article class="feature-card">
+              <h3>Explicit review</h3>
+              <p>
+                Review stays formal: comments, requested changes, approval, and
+                close state are visible and machine-readable.
+              </p>
+            </article>
+          </div>
+        </section>
+
+        <section class="section-band" id="workflow">
+          <div class="section-intro">
+            <div class="eyebrow">features</div>
+            <h2>The whole local coding loop, in one app.</h2>
+          </div>
+
+          <div class="feature-rail">
+            <article class="feature-row">
+              <div class="feature-card feature-card-large">
+                <div class="feature-kicker">Worktrees</div>
+                <h3>Worktree-native branches</h3>
+                <p>
+                  See active branches, conflicts, review state, and finalize
+                  actions in one sidebar instead of juggling clone directories
+                  by hand.
+                </p>
+              </div>
+
+              <figure class="feature-shot feature-shot-sidebar">
+                <img
+                  src="./assets/feature-worktrees.png"
+                  alt="Argon workspace window focused on the worktree sidebar."
+                />
+              </figure>
+            </article>
+
+            <article class="feature-row feature-row-reverse">
+              <div class="feature-card feature-card-large">
+                <div class="feature-kicker">Terminals</div>
+                <h3>Embedded shells and agent tabs</h3>
+                <p>
+                  Run shells and coding agents inside the selected worktree,
+                  with inspector context and sandbox state visible beside the
+                  terminal instead of in a second app.
+                </p>
+              </div>
+
+              <figure class="feature-shot feature-shot-terminal">
+                <img
+                  src="./assets/feature-terminals.png"
+                  alt="Argon workspace window showing terminal tabs and the inspector."
+                />
+              </figure>
+            </article>
+
+            <article class="feature-row">
+              <div class="feature-card feature-card-large">
+                <div class="feature-kicker">Review</div>
+                <h3>Human and agent review, in one window</h3>
+                <p>
+                  Draft comments, request changes, approve when ready, and
+                  bring in other agents to review the branch before it lands
+                  or merges back from the same workspace.
+                </p>
+              </div>
+
+              <figure class="feature-shot feature-shot-review">
+                <img
+                  src="./assets/feature-review.png"
+                  alt="Argon review window showing changed files, inline comments, and pending review drafts."
+                />
+              </figure>
+            </article>
+          </div>
+        </section>
+
+        <section class="section-grid" id="review">
+          <div class="section-intro">
+            <div class="eyebrow">review</div>
+            <h2>Review the change before the agent lands it.</h2>
+          </div>
+
+          <div class="review-showcase">
+            <div class="review-copy">
+              <p>
+                Keep the approval step visible and deliberate. Argon turns
+                review into a native checkpoint where you can inspect the diff,
+                bring in other agents to review the branch, request changes,
+                and approve only when it is ready to merge.
+              </p>
+              <ul>
+                <li>Catch issues before the agent commits or merges back</li>
+                <li>Let other agents review the branch before it lands</li>
+                <li>Draft comments before submission</li>
+                <li>Clear requested changes and approval states</li>
+                <li>Structured handoff between reviewer and agent</li>
+              </ul>
+            </div>
+
+            <figure class="review-screenshot">
+              <img
+                src="./assets/review-agents.png"
+                alt="Argon review window showing multiple reviewer agents and threaded feedback before merge-back."
+              />
+            </figure>
+          </div>
+        </section>
+
+        <section class="section-grid">
+          <div class="section-intro">
+            <div class="eyebrow">core pieces</div>
+            <h2>Native UI, bundled CLI, local-first review.</h2>
+          </div>
+
+          <div class="stack-grid">
+            <article class="stack-card">
+              <h3>macOS app</h3>
+              <p>SwiftUI workspace shell, embedded terminals, diff inspector, review windows, and update handling.</p>
+            </article>
+            <article class="stack-card">
+              <h3><code>argon</code> CLI</h3>
+              <p>Human-friendly app launch plus machine-readable agent commands for review, sandboxing, and automation.</p>
+            </article>
+            <article class="stack-card">
+              <h3>Review engine</h3>
+              <p>Explicit states, persistent thread identity, draft batching, and local-first storage.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="section-band section-band-deep" id="sandbox">
+          <div class="section-intro">
+            <div class="eyebrow">sandbox</div>
+            <h2>Keep agent work securely contained.</h2>
+          </div>
+
+          <div class="sandbox-layout">
+            <div class="sandbox-copy">
+              <p>
+                Argon can launch sandboxed shells and agents on macOS with
+                filesystem, exec, environment, and proxy-backed network policy.
+              </p>
+              <ul>
+                <li>Sandboxing is on by default for integrated agent launches</li>
+                <li><code>Sandboxfile</code>-driven policy</li>
+                <li>Live proxy activity visible in the app</li>
+                <li>Machine-readable validation with <code>argon sandbox check</code></li>
+              </ul>
+            </div>
+
+            <pre class="code-card"><code>ENV DEFAULT NONE
+FS DEFAULT NONE
+EXEC DEFAULT ALLOW
+NET DEFAULT NONE
+NET ALLOW PROXY *
+
+USE os
+USE shell
+USE git
+USE agent
+
+FS ALLOW READ .
+FS ALLOW WRITE .</code></pre>
+          </div>
+        </section>
+
+        <section class="download-strip" id="download">
+          <div class="download-copy">
+            <div class="eyebrow">macOS beta</div>
+            <h2>Try Argon on your next local branch.</h2>
+            <p class="download-lede">
+              Open a repo, launch sandboxed agents, review the diff, and merge
+              back without leaving the app.
+            </p>
+          </div>
+          <div class="install-card">
+            <div class="install-eyebrow">Install with Homebrew</div>
+            <div class="install-terminal">
+              <div class="install-terminal-bar">
+                <span></span><span></span><span></span>
+              </div>
+              <pre class="install-command"><code><span class="prompt">$</span> brew install --cask fiam/tap/argon</code></pre>
+            </div>
+            <div class="download-actions">
+              <a class="button button-primary" href="#">Download DMG</a>
+              <a class="button button-secondary" href="../README.md">Read the docs</a>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

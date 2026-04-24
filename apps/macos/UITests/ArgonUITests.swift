@@ -3,8 +3,13 @@ import XCTest
 
 final class ArgonUITests: XCTestCase {
   private static let autoReviewerCommandEnvironmentKey = "ARGON_UI_TEST_AUTO_REVIEWER_COMMAND"
+  private static let autoReviewersEnvironmentKey = "ARGON_UI_TEST_AUTO_REVIEWERS"
   private static let signalFileEnvironmentKey = "ARGON_UI_TEST_SIGNAL_FILE"
   private static let workspaceSnapshotEnvironmentKey = "ARGON_UI_TEST_WORKSPACE_SNAPSHOT_FILE"
+  private static let disableCLIInstallPromptEnvironmentKey =
+    "ARGON_UI_TEST_DISABLE_CLI_INSTALL_PROMPT"
+  private static let screenshotLiveAgentsConfigFileName =
+    ".website-screenshot-live-agents"
   private static let disableStateRestorationArguments = [
     "-ApplePersistenceIgnoreState", "YES",
   ]
@@ -193,9 +198,6 @@ final class ArgonUITests: XCTestCase {
     app.launchArguments = [
       Self.disableStateRestorationArguments[0],
       Self.disableStateRestorationArguments[1],
-      "--workspace-repo-root", target.repoRoot,
-      "--workspace-common-dir", target.repoCommonDir,
-      "--selected-worktree-path", target.selectedWorktreePath,
     ]
     app.launchEnvironment["ARGON_HOME"] = target.argonHome
     app.launch()
@@ -277,6 +279,244 @@ final class ArgonUITests: XCTestCase {
     XCTAssertTrue(copiedPrompt.contains("agent wait"))
     XCTAssertFalse(copiedPrompt.contains("session: "))
     XCTAssertFalse(copiedPrompt.contains("agent-prompt-command:"))
+  }
+
+  @MainActor
+  func testCaptureWebsiteWorkspaceScreenshot() throws {
+    let target = try Self.createWebsiteWorkspace()
+    let app = XCUIApplication()
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.fixtureRoot)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--workspace-repo-root", target.repoRoot,
+      "--workspace-common-dir", target.repoCommonDir,
+      "--selected-worktree-path", target.selectedWorktreePath,
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launchEnvironment[Self.signalFileEnvironmentKey] = target.signalFile
+    app.launchEnvironment["ARGON_UI_TEST_WEBSITE_DEMO"] = "1"
+    app.launchEnvironment[Self.disableCLIInstallPromptEnvironmentKey] = "1"
+    if Self.websiteScreenshotUsesLiveAgents() {
+      app.launchEnvironment["ARGON_UI_TEST_WEBSITE_DEMO_LIVE_AGENTS"] = "1"
+    }
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+    XCTAssertTrue(
+      waitForSignal("website-demo-ready", at: URL(fileURLWithPath: target.signalFile), timeout: 20)
+    )
+
+    let selectedSidebarRow = app.descendants(matching: .any)[
+      Self.workspaceSidebarAccessibilityIdentifier(for: target.selectedWorktreePath)
+    ]
+    XCTAssertTrue(selectedSidebarRow.waitForExistence(timeout: 15))
+    let window = app.windows.firstMatch
+    XCTAssertTrue(window.waitForExistence(timeout: 10))
+    sleep(1)
+    Self.attachScreenshot(window.screenshot(), named: "workspace-window")
+  }
+
+  @MainActor
+  func testCaptureWebsiteFeatureWorktreesScreenshot() throws {
+    let target = try Self.createWebsiteWorkspace()
+    let app = XCUIApplication()
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.fixtureRoot)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--workspace-repo-root", target.repoRoot,
+      "--workspace-common-dir", target.repoCommonDir,
+      "--selected-worktree-path", target.selectedWorktreePath,
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launchEnvironment[Self.signalFileEnvironmentKey] = target.signalFile
+    app.launchEnvironment["ARGON_UI_TEST_WEBSITE_DEMO"] = "1"
+    app.launchEnvironment[Self.disableCLIInstallPromptEnvironmentKey] = "1"
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+    XCTAssertTrue(
+      waitForSignal("website-demo-ready", at: URL(fileURLWithPath: target.signalFile), timeout: 20)
+    )
+
+    let row = app.descendants(matching: .any)[
+      Self.workspaceSidebarAccessibilityIdentifier(for: target.connectorsWorktreePath)
+    ]
+    XCTAssertTrue(row.waitForExistence(timeout: 15))
+    row.click()
+    let window = app.windows.firstMatch
+    XCTAssertTrue(window.waitForExistence(timeout: 10))
+    sleep(1)
+    Self.attachScreenshot(window.screenshot(), named: "feature-worktrees")
+  }
+
+  @MainActor
+  func testCaptureWebsiteFeatureTerminalsScreenshot() throws {
+    let target = try Self.createWebsiteWorkspace()
+    let app = XCUIApplication()
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.fixtureRoot)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--workspace-repo-root", target.repoRoot,
+      "--workspace-common-dir", target.repoCommonDir,
+      "--selected-worktree-path", target.selectedWorktreePath,
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launchEnvironment[Self.signalFileEnvironmentKey] = target.signalFile
+    app.launchEnvironment["ARGON_UI_TEST_WEBSITE_DEMO"] = "1"
+    app.launchEnvironment[Self.disableCLIInstallPromptEnvironmentKey] = "1"
+    if Self.websiteScreenshotUsesLiveAgents() {
+      app.launchEnvironment["ARGON_UI_TEST_WEBSITE_DEMO_LIVE_AGENTS"] = "1"
+    }
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+    XCTAssertTrue(
+      waitForSignal("website-demo-ready", at: URL(fileURLWithPath: target.signalFile), timeout: 20)
+    )
+
+    let codexTab = app.buttons["workspace-terminal-tab-codex"]
+    XCTAssertTrue(codexTab.waitForExistence(timeout: 15))
+    codexTab.click()
+    let window = app.windows.firstMatch
+    XCTAssertTrue(window.waitForExistence(timeout: 10))
+    sleep(1)
+    Self.attachScreenshot(window.screenshot(), named: "feature-terminals")
+  }
+
+  @MainActor
+  func testCaptureWebsiteFeatureReviewScreenshot() throws {
+    let target = try Self.createWebsiteReviewSession()
+    let app = XCUIApplication()
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.fixtureRoot)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--session-id", target.sessionId,
+      "--repo-root", target.repoRoot,
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launchEnvironment[Self.signalFileEnvironmentKey] = target.signalFile
+    app.launchEnvironment[Self.disableCLIInstallPromptEnvironmentKey] = "1"
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+    XCTAssertTrue(
+      waitForSignal(
+        "review-window-appeared", at: URL(fileURLWithPath: target.signalFile), timeout: 20)
+    )
+    XCTAssertTrue(
+      waitForSignal("session-loaded", at: URL(fileURLWithPath: target.signalFile), timeout: 20)
+    )
+
+    let pendingReviewLabel = app.staticTexts["Pending Review"]
+    XCTAssertTrue(pendingReviewLabel.waitForExistence(timeout: 15))
+    let window = app.windows["Argon \u{2014} repo"]
+    XCTAssertTrue(window.waitForExistence(timeout: 10))
+    sleep(1)
+    Self.attachScreenshot(window.screenshot(), named: "feature-review")
+  }
+
+  @MainActor
+  func testCaptureWebsiteReviewScreenshot() throws {
+    let target = try Self.createWebsiteReviewSession()
+    let app = XCUIApplication()
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.fixtureRoot)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--session-id", target.sessionId,
+      "--repo-root", target.repoRoot,
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launchEnvironment[Self.signalFileEnvironmentKey] = target.signalFile
+    app.launchEnvironment[Self.disableCLIInstallPromptEnvironmentKey] = "1"
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+    XCTAssertTrue(
+      waitForSignal(
+        "review-window-appeared", at: URL(fileURLWithPath: target.signalFile), timeout: 20)
+    )
+    XCTAssertTrue(
+      waitForSignal("session-loaded", at: URL(fileURLWithPath: target.signalFile), timeout: 20)
+    )
+
+    let pendingReviewLabel = app.staticTexts["Pending Review"]
+    XCTAssertTrue(pendingReviewLabel.waitForExistence(timeout: 15))
+    let window = app.windows["Argon \u{2014} repo"]
+    XCTAssertTrue(window.waitForExistence(timeout: 10))
+
+    sleep(2)
+
+    Self.attachScreenshot(window.screenshot(), named: "review-window")
+
+    let submitReviewButton = app.buttons["Submit Review"]
+    if submitReviewButton.waitForExistence(timeout: 5) {
+      submitReviewButton.tap()
+
+      let submitReviewSheet = app.otherElements["submit-review-sheet"]
+      if submitReviewSheet.waitForExistence(timeout: 5) {
+        Self.attachScreenshot(window.screenshot(), named: "review-submit-sheet")
+      }
+    }
+  }
+
+  @MainActor
+  func testCaptureWebsiteReviewAgentsScreenshot() throws {
+    let target = try Self.createWebsiteReviewSession()
+    let app = XCUIApplication()
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.fixtureRoot)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--session-id", target.sessionId,
+      "--repo-root", target.repoRoot,
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launchEnvironment[Self.signalFileEnvironmentKey] = target.signalFile
+    app.launchEnvironment[Self.disableCLIInstallPromptEnvironmentKey] = "1"
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+    XCTAssertTrue(
+      waitForSignal(
+        "review-window-appeared", at: URL(fileURLWithPath: target.signalFile), timeout: 20)
+    )
+    XCTAssertTrue(
+      waitForSignal("session-loaded", at: URL(fileURLWithPath: target.signalFile), timeout: 20)
+    )
+    XCTAssertTrue(app.staticTexts["Pending Review"].waitForExistence(timeout: 15))
+    let window = app.windows["Argon \u{2014} repo"]
+    XCTAssertTrue(window.waitForExistence(timeout: 10))
+    sleep(1)
+    Self.attachScreenshot(window.screenshot(), named: "review-agents")
   }
 
   @MainActor
@@ -396,6 +636,26 @@ final class ArgonUITests: XCTestCase {
     let featureWorktreePath: String
     let argonHome: String
     let snapshotFile: String
+    let signalFile: String
+  }
+
+  private struct WebsiteWorkspaceLaunchTarget {
+    let fixtureRoot: String
+    let repoRoot: String
+    let repoCommonDir: String
+    let selectedWorktreePath: String
+    let reviewWorktreePath: String
+    let sandboxWorktreePath: String
+    let connectorsWorktreePath: String
+    let argonHome: String
+    let signalFile: String
+  }
+
+  private struct WebsiteReviewLaunchTarget {
+    let fixtureRoot: String
+    let sessionId: String
+    let repoRoot: String
+    let argonHome: String
     let signalFile: String
   }
 
@@ -675,6 +935,626 @@ final class ArgonUITests: XCTestCase {
     )
   }
 
+  private static func createWebsiteWorkspace() throws -> WebsiteWorkspaceLaunchTarget {
+    let fixtureRoot = FileManager.default.temporaryDirectory
+      .appendingPathComponent("argon-ui-tests", isDirectory: true)
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let repoRoot = fixtureRoot.appendingPathComponent("repo", isDirectory: true)
+    let worktreesRoot = fixtureRoot.appendingPathComponent("worktrees", isDirectory: true)
+    let worktreeRoot =
+      worktreesRoot
+      .appendingPathComponent("feature-marketing", isDirectory: true)
+    let reviewWorktreeRoot =
+      worktreesRoot
+      .appendingPathComponent("feature-review-pass", isDirectory: true)
+    let releaseWorktreeRoot =
+      worktreesRoot
+      .appendingPathComponent("chore-release-pipeline", isDirectory: true)
+    let sandboxWorktreeRoot =
+      worktreesRoot
+      .appendingPathComponent("fix-sandbox-network", isDirectory: true)
+    let connectorsWorktreeRoot =
+      worktreesRoot
+      .appendingPathComponent("feat-mcp-connectors", isDirectory: true)
+    let designWorktreeRoot =
+      worktreesRoot
+      .appendingPathComponent("design-welcome-refresh", isDirectory: true)
+    let argonHome = fixtureRoot.appendingPathComponent("argon-home", isDirectory: true)
+    let signalFile = fixtureRoot.appendingPathComponent("signal.txt")
+
+    try FileManager.default.createDirectory(at: repoRoot, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: worktreesRoot, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: argonHome, withIntermediateDirectories: true)
+
+    try git(repoRoot, ["init"])
+    try git(repoRoot, ["config", "user.name", "Argon UI Test"])
+    try git(repoRoot, ["config", "user.email", "argon-ui-test@example.com"])
+
+    try """
+    # Argon
+
+    Native workspace for coding agents.
+    """
+    .write(
+      to: repoRoot.appendingPathComponent("README.md"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try FileManager.default.createDirectory(
+      at: repoRoot.appendingPathComponent("Docs", isDirectory: true),
+      withIntermediateDirectories: true
+    )
+
+    try FileManager.default.createDirectory(
+      at: repoRoot.appendingPathComponent("Sources", isDirectory: true),
+      withIntermediateDirectories: true
+    )
+
+    try """
+    struct WorkspaceShell {
+        let title: String
+    }
+    """
+    .write(
+      to: repoRoot.appendingPathComponent("Sources/WorkspaceShell.swift"),
+      atomically: true,
+      encoding: .utf8
+    )
+
+    try git(repoRoot, ["add", "."])
+    try git(repoRoot, ["commit", "-m", "Initial commit"])
+    try git(repoRoot, ["branch", "-M", "main"])
+    try git(repoRoot, ["worktree", "add", "-b", "feature/marketing", worktreeRoot.path, "HEAD"])
+    try git(
+      repoRoot,
+      ["worktree", "add", "-b", "feature/review-pass", reviewWorktreeRoot.path, "HEAD"]
+    )
+    try git(
+      repoRoot,
+      ["worktree", "add", "-b", "chore/release-pipeline", releaseWorktreeRoot.path, "HEAD"]
+    )
+    try git(
+      repoRoot,
+      ["worktree", "add", "-b", "fix/sandbox-network", sandboxWorktreeRoot.path, "HEAD"]
+    )
+    try git(
+      repoRoot,
+      ["worktree", "add", "-b", "feat/mcp-connectors", connectorsWorktreeRoot.path, "HEAD"]
+    )
+    try git(
+      repoRoot,
+      ["worktree", "add", "-b", "design/welcome-refresh", designWorktreeRoot.path, "HEAD"]
+    )
+    try FileManager.default.createDirectory(
+      at: worktreeRoot.appendingPathComponent("Docs", isDirectory: true),
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+      at: reviewWorktreeRoot.appendingPathComponent("Docs", isDirectory: true),
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+      at: releaseWorktreeRoot.appendingPathComponent(".github/workflows", isDirectory: true),
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+      at: sandboxWorktreeRoot.appendingPathComponent("Docs", isDirectory: true),
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+      at: connectorsWorktreeRoot.appendingPathComponent("Docs", isDirectory: true),
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+      at: connectorsWorktreeRoot.appendingPathComponent("Sources", isDirectory: true),
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+      at: designWorktreeRoot.appendingPathComponent("website", isDirectory: true),
+      withIntermediateDirectories: true
+    )
+
+    try """
+    enum SiteCopy {
+        static let headline = "The control plane for local coding agents."
+        static let subheadline = "Native worktrees, terminals, and review."
+    }
+    """
+    .write(
+      to: worktreeRoot.appendingPathComponent("Sources/SiteCopy.swift"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(worktreeRoot, ["add", "Sources/SiteCopy.swift"])
+    try git(worktreeRoot, ["commit", "-m", "Draft website copy"])
+
+    try """
+    # Review dry run
+
+    - request changes on network copy
+    - tighten summary handoff wording
+    - validate the finalize actions
+    """
+    .write(
+      to: reviewWorktreeRoot.appendingPathComponent("Docs/review-dry-run.md"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(reviewWorktreeRoot, ["add", "Docs/review-dry-run.md"])
+    try git(reviewWorktreeRoot, ["commit", "-m", "Seed review fixture"])
+
+    try """
+    name: release
+    on:
+      workflow_dispatch:
+    jobs:
+      smoke:
+        runs-on: macos-latest
+        steps:
+          - uses: actions/checkout@v4
+    """
+    .write(
+      to: releaseWorktreeRoot.appendingPathComponent(".github/workflows/release.yml"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(releaseWorktreeRoot, ["add", ".github/workflows/release.yml"])
+    try git(releaseWorktreeRoot, ["commit", "-m", "Draft release workflow"])
+
+    try """
+    # Sandbox notes
+
+    - audit trust store reads
+    - keep proxy logging visible in the inspector
+    - document direct connect limitations
+    """
+    .write(
+      to: sandboxWorktreeRoot.appendingPathComponent("Docs/sandbox-audit.md"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(sandboxWorktreeRoot, ["add", "Docs/sandbox-audit.md"])
+    try git(sandboxWorktreeRoot, ["commit", "-m", "Capture sandbox follow-ups"])
+
+    try """
+    enum ConnectorCatalog {
+        static let planned = [
+            "Linear",
+            "Slack",
+            "Sentry",
+        ]
+    }
+    """
+    .write(
+      to: connectorsWorktreeRoot.appendingPathComponent("Sources/ConnectorCatalog.swift"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try """
+    # MCP connector sketch
+
+    - connectors managed from one native place
+    - expose them to agents through the in-app MCP server
+    - keep secrets out of prompts
+    """
+    .write(
+      to: connectorsWorktreeRoot.appendingPathComponent("Docs/mcp-connectors.md"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(
+      connectorsWorktreeRoot,
+      ["add", "Sources/ConnectorCatalog.swift", "Docs/mcp-connectors.md"]
+    )
+    try git(connectorsWorktreeRoot, ["commit", "-m", "Sketch connector catalog"])
+
+    try """
+    <section class="hero">
+      <h1>Argon</h1>
+      <p>Workspace control for coding agents.</p>
+    </section>
+    """
+    .write(
+      to: designWorktreeRoot.appendingPathComponent("website/hero.html"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(designWorktreeRoot, ["add", "website/hero.html"])
+    try git(designWorktreeRoot, ["commit", "-m", "Draft welcome split layout"])
+
+    try """
+    ## Contributing
+
+    Open worktrees in Argon or with `argon <dir>`.
+    """
+    .write(
+      to: repoRoot.appendingPathComponent("CONTRIBUTING.md"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repoRoot, ["add", "CONTRIBUTING.md"])
+    try git(repoRoot, ["commit", "-m", "Add contributor guide"])
+
+    try """
+    # Argon
+
+    Native workspace for coding agents.
+
+    - worktrees
+    - embedded terminals
+    - native review
+    """
+    .write(
+      to: worktreeRoot.appendingPathComponent("README.md"),
+      atomically: true,
+      encoding: .utf8
+    )
+
+    try """
+    struct WorkspaceShell {
+        let title: String
+        let supportsSandbox = true
+        let supportsReviews = true
+    }
+    """
+    .write(
+      to: worktreeRoot.appendingPathComponent("Sources/WorkspaceShell.swift"),
+      atomically: true,
+      encoding: .utf8
+    )
+
+    try """
+    enum SiteCopy {
+        static let headline = "The control plane for local coding agents."
+        static let subheadline = "Native worktrees, terminals, review, and sandboxed execution."
+    }
+    """
+    .write(
+      to: worktreeRoot.appendingPathComponent("Sources/SiteCopy.swift"),
+      atomically: true,
+      encoding: .utf8
+    )
+
+    try """
+    struct InspectorCopy {
+        static let summary = "Observed proxied traffic, review handoff, and worktree actions live in one native workspace."
+    }
+    """
+    .write(
+      to: worktreeRoot.appendingPathComponent("Sources/InspectorCopy.swift"),
+      atomically: true,
+      encoding: .utf8
+    )
+
+    try """
+    # Marketing notes
+
+    - launch coding agents in native tabs
+    - inspect proxied network activity
+    - keep review explicit
+    """
+    .write(
+      to: worktreeRoot.appendingPathComponent("Docs/marketing-notes.md"),
+      atomically: true,
+      encoding: .utf8
+    )
+
+    try """
+    # Sandbox notes
+
+    - capture trust store regressions before release
+    - validate the proxied DNS path in screenshots
+    """
+    .write(
+      to: sandboxWorktreeRoot.appendingPathComponent("Docs/sandbox-audit.md"),
+      atomically: true,
+      encoding: .utf8
+    )
+
+    try """
+    # MCP connector sketch
+
+    - show connector badges in the website demo
+    - seed shared fake data for Linear and Slack
+    - keep the first pass local-only
+    """
+    .write(
+      to: connectorsWorktreeRoot.appendingPathComponent("Docs/mcp-connectors.md"),
+      atomically: true,
+      encoding: .utf8
+    )
+
+    try """
+    <section class="hero">
+      <h1>Argon</h1>
+      <p>Workspace control for coding agents.</p>
+      <ul>
+        <li>Worktrees</li>
+        <li>Embedded terminals</li>
+        <li>Review handoff</li>
+      </ul>
+    </section>
+    """
+    .write(
+      to: designWorktreeRoot.appendingPathComponent("website/hero.html"),
+      atomically: true,
+      encoding: .utf8
+    )
+
+    return WebsiteWorkspaceLaunchTarget(
+      fixtureRoot: fixtureRoot.path,
+      repoRoot: repoRoot.path,
+      repoCommonDir: repoRoot.appendingPathComponent(".git", isDirectory: true).path,
+      selectedWorktreePath: worktreeRoot.path,
+      reviewWorktreePath: reviewWorktreeRoot.path,
+      sandboxWorktreePath: sandboxWorktreeRoot.path,
+      connectorsWorktreePath: connectorsWorktreeRoot.path,
+      argonHome: argonHome.path,
+      signalFile: signalFile.path
+    )
+  }
+
+  private static func createWebsiteReviewSession() throws -> WebsiteReviewLaunchTarget {
+    let fixtureRoot = FileManager.default.temporaryDirectory
+      .appendingPathComponent("argon-ui-tests", isDirectory: true)
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let repoRoot = fixtureRoot.appendingPathComponent("repo", isDirectory: true)
+    let argonHome = fixtureRoot.appendingPathComponent("argon-home", isDirectory: true)
+    let signalFile = fixtureRoot.appendingPathComponent("signal.txt")
+    let sessionId = UUID().uuidString.lowercased()
+
+    try FileManager.default.createDirectory(at: repoRoot, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: argonHome, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+      at: repoRoot.appendingPathComponent("Sources", isDirectory: true),
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+      at: repoRoot.appendingPathComponent("Docs", isDirectory: true),
+      withIntermediateDirectories: true
+    )
+
+    try git(repoRoot, ["init"])
+    try git(repoRoot, ["config", "user.name", "Argon UI Test"])
+    try git(repoRoot, ["config", "user.email", "argon-ui-test@example.com"])
+
+    try """
+    struct WorkspaceShell {
+        let title = "Argon"
+        let supportsSandbox = false
+    }
+    """
+    .write(
+      to: repoRoot.appendingPathComponent("Sources/WorkspaceShell.swift"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try """
+    # Sandbox
+
+    Network defaults are still under review.
+    """
+    .write(
+      to: repoRoot.appendingPathComponent("Docs/sandbox.md"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try """
+    ENV DEFAULT NONE
+    FS DEFAULT NONE
+    EXEC DEFAULT ALLOW
+    USE os
+    USE shell
+    """
+    .write(
+      to: repoRoot.appendingPathComponent("Sandboxfile"),
+      atomically: true,
+      encoding: .utf8
+    )
+
+    try git(repoRoot, ["add", "."])
+    try git(repoRoot, ["commit", "-m", "Initial review fixture"])
+    try git(repoRoot, ["branch", "-M", "main"])
+
+    try """
+    struct WorkspaceShell {
+        let title = "Argon"
+        let supportsSandbox = true
+        let supportsReviews = true
+    }
+    """
+    .write(
+      to: repoRoot.appendingPathComponent("Sources/WorkspaceShell.swift"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try """
+    # Sandbox
+
+    Network defaults are now explicit and proxy traffic is observable in the
+    inspector.
+    """
+    .write(
+      to: repoRoot.appendingPathComponent("Docs/sandbox.md"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try """
+    ENV DEFAULT NONE
+    FS DEFAULT NONE
+    EXEC DEFAULT ALLOW
+    NET DEFAULT NONE
+    NET ALLOW PROXY *
+    USE os
+    USE shell
+    USE git
+    USE agent
+    FS ALLOW READ .
+    FS ALLOW WRITE .
+    """
+    .write(
+      to: repoRoot.appendingPathComponent("Sandboxfile"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try """
+    struct ReviewFlow {
+        static let headline = "Keep coding, review, and mergeback in one app."
+    }
+    """
+    .write(
+      to: repoRoot.appendingPathComponent("Sources/ReviewFlow.swift"),
+      atomically: true,
+      encoding: .utf8
+    )
+
+    let sessionsDirectory = sessionsDirectory(argonHome: argonHome.path, repoRoot: repoRoot.path)
+    try FileManager.default.createDirectory(
+      at: URL(fileURLWithPath: sessionsDirectory),
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+      at: URL(fileURLWithPath: sessionsDirectory).appendingPathComponent("drafts"),
+      withIntermediateDirectories: true
+    )
+
+    let timestamp = iso8601Timestamp()
+    let sessionPayload: [String: Any] = [
+      "id": sessionId,
+      "repo_root": repoRoot.path,
+      "mode": "uncommitted",
+      "base_ref": "HEAD",
+      "head_ref": "WORKTREE",
+      "merge_base_sha": "HEAD",
+      "change_summary":
+        "Tightens sandbox defaults and keeps review plus merge-back in one native loop.",
+      "status": "awaiting_reviewer",
+      "threads": [
+        [
+          "id": "11111111-1111-1111-1111-111111111111",
+          "state": "open",
+          "agent_acknowledged_at": NSNull(),
+          "comments": [
+            [
+              "id": "aaaaaaaa-1111-1111-1111-111111111111",
+              "thread_id": "11111111-1111-1111-1111-111111111111",
+              "author": "reviewer",
+              "author_name": "Alex",
+              "kind": "line",
+              "anchor": [
+                "file_path": "Sandboxfile",
+                "line_new": 5,
+                "line_old": NSNull(),
+              ],
+              "body": "Call out that proxy-backed traffic shows up live in the inspector.",
+              "created_at": timestamp,
+            ],
+            [
+              "id": "aaaaaaaa-2222-2222-2222-222222222222",
+              "thread_id": "11111111-1111-1111-1111-111111111111",
+              "author": "reviewer",
+              "author_name": "Codex",
+              "kind": "line",
+              "anchor": [
+                "file_path": "Sandboxfile",
+                "line_new": 5,
+                "line_old": NSNull(),
+              ],
+              "body":
+                "Gemini, keep the proxy-backed network story explicit so reviewer agents can validate it before merge-back.",
+              "created_at": timestamp,
+            ],
+            [
+              "id": "aaaaaaaa-3333-3333-3333-333333333333",
+              "thread_id": "11111111-1111-1111-1111-111111111111",
+              "author": "reviewer",
+              "author_name": "Gemini",
+              "kind": "line",
+              "anchor": [
+                "file_path": "Sandboxfile",
+                "line_new": 5,
+                "line_old": NSNull(),
+              ],
+              "body":
+                "Agreed. I will also call out that sandboxing is the default for integrated agent launches, not an opt-in afterthought.",
+              "created_at": timestamp,
+            ],
+          ],
+        ],
+        [
+          "id": "22222222-2222-2222-2222-222222222222",
+          "state": "addressed",
+          "agent_acknowledged_at": timestamp,
+          "comments": [
+            [
+              "id": "bbbbbbbb-1111-1111-1111-111111111111",
+              "thread_id": "22222222-2222-2222-2222-222222222222",
+              "author": "reviewer",
+              "author_name": "Sam",
+              "kind": "line",
+              "anchor": [
+                "file_path": "Sources/WorkspaceShell.swift",
+                "line_new": 4,
+                "line_old": NSNull(),
+              ],
+              "body":
+                "Mention that coding, review, and merge-back stay in the same workspace.",
+              "created_at": timestamp,
+            ]
+          ],
+        ],
+      ],
+      "decision": NSNull(),
+      "agent_last_seen_at": timestamp,
+      "created_at": timestamp,
+      "updated_at": timestamp,
+    ]
+
+    let sessionFile = URL(fileURLWithPath: sessionsDirectory).appendingPathComponent(
+      "\(sessionId).json")
+    let sessionData = try JSONSerialization.data(
+      withJSONObject: sessionPayload,
+      options: [.prettyPrinted]
+    )
+    try sessionData.write(to: sessionFile, options: .atomic)
+
+    let draftPayload: [String: Any] = [
+      "session_id": sessionId,
+      "comments": [
+        [
+          "id": "cccccccc-1111-1111-1111-111111111111",
+          "thread_id": NSNull(),
+          "anchor": [
+            "file_path": "Docs/sandbox.md",
+            "line_new": 3,
+            "line_old": NSNull(),
+          ],
+          "body": "Mention that sandboxing is the default for integrated agent launches.",
+          "created_at": timestamp,
+          "updated_at": timestamp,
+        ]
+      ],
+      "created_at": timestamp,
+      "updated_at": timestamp,
+    ]
+    let draftFile = URL(fileURLWithPath: sessionsDirectory)
+      .appendingPathComponent("drafts")
+      .appendingPathComponent("\(sessionId).json")
+    let draftData = try JSONSerialization.data(
+      withJSONObject: draftPayload,
+      options: [.prettyPrinted]
+    )
+    try draftData.write(to: draftFile, options: .atomic)
+
+    return WebsiteReviewLaunchTarget(
+      fixtureRoot: fixtureRoot.path,
+      sessionId: sessionId,
+      repoRoot: repoRoot.path,
+      argonHome: argonHome.path,
+      signalFile: signalFile.path
+    )
+  }
+
   private static func repositoryRoot(filePath: StaticString = #filePath) -> String {
     var url = URL(fileURLWithPath: "\(filePath)")
     for _ in 0..<4 {
@@ -744,6 +1624,71 @@ final class ArgonUITests: XCTestCase {
       contents
       .filter { $0.hasSuffix(".ghosttycrash") }
       .sorted()
+  }
+
+  private static func websiteScreenshotUsesLiveAgents() -> Bool {
+    let configURL = URL(fileURLWithPath: repositoryRoot())
+      .appendingPathComponent("website/draft")
+      .appendingPathComponent(screenshotLiveAgentsConfigFileName)
+    guard let contents = try? String(contentsOf: configURL, encoding: .utf8) else { return false }
+    return ["1", "true", "yes", "on"].contains(
+      contents.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    )
+  }
+
+  private static func websiteReviewersJSON(useLiveAgents: Bool) -> String {
+    let launches: [[String: Any]] =
+      if useLiveAgents {
+        [
+          [
+            "name": "Codex",
+            "command": "codex",
+            "focusPrompt": "Review the branch for merge-back safety and sandbox clarity.",
+            "sandboxEnabled": true,
+            "icon": "codex",
+          ],
+          [
+            "name": "Gemini",
+            "command": "gemini",
+            "focusPrompt": "Review the branch for product copy and reviewer handoff clarity.",
+            "sandboxEnabled": true,
+            "icon": "gemini",
+          ],
+        ]
+      } else {
+        [
+          [
+            "name": "Codex",
+            "command":
+              "/bin/sh -lc 'printf \"Codex reviewer\\n\\nGemini already pushed on the product copy.\\nI am checking merge-back safety and the sandbox wording before land.\\n\\n- keep sandbox-on-by-default explicit\\n- make proxy activity visible before merge-back\\n\"; sleep 180'",
+            "focusPrompt":
+              "Review the branch for merge-back safety and sandbox clarity, then coordinate with Gemini on the final wording.",
+            "sandboxEnabled": true,
+            "icon": "codex",
+          ],
+          [
+            "name": "Gemini",
+            "command":
+              "/bin/sh -lc 'printf \"Gemini reviewer\\n\\nCodex is checking merge-back safety.\\nI am tightening the reviewer handoff and approval language.\\n\\n- make the human approval gate explicit\\n- keep the copy local-first and concrete\\n\"; sleep 180'",
+            "focusPrompt":
+              "Review the branch for product copy and reviewer handoff clarity, then align with Codex on what should block merge-back.",
+            "sandboxEnabled": true,
+            "icon": "gemini",
+          ],
+        ]
+      }
+
+    let data = try! JSONSerialization.data(withJSONObject: launches, options: [])
+    return String(decoding: data, as: UTF8.self)
+  }
+
+  private static func attachScreenshot(_ screenshot: XCUIScreenshot, named name: String) {
+    let attachment = XCTAttachment(screenshot: screenshot)
+    attachment.name = name
+    attachment.lifetime = .keepAlways
+    XCTContext.runActivity(named: "Capture \(name)") { activity in
+      activity.add(attachment)
+    }
   }
 
   @MainActor

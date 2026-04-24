@@ -57,6 +57,9 @@ struct WorkspaceWindowView: View {
           workspaceState.load()
         }
       }
+      .task(id: workspaceState.worktrees.count) {
+        workspaceState.applyUITestWebsiteDemoIfNeeded()
+      }
   }
 }
 
@@ -1050,6 +1053,7 @@ private struct WorkspaceTerminalTabItem: View {
         }
         .contentShape(Rectangle())
       }
+      .accessibilityIdentifier(accessibilityIdentifier)
       .buttonStyle(.plain)
       .help(tabHelp)
 
@@ -1098,6 +1102,25 @@ private struct WorkspaceTerminalTabItem: View {
     default:
       return "agent"
     }
+  }
+
+  private var accessibilityIdentifier: String {
+    let sanitizedTitle = tab.title
+      .lowercased()
+      .map { character -> Character in
+        if character.isLetter || character.isNumber {
+          return character
+        }
+        return "-"
+      }
+      .reduce(into: "") { partial, character in
+        if character == "-", partial.last == "-" {
+          return
+        }
+        partial.append(character)
+      }
+      .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    return "workspace-terminal-tab-\(sanitizedTitle)"
   }
 }
 

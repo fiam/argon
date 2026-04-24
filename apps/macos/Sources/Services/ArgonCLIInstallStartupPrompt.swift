@@ -6,6 +6,8 @@ import SwiftUI
 @MainActor
 @Observable
 final class ArgonCLIInstallStartupPrompt {
+  private static let disableEnvironmentKey = "ARGON_UI_TEST_DISABLE_CLI_INSTALL_PROMPT"
+
   enum Action: Sendable {
     case repair
     case notNow
@@ -125,6 +127,7 @@ final class ArgonCLIInstallStartupPrompt {
   private let userDefaults: UserDefaults
   private let statusProvider: @MainActor @Sendable () -> ArgonCLIInstallLinkStatus
   private let repairAction: @MainActor @Sendable () throws -> ArgonCLIInstallLinkStatus
+  private let environmentProvider: @MainActor @Sendable () -> [String: String]
   private let presenter: Presenter
   private var didAttemptThisLaunch = false
   private var isPresenting = false
@@ -137,16 +140,24 @@ final class ArgonCLIInstallStartupPrompt {
     repairAction: @escaping @MainActor @Sendable () throws -> ArgonCLIInstallLinkStatus = {
       try ArgonCLIInstallLink.repair()
     },
+    environmentProvider: @escaping @MainActor @Sendable () -> [String: String] = {
+      ProcessInfo.processInfo.environment
+    },
     presenter: Presenter = .live
   ) {
     self.userDefaults = userDefaults
     self.statusProvider = statusProvider
     self.repairAction = repairAction
+    self.environmentProvider = environmentProvider
     self.presenter = presenter
   }
 
   func presentIfNeeded() async {
     guard !didAttemptThisLaunch, !isPresenting else { return }
+    guard !isDisabledForCurrentProcess else {
+      didAttemptThisLaunch = true
+      return
+    }
 
     let status = statusProvider()
     guard
@@ -193,6 +204,18 @@ final class ArgonCLIInstallStartupPrompt {
       } else {
         userDefaults.removeObject(forKey: ArgonCLIInstallOnboarding.dismissalStorageKey)
       }
+    }
+  }
+
+  private var isDisabledForCurrentProcess: Bool {
+    let value = environmentProvider()[Self.disableEnvironmentKey]?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+    return switch value {
+    case "1", "true", "yes", "on":
+      true
+    default:
+      false
     }
   }
 }

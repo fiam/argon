@@ -190,4 +190,44 @@ struct ArgonCLIInstallStartupPromptTests {
     #expect(recorder.errors.isEmpty)
     #expect(defaults.string(forKey: ArgonCLIInstallOnboarding.dismissalStorageKey) == nil)
   }
+
+  @Test("prompt stays suppressed when UI tests disable the startup prompt")
+  func promptStaysSuppressedWhenUITestsDisableTheStartupPrompt() async {
+    let suiteName = "ArgonCLIInstallStartupPromptTests.disabled"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defaults.removePersistentDomain(forName: suiteName)
+
+    let recorder = Recorder()
+    let status = ArgonCLIInstallLinkStatus(
+      linkPath: "/usr/local/bin/argon",
+      expectedTargetPath: "/Applications/Argon.app/Contents/Resources/bin/argon",
+      state: .missing
+    )
+
+    let prompt = ArgonCLIInstallStartupPrompt(
+      userDefaults: defaults,
+      statusProvider: { status },
+      repairAction: { status },
+      environmentProvider: {
+        ["ARGON_UI_TEST_DISABLE_CLI_INSTALL_PROMPT": "1"]
+      },
+      presenter: .init(
+        present: { onboarding in
+          recorder.prompts.append(onboarding)
+          return .init(
+            action: recorder.nextAction,
+            suppressFuturePrompts: recorder.suppressFuturePrompts
+          )
+        },
+        presentError: { message in
+          recorder.errors.append(message)
+        }
+      )
+    )
+
+    await prompt.presentIfNeeded()
+
+    #expect(recorder.prompts.isEmpty)
+    #expect(recorder.errors.isEmpty)
+  }
 }

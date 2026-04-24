@@ -78,6 +78,7 @@ final class WorkspaceState {
   private var pendingReviewPreparationAfterAgentLaunch: WorkspaceReviewPreparation?
   private var stagedReviewLaunch: StagedReviewLaunch?
   private var preparedReviewTargetsByAgentTabID: [UUID: ReviewTarget] = [:]
+  private var didApplyUITestWebsiteDemo = false
   nonisolated(unsafe) private var reviewSessionCloseObserver: NSObjectProtocol?
 
   init(
@@ -885,6 +886,15 @@ final class WorkspaceState {
     )
 
     insertTerminalTab(tab, for: worktreePath)
+  }
+
+  func applyUITestWebsiteDemoIfNeeded() {
+    let config = UITestAutomationConfig.current()
+    guard config.websiteDemoEnabled, !didApplyUITestWebsiteDemo else { return }
+    guard !worktrees.isEmpty, selectedWorktree != nil else { return }
+
+    didApplyUITestWebsiteDemo = true
+    configureUITestWebsiteDemo(useLiveAgentCommands: config.websiteDemoUsesLiveAgentCommands)
   }
 
   func requestSandboxedShellLaunch() {
@@ -1895,6 +1905,222 @@ final class WorkspaceState {
     selectedTerminalTabIDsByWorktreePath[worktreePath] = tab.id
     requestTerminalFocus(in: worktreePath)
     notifyRestorableStateChanged()
+  }
+
+  private func configureUITestWebsiteDemo(useLiveAgentCommands: Bool) {
+    guard let worktree = selectedWorktree else { return }
+
+    let worktreePath = normalizedPath(worktree.path)
+    for tab in terminalTabsByWorktreePath[worktreePath] ?? [] {
+      GhosttyTerminalView.releaseTerminal(tab.id)
+    }
+    terminalTabsByWorktreePath[worktreePath] = []
+    selectedTerminalTabIDsByWorktreePath.removeValue(forKey: worktreePath)
+
+    _ = insertUITestWebsiteDemoTab(
+      title: "Shell 1",
+      commandDescription: "/bin/sh",
+      icon: "terminal",
+      worktree: worktree,
+      processSpec: SandboxedProcessSpec(
+        executable: "/bin/sh",
+        args: [
+          "-lc",
+          Self.websiteDemoShellScript(
+            lines: [
+              "$ git status --short",
+              " M README.md",
+              " M Sources/WorkspaceShell.swift",
+              "?? Sources/InspectorCopy.swift",
+            ],
+            sleepSeconds: 180
+          ),
+        ]
+      )
+    )
+
+    _ = insertUITestWebsiteDemoTab(
+      title: "Gemini",
+      commandDescription: "gemini",
+      icon: "gemini",
+      worktree: worktree,
+      processSpec: Self.websiteDemoAgentProcessSpec(
+        preferredCommand: "gemini",
+        fallbackLines: [
+          "Gemini CLI",
+          "",
+          "Planning next pass...",
+          "- tighten the website copy",
+          "- refresh the welcome window screenshot",
+          "- validate direct network status messaging",
+        ],
+        useLiveAgents: useLiveAgentCommands
+      )
+    )
+
+    let codexTab = insertUITestWebsiteDemoTab(
+      title: "Codex",
+      commandDescription: "codex",
+      icon: "codex",
+      worktree: worktree,
+      processSpec: Self.websiteDemoAgentProcessSpec(
+        preferredCommand: "codex",
+        fallbackLines: [
+          "Codex",
+          "",
+          "Workspace pass ready:",
+          "- Added proxied network activity in the inspector",
+          "- Tightened review handoff state",
+          "- Drafted summary for the current diff",
+        ],
+        useLiveAgents: useLiveAgentCommands
+      )
+    )
+
+    reviewSummaryDraftsByWorktreePath[worktreePath] = WorkspaceReviewSummaryDraft(
+      title: "Native review and network visibility",
+      summary:
+        "Refined the workspace shell, added observed proxied network activity in the inspector, and tightened the review handoff flow for local coding agents.",
+      testing: "Seeded website demo workspace and manual UI validation.",
+      risks: "Refresh screenshots when the sidebar or inspector layout changes."
+    )
+
+    if let codexTab {
+      writeUITestWebsiteDemoNetworkLog(for: codexTab.id)
+    }
+
+    UITestAutomationSignal.write(
+      "website-demo-ready", to: UITestAutomationConfig.current().signalFilePath)
+    notifyRestorableStateChanged()
+  }
+
+  @discardableResult
+  private func insertUITestWebsiteDemoTab(
+    title: String,
+    commandDescription: String,
+    icon: String,
+    worktree: DiscoveredWorktree,
+    processSpec: SandboxedProcessSpec
+  ) -> WorkspaceTerminalTab? {
+    let worktreePath = normalizedPath(worktree.path)
+    let tabID = UUID()
+    let tab = WorkspaceTerminalTab(
+      id: tabID,
+      worktreePath: worktreePath,
+      worktreeLabel: worktree.branchName ?? repoName,
+      title: title,
+      commandDescription: commandDescription,
+      kind: .agent(profileName: title, icon: icon),
+      launch: TerminalLaunchConfiguration(
+        processSpec: processSpec,
+        environment: TerminalLaunchConfiguration.terminalEnvironment(
+          base: ProcessInfo.processInfo.environment,
+          extraEnvironment: [
+            "ARGON_TERMINAL_TAB_ID": tabID.uuidString
+          ]
+        ),
+        currentDirectory: worktree.path
+      ),
+      isSandboxed: false,
+      writableRoots: [],
+      isRestorableAfterRelaunch: false
+    )
+
+    insertTerminalTab(tab, for: worktreePath)
+    return tab
+  }
+
+  private func writeUITestWebsiteDemoNetworkLog(for tabID: UUID) {
+    let logURL = SandboxNetworkActivityLogStore.logURL(for: tabID)
+    try? FileManager.default.createDirectory(
+      at: logURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let now = Date()
+    let events = [
+      (
+        occurredAt: now.addingTimeInterval(-9),
+        method: "GET",
+        host: "api.openai.com",
+        path: "/v1/responses",
+        bytesUp: 28_672,
+        bytesDown: 114_688
+      ),
+      (
+        occurredAt: now.addingTimeInterval(-6),
+        method: "POST",
+        host: "api.anthropic.com",
+        path: "/v1/messages",
+        bytesUp: 12_288,
+        bytesDown: 49_152
+      ),
+      (
+        occurredAt: now.addingTimeInterval(-3),
+        method: "GET",
+        host: "github.com",
+        path: "/fiam/argon/pull/12",
+        bytesUp: 4_096,
+        bytesDown: 32_768
+      ),
+    ]
+
+    let body =
+      events.map { event in
+        """
+        {"occurred_at":"\(formatter.string(from: event.occurredAt))","kind":"http","outcome":"proxied","method":"\(event.method)","host":"\(event.host)","port":443,"path":"\(event.path)","detail":null,"bytes_up":\(event.bytesUp),"bytes_down":\(event.bytesDown)}
+        """
+      }
+      .joined(separator: "\n")
+
+    try? body.write(to: logURL, atomically: true, encoding: .utf8)
+  }
+
+  private static func websiteDemoAgentProcessSpec(
+    preferredCommand: String,
+    fallbackLines: [String],
+    useLiveAgents: Bool
+  ) -> SandboxedProcessSpec {
+    if useLiveAgents, let executable = installedExecutablePath(named: preferredCommand) {
+      return SandboxedProcessSpec(executable: executable, args: [])
+    }
+
+    return SandboxedProcessSpec(
+      executable: "/bin/sh",
+      args: [
+        "-lc",
+        websiteDemoShellScript(lines: fallbackLines, sleepSeconds: 180),
+      ]
+    )
+  }
+
+  private static func installedExecutablePath(
+    named command: String,
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> String? {
+    let pathEntries = (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
+      .split(separator: ":")
+      .map(String.init)
+
+    for entry in pathEntries {
+      let candidate = URL(fileURLWithPath: entry, isDirectory: true)
+        .appendingPathComponent(command)
+        .path
+      if FileManager.default.isExecutableFile(atPath: candidate) {
+        return candidate
+      }
+    }
+
+    return nil
+  }
+
+  private static func websiteDemoShellScript(lines: [String], sleepSeconds: Int) -> String {
+    let quotedLines = lines.map { line in
+      "'\(line.replacingOccurrences(of: "'", with: "'\\''"))'"
+    }
+    return "printf '%s\\n' \(quotedLines.joined(separator: " ")); sleep \(sleepSeconds)"
   }
 
   private func nextOrdinal(
