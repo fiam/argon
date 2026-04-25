@@ -34,7 +34,6 @@ DEFAULT_SCREENSHOTS = (
 )
 DEFAULT_ASSET_DIRS = (
     Path("website/assets"),
-    Path("website/draft/assets"),
 )
 
 

@@ -3,8 +3,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LIVE_AGENTS_FILE="$ROOT/website/draft/.website-screenshot-live-agents"
-FINAL_OUT_DIR="$ROOT/website/draft/assets"
+LIVE_AGENTS_FILE="$ROOT/website/.website-screenshot-live-agents"
+FINAL_OUT_DIR="$ROOT/website/assets"
+CAPTURE_OUT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/argon-website-captures.XXXXXX")"
 USE_LIVE_AGENTS=0
 
 while (($#)); do
@@ -25,6 +26,7 @@ printf '%s\n' "$USE_LIVE_AGENTS" >"$LIVE_AGENTS_FILE"
 
 cleanup() {
   rm -f "$LIVE_AGENTS_FILE"
+  rm -rf "$CAPTURE_OUT_DIR"
 }
 trap cleanup EXIT
 
@@ -40,7 +42,7 @@ copy_attachments() {
     return
   fi
 
-  python3 - "$attachments_dir" "$FINAL_OUT_DIR" <<'PY'
+  python3 - "$attachments_dir" "$CAPTURE_OUT_DIR" <<'PY'
 import json
 import pathlib
 import re
@@ -91,21 +93,6 @@ run_screenshot_test() {
   rm -rf "$result_bundle" "$attachments_dir"
 }
 
-find "$FINAL_OUT_DIR" -maxdepth 1 -type f \( \
-  -name 'workspace-window*.png' -o \
-  -name 'feature-worktrees*.png' -o \
-  -name 'feature-terminals*.png' -o \
-  -name 'feature-review*.png' -o \
-  -name 'review-window*.png' -o \
-  -name 'review-agents*.png' -o \
-  -name 'review-submit-sheet*.png' -o \
-  -name 'UI Snapshot*.png' -o \
-  -name 'Screen Recording*.mp4' -o \
-  -name 'App UI hierarchy*.txt' -o \
-  -name 'Debug description*.txt' -o \
-  -regex '.*/[0-9A-F-]\{36\}\.png' \
-\) -delete || true
-
 cd "$ROOT/apps/macos"
 xcodegen generate >/dev/null
 
@@ -121,3 +108,20 @@ tests=(
 for test_identifier in "${tests[@]}"; do
   run_screenshot_test "$test_identifier"
 done
+
+find "$FINAL_OUT_DIR" -maxdepth 1 -type f \( \
+  -name 'workspace-window*.png' -o \
+  -name 'feature-worktrees*.png' -o \
+  -name 'feature-terminals*.png' -o \
+  -name 'feature-review*.png' -o \
+  -name 'review-window*.png' -o \
+  -name 'review-agents*.png' -o \
+  -name 'review-submit-sheet*.png' -o \
+  -name 'UI Snapshot*.png' -o \
+  -name 'Screen Recording*.mp4' -o \
+  -name 'App UI hierarchy*.txt' -o \
+  -name 'Debug description*.txt' -o \
+  -regex '.*/[0-9A-F-]\{36\}\.png' \
+\) -delete || true
+
+cp "$CAPTURE_OUT_DIR"/*.png "$FINAL_OUT_DIR"/

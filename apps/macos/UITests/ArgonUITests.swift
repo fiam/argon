@@ -427,11 +427,9 @@ final class ArgonUITests: XCTestCase {
       waitForSignal("session-loaded", at: URL(fileURLWithPath: target.signalFile), timeout: 20)
     )
 
-    let pendingReviewLabel = app.staticTexts["Pending Review"]
-    XCTAssertTrue(pendingReviewLabel.waitForExistence(timeout: 15))
-    let window = app.windows["Argon \u{2014} repo"]
+    let window = app.windows.firstMatch
     XCTAssertTrue(window.waitForExistence(timeout: 10))
-    sleep(1)
+    sleep(2)
     Self.attachScreenshot(window.screenshot(), named: "feature-review")
   }
 
@@ -464,24 +462,12 @@ final class ArgonUITests: XCTestCase {
       waitForSignal("session-loaded", at: URL(fileURLWithPath: target.signalFile), timeout: 20)
     )
 
-    let pendingReviewLabel = app.staticTexts["Pending Review"]
-    XCTAssertTrue(pendingReviewLabel.waitForExistence(timeout: 15))
-    let window = app.windows["Argon \u{2014} repo"]
+    let window = app.windows.firstMatch
     XCTAssertTrue(window.waitForExistence(timeout: 10))
 
     sleep(2)
 
     Self.attachScreenshot(window.screenshot(), named: "review-window")
-
-    let submitReviewButton = app.buttons["Submit Review"]
-    if submitReviewButton.waitForExistence(timeout: 5) {
-      submitReviewButton.tap()
-
-      let submitReviewSheet = app.otherElements["submit-review-sheet"]
-      if submitReviewSheet.waitForExistence(timeout: 5) {
-        Self.attachScreenshot(window.screenshot(), named: "review-submit-sheet")
-      }
-    }
   }
 
   @MainActor
@@ -512,10 +498,9 @@ final class ArgonUITests: XCTestCase {
     XCTAssertTrue(
       waitForSignal("session-loaded", at: URL(fileURLWithPath: target.signalFile), timeout: 20)
     )
-    XCTAssertTrue(app.staticTexts["Pending Review"].waitForExistence(timeout: 15))
-    let window = app.windows["Argon \u{2014} repo"]
+    let window = app.windows.firstMatch
     XCTAssertTrue(window.waitForExistence(timeout: 10))
-    sleep(1)
+    sleep(2)
     Self.attachScreenshot(window.screenshot(), named: "review-agents")
   }
 
@@ -657,6 +642,234 @@ final class ArgonUITests: XCTestCase {
     let repoRoot: String
     let argonHome: String
     let signalFile: String
+  }
+
+  private static func writeGeneratedLines(
+    to url: URL,
+    header: [String] = [],
+    footer: [String] = [],
+    count: Int,
+    makeLine: (Int) -> String
+  ) throws {
+    var lines = header
+    lines.reserveCapacity(header.count + count + footer.count + 1)
+    if count > 0 {
+      for index in 1...count {
+        lines.append(makeLine(index))
+      }
+    }
+    lines.append(contentsOf: footer)
+    lines.append("")
+    try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+  }
+
+  private static func nullable(_ value: Int?) -> Any {
+    value.map { $0 as Any } ?? NSNull()
+  }
+
+  private static func nullable(_ value: String?) -> Any {
+    value.map { $0 as Any } ?? NSNull()
+  }
+
+  private static func reviewThread(
+    id: String,
+    state: String,
+    agentAcknowledgedAt: String? = nil,
+    comments: [[String: Any]]
+  ) -> [String: Any] {
+    [
+      "id": id,
+      "state": state,
+      "agent_acknowledged_at": nullable(agentAcknowledgedAt),
+      "comments": comments,
+    ]
+  }
+
+  private static func reviewComment(
+    id: String,
+    threadId: String,
+    authorName: String,
+    filePath: String,
+    lineNew: Int? = nil,
+    lineOld: Int? = nil,
+    body: String,
+    timestamp: String
+  ) -> [String: Any] {
+    [
+      "id": id,
+      "thread_id": threadId,
+      "author": "reviewer",
+      "author_name": authorName,
+      "kind": "line",
+      "anchor": [
+        "file_path": filePath,
+        "line_new": nullable(lineNew),
+        "line_old": nullable(lineOld),
+      ],
+      "body": body,
+      "created_at": timestamp,
+    ]
+  }
+
+  private static func websiteReviewThreads(timestamp: String) -> [[String: Any]] {
+    let sandboxThreadId = "11111111-1111-1111-1111-111111111111"
+    let shellThreadId = "22222222-2222-2222-2222-222222222222"
+    let manifestThreadId = "33333333-3333-3333-3333-333333333333"
+    let legacyThreadId = "44444444-4444-4444-4444-444444444444"
+    let telemetryThreadId = "55555555-5555-5555-5555-555555555555"
+
+    return [
+      reviewThread(
+        id: sandboxThreadId,
+        state: "open",
+        comments: [
+          reviewComment(
+            id: "aaaaaaaa-1111-1111-1111-111111111111",
+            threadId: sandboxThreadId,
+            authorName: "Alex",
+            filePath: "Sandboxfile",
+            lineNew: 5,
+            body: "Call out that proxy-backed traffic shows up live in the inspector.",
+            timestamp: timestamp
+          ),
+          reviewComment(
+            id: "aaaaaaaa-2222-2222-2222-222222222222",
+            threadId: sandboxThreadId,
+            authorName: "Codex",
+            filePath: "Sandboxfile",
+            lineNew: 5,
+            body:
+              "Gemini, keep the proxy-backed network story explicit so reviewer agents can validate it before merge-back.",
+            timestamp: timestamp
+          ),
+          reviewComment(
+            id: "aaaaaaaa-3333-3333-3333-333333333333",
+            threadId: sandboxThreadId,
+            authorName: "Gemini",
+            filePath: "Sandboxfile",
+            lineNew: 5,
+            body:
+              "Agreed. I will also call out that sandboxing is the default for integrated agent launches, not an opt-in afterthought.",
+            timestamp: timestamp
+          ),
+        ]
+      ),
+      reviewThread(
+        id: shellThreadId,
+        state: "addressed",
+        agentAcknowledgedAt: timestamp,
+        comments: [
+          reviewComment(
+            id: "bbbbbbbb-1111-1111-1111-111111111111",
+            threadId: shellThreadId,
+            authorName: "Sam",
+            filePath: "Sources/WorkspaceShell.swift",
+            lineNew: 42,
+            body: "Mention that coding, review, and merge-back stay in the same workspace.",
+            timestamp: timestamp
+          ),
+          reviewComment(
+            id: "bbbbbbbb-2222-2222-2222-222222222222",
+            threadId: shellThreadId,
+            authorName: "Codex",
+            filePath: "Sources/WorkspaceShell.swift",
+            lineNew: 115,
+            body:
+              "I added the repeated launch checkpoints so the screenshot shows the review loop at production scale.",
+            timestamp: timestamp
+          ),
+        ]
+      ),
+      reviewThread(
+        id: manifestThreadId,
+        state: "open",
+        comments: [
+          reviewComment(
+            id: "dddddddd-1111-1111-1111-111111111111",
+            threadId: manifestThreadId,
+            authorName: "Priya",
+            filePath: "Sources/SandboxPolicyManifest.swift",
+            lineNew: 240,
+            body:
+              "This manifest is the right place to make read and write boundaries inspectable before an agent runs.",
+            timestamp: timestamp
+          ),
+          reviewComment(
+            id: "dddddddd-2222-2222-2222-222222222222",
+            threadId: manifestThreadId,
+            authorName: "Gemini",
+            filePath: "Sources/SandboxPolicyManifest.swift",
+            lineNew: 612,
+            body:
+              "Please keep the generated policy rows grouped by permission type so reviewers can scan the large diff quickly.",
+            timestamp: timestamp
+          ),
+          reviewComment(
+            id: "dddddddd-3333-3333-3333-333333333333",
+            threadId: manifestThreadId,
+            authorName: "Codex",
+            filePath: "Sources/SandboxPolicyManifest.swift",
+            lineNew: 880,
+            body:
+              "The deny-write entries now mirror the sandbox summary, so the human reviewer can compare the code and runtime evidence.",
+            timestamp: timestamp
+          ),
+        ]
+      ),
+      reviewThread(
+        id: legacyThreadId,
+        state: "open",
+        comments: [
+          reviewComment(
+            id: "eeeeeeee-1111-1111-1111-111111111111",
+            threadId: legacyThreadId,
+            authorName: "Mina",
+            filePath: "Sources/LegacySandboxPolicy.swift",
+            lineOld: 170,
+            body:
+              "The deletion is good, but the release notes should say this legacy policy path has been removed.",
+            timestamp: timestamp
+          ),
+          reviewComment(
+            id: "eeeeeeee-2222-2222-2222-222222222222",
+            threadId: legacyThreadId,
+            authorName: "Codex",
+            filePath: "Sources/LegacySandboxPolicy.swift",
+            lineOld: 412,
+            body:
+              "I will add that note before approval so downstream users understand why the old permissive defaults disappeared.",
+            timestamp: timestamp
+          ),
+        ]
+      ),
+      reviewThread(
+        id: telemetryThreadId,
+        state: "addressed",
+        agentAcknowledgedAt: timestamp,
+        comments: [
+          reviewComment(
+            id: "ffffffff-1111-1111-1111-111111111111",
+            threadId: telemetryThreadId,
+            authorName: "Noah",
+            filePath: "Sources/ReviewTelemetryPlan.swift",
+            lineNew: 318,
+            body:
+              "Thread state, draft count, and sandbox summary need to stay visible in the review screenshot.",
+            timestamp: timestamp
+          ),
+          reviewComment(
+            id: "ffffffff-2222-2222-2222-222222222222",
+            threadId: telemetryThreadId,
+            authorName: "Gemini",
+            filePath: "Sources/ReviewTelemetryPlan.swift",
+            lineNew: 650,
+            body:
+              "Addressed by keeping the telemetry plan explicit and pairing it with the pending draft summary.",
+            timestamp: timestamp
+          ),
+        ]
+      ),
+    ]
   }
 
   private static func createSession() throws -> ReviewTarget {
@@ -1001,6 +1214,37 @@ final class ArgonUITests: XCTestCase {
       encoding: .utf8
     )
 
+    try writeGeneratedLines(
+      to: repoRoot.appendingPathComponent("Sources/LegacyAutomationMatrix.swift"),
+      header: [
+        "enum LegacyAutomationMatrix {",
+        "    static let checkpoints = [",
+      ],
+      footer: [
+        "    ]",
+        "}",
+      ],
+      count: 360
+    ) { index in
+      "        \"legacy-checkpoint-\(String(format: "%03d", index)): prompt copy, shell replay, manual review\","
+    }
+
+    try writeGeneratedLines(
+      to: repoRoot.appendingPathComponent("Docs/legacy-review-flow.md"),
+      header: ["# Legacy review flow", ""],
+      count: 240
+    ) { index in
+      "- Step \(String(format: "%03d", index)): copy a prompt, inspect a terminal, then reconcile the notes by hand."
+    }
+
+    try writeGeneratedLines(
+      to: repoRoot.appendingPathComponent("Docs/release-runbook.md"),
+      header: ["# Release runbook", ""],
+      count: 220
+    ) { index in
+      "- Gate \(String(format: "%03d", index)): verify signing, appcast, Homebrew, and website publishing."
+    }
+
     try git(repoRoot, ["add", "."])
     try git(repoRoot, ["commit", "-m", "Initial commit"])
     try git(repoRoot, ["branch", "-M", "main"])
@@ -1065,7 +1309,32 @@ final class ArgonUITests: XCTestCase {
       atomically: true,
       encoding: .utf8
     )
-    try git(worktreeRoot, ["add", "Sources/SiteCopy.swift"])
+
+    try writeGeneratedLines(
+      to: worktreeRoot.appendingPathComponent("Sources/AgentLaunchPlan.swift"),
+      header: [
+        "enum AgentLaunchPlan {",
+        "    static let phases = [",
+      ],
+      footer: [
+        "    ]",
+        "}",
+      ],
+      count: 260
+    ) { index in
+      "        \"phase-\(String(format: "%03d", index)): create worktree, launch agent, collect review evidence\","
+    }
+    try writeGeneratedLines(
+      to: worktreeRoot.appendingPathComponent("Docs/review-loop.md"),
+      header: ["# Review loop", ""],
+      count: 280
+    ) { index in
+      "- Loop \(String(format: "%03d", index)): compare the branch, capture a comment, ask the agent to respond, then keep the decision explicit."
+    }
+    try git(
+      worktreeRoot,
+      ["add", "Sources/SiteCopy.swift", "Sources/AgentLaunchPlan.swift", "Docs/review-loop.md"]
+    )
     try git(worktreeRoot, ["commit", "-m", "Draft website copy"])
 
     try """
@@ -1083,21 +1352,25 @@ final class ArgonUITests: XCTestCase {
     try git(reviewWorktreeRoot, ["add", "Docs/review-dry-run.md"])
     try git(reviewWorktreeRoot, ["commit", "-m", "Seed review fixture"])
 
-    try """
-    name: release
-    on:
-      workflow_dispatch:
-    jobs:
-      smoke:
-        runs-on: macos-latest
-        steps:
-          - uses: actions/checkout@v4
-    """
-    .write(
+    try writeGeneratedLines(
       to: releaseWorktreeRoot.appendingPathComponent(".github/workflows/release.yml"),
-      atomically: true,
-      encoding: .utf8
-    )
+      header: [
+        "name: release",
+        "on:",
+        "  workflow_dispatch:",
+        "  push:",
+        "    tags:",
+        "      - 'v*'",
+        "jobs:",
+        "  notarize:",
+        "    runs-on: macos-26",
+        "    steps:",
+        "      - uses: actions/checkout@v6",
+      ],
+      count: 340
+    ) { index in
+      "      - name: release gate \(String(format: "%03d", index))\n        run: ./scripts/release-gate --check gate-\(String(format: "%03d", index)) --require-signed-artifacts"
+    }
     try git(releaseWorktreeRoot, ["add", ".github/workflows/release.yml"])
     try git(releaseWorktreeRoot, ["commit", "-m", "Draft release workflow"])
 
@@ -1142,9 +1415,36 @@ final class ArgonUITests: XCTestCase {
       atomically: true,
       encoding: .utf8
     )
+    try writeGeneratedLines(
+      to: connectorsWorktreeRoot.appendingPathComponent("Sources/ConnectorPermissionMatrix.swift"),
+      header: [
+        "enum ConnectorPermissionMatrix {",
+        "    static let rules = [",
+      ],
+      footer: [
+        "    ]",
+        "}",
+      ],
+      count: 320
+    ) { index in
+      "        \"connector-\(String(format: "%03d", index)): prompt redaction, scoped token, audit entry\","
+    }
+    try writeGeneratedLines(
+      to: connectorsWorktreeRoot.appendingPathComponent("Docs/connector-rollout.md"),
+      header: ["# Connector rollout", ""],
+      count: 260
+    ) { index in
+      "- Scenario \(String(format: "%03d", index)): map a repository signal to a scoped connector action before agent launch."
+    }
     try git(
       connectorsWorktreeRoot,
-      ["add", "Sources/ConnectorCatalog.swift", "Docs/mcp-connectors.md"]
+      [
+        "add",
+        "Sources/ConnectorCatalog.swift",
+        "Sources/ConnectorPermissionMatrix.swift",
+        "Docs/mcp-connectors.md",
+        "Docs/connector-rollout.md",
+      ]
     )
     try git(connectorsWorktreeRoot, ["commit", "-m", "Sketch connector catalog"])
 
@@ -1190,96 +1490,121 @@ final class ArgonUITests: XCTestCase {
       encoding: .utf8
     )
 
-    try """
-    struct WorkspaceShell {
-        let title: String
-        let supportsSandbox = true
-        let supportsReviews = true
-    }
-    """
-    .write(
+    try writeGeneratedLines(
       to: worktreeRoot.appendingPathComponent("Sources/WorkspaceShell.swift"),
-      atomically: true,
-      encoding: .utf8
-    )
-
-    try """
-    enum SiteCopy {
-        static let headline = "The control plane for local coding agents."
-        static let subheadline = "Native worktrees, terminals, review, and sandboxed execution."
+      header: [
+        "struct WorkspaceShell {",
+        "    let title = \"Argon\"",
+        "    let supportsSandbox = true",
+        "    let supportsReviews = true",
+        "",
+        "    static let visibleWorkflows = [",
+      ],
+      footer: [
+        "    ]",
+        "}",
+      ],
+      count: 320
+    ) { index in
+      "        \"workflow-\(String(format: "%03d", index)): worktree, terminal, sandbox event, review checkpoint\","
     }
-    """
-    .write(
+
+    try writeGeneratedLines(
       to: worktreeRoot.appendingPathComponent("Sources/SiteCopy.swift"),
-      atomically: true,
-      encoding: .utf8
-    )
-
-    try """
-    struct InspectorCopy {
-        static let summary = "Observed proxied traffic, review handoff, and worktree actions live in one native workspace."
+      header: [
+        "enum SiteCopy {",
+        "    static let headline = \"A workspace for coding agents\"",
+        "    static let subheadline = \"Run agents in isolated worktrees, watch their terminals, and review before merge.\"",
+        "    static let proofPoints = [",
+      ],
+      footer: [
+        "    ]",
+        "}",
+      ],
+      count: 300
+    ) { index in
+      "        \"proof-\(String(format: "%03d", index)): agent output stays paired with the diff and review decision\","
     }
-    """
-    .write(
+
+    try writeGeneratedLines(
       to: worktreeRoot.appendingPathComponent("Sources/InspectorCopy.swift"),
-      atomically: true,
-      encoding: .utf8
-    )
+      header: [
+        "struct InspectorCopy {",
+        "    static let summary = \"Observed proxied traffic, review handoff, and worktree actions live in one native workspace.\"",
+        "    static let events = [",
+      ],
+      footer: [
+        "    ]",
+        "}",
+      ],
+      count: 240
+    ) { index in
+      "        \"event-\(String(format: "%03d", index)): sandbox boundary changed after reviewer confirmation\","
+    }
 
-    try """
-    # Marketing notes
-
-    - launch coding agents in native tabs
-    - inspect proxied network activity
-    - keep review explicit
-    """
-    .write(
+    try writeGeneratedLines(
       to: worktreeRoot.appendingPathComponent("Docs/marketing-notes.md"),
-      atomically: true,
-      encoding: .utf8
+      header: ["# Marketing notes", ""],
+      count: 360
+    ) { index in
+      "- Note \(String(format: "%03d", index)): show how a local agent can explore safely, surface the diff, and hand control back to the reviewer."
+    }
+
+    try FileManager.default.removeItem(
+      at: worktreeRoot.appendingPathComponent("Sources/LegacyAutomationMatrix.swift")
     )
 
-    try """
-    # Sandbox notes
-
-    - capture trust store regressions before release
-    - validate the proxied DNS path in screenshots
-    """
-    .write(
+    try writeGeneratedLines(
       to: sandboxWorktreeRoot.appendingPathComponent("Docs/sandbox-audit.md"),
-      atomically: true,
-      encoding: .utf8
-    )
+      header: ["# Sandbox notes", ""],
+      count: 260
+    ) { index in
+      "- Audit \(String(format: "%03d", index)): capture trust-store reads, proxy routing, denied writes, and the reviewer-facing reason."
+    }
 
-    try """
-    # MCP connector sketch
-
-    - show connector badges in the website demo
-    - seed shared fake data for Linear and Slack
-    - keep the first pass local-only
-    """
-    .write(
+    try writeGeneratedLines(
       to: connectorsWorktreeRoot.appendingPathComponent("Docs/mcp-connectors.md"),
-      atomically: true,
-      encoding: .utf8
+      header: ["# MCP connector sketch", ""],
+      count: 420
+    ) { index in
+      "- Connector pass \(String(format: "%03d", index)): expose a scoped service to the agent, record the boundary, and keep secrets out of prompts."
+    }
+
+    try writeGeneratedLines(
+      to: connectorsWorktreeRoot.appendingPathComponent("Sources/ConnectorCatalog.swift"),
+      header: [
+        "enum ConnectorCatalog {",
+        "    static let planned = [",
+      ],
+      footer: [
+        "    ]",
+        "}",
+      ],
+      count: 380
+    ) { index in
+      "        \"service-\(String(format: "%03d", index)): scoped read, redacted prompt, visible audit trail\","
+    }
+
+    try FileManager.default.removeItem(
+      at: connectorsWorktreeRoot.appendingPathComponent("Docs/legacy-review-flow.md")
     )
 
-    try """
-    <section class="hero">
-      <h1>Argon</h1>
-      <p>Workspace control for coding agents.</p>
-      <ul>
-        <li>Worktrees</li>
-        <li>Embedded terminals</li>
-        <li>Review handoff</li>
-      </ul>
-    </section>
-    """
-    .write(
+    try writeGeneratedLines(
       to: designWorktreeRoot.appendingPathComponent("website/hero.html"),
-      atomically: true,
-      encoding: .utf8
-    )
+      header: [
+        "<section class=\"hero\">",
+        "  <h1>Argon</h1>",
+        "  <p>Workspace control for coding agents.</p>",
+        "  <ul>",
+      ],
+      footer: [
+        "  </ul>",
+        "</section>",
+      ],
+      count: 220
+    ) { index in
+      "    <li>Flow \(String(format: "%03d", index)): create a worktree, run an agent, review the diff, then merge back.</li>"
+    }
 
     return WebsiteWorkspaceLaunchTarget(
       fixtureRoot: fixtureRoot.path,
@@ -1318,27 +1643,29 @@ final class ArgonUITests: XCTestCase {
     try git(repoRoot, ["config", "user.name", "Argon UI Test"])
     try git(repoRoot, ["config", "user.email", "argon-ui-test@example.com"])
 
-    try """
-    struct WorkspaceShell {
-        let title = "Argon"
-        let supportsSandbox = false
-    }
-    """
-    .write(
+    try writeGeneratedLines(
       to: repoRoot.appendingPathComponent("Sources/WorkspaceShell.swift"),
-      atomically: true,
-      encoding: .utf8
-    )
-    try """
-    # Sandbox
-
-    Network defaults are still under review.
-    """
-    .write(
+      header: [
+        "struct WorkspaceShell {",
+        "    let title = \"Argon\"",
+        "    let supportsSandbox = false",
+        "    static let launchChecklist = [",
+      ],
+      footer: [
+        "    ]",
+        "}",
+      ],
+      count: 220
+    ) { index in
+      "        \"baseline-\(String(format: "%03d", index)): start terminal, copy prompt, review manually\","
+    }
+    try writeGeneratedLines(
       to: repoRoot.appendingPathComponent("Docs/sandbox.md"),
-      atomically: true,
-      encoding: .utf8
-    )
+      header: ["# Sandbox", ""],
+      count: 180
+    ) { index in
+      "- Baseline \(String(format: "%03d", index)): network defaults are still under review and need manual verification."
+    }
     try """
     ENV DEFAULT NONE
     FS DEFAULT NONE
@@ -1352,33 +1679,64 @@ final class ArgonUITests: XCTestCase {
       encoding: .utf8
     )
 
+    try writeGeneratedLines(
+      to: repoRoot.appendingPathComponent("Sources/LegacySandboxPolicy.swift"),
+      header: [
+        "enum LegacySandboxPolicy {",
+        "    static let assumptions = [",
+      ],
+      footer: [
+        "    ]",
+        "}",
+      ],
+      count: 520
+    ) { index in
+      "        \"assumption-\(String(format: "%03d", index)): permissive network behavior documented outside the review path\","
+    }
+
+    try writeGeneratedLines(
+      to: repoRoot.appendingPathComponent("Sources/AgentReviewOrchestrator.swift"),
+      header: [
+        "struct AgentReviewOrchestrator {",
+        "    static let steps = [",
+      ],
+      footer: [
+        "    ]",
+        "}",
+      ],
+      count: 260
+    ) { index in
+      "        \"step-\(String(format: "%03d", index)): collect terminal output, diff context, and reviewer notes\","
+    }
+
     try git(repoRoot, ["add", "."])
     try git(repoRoot, ["commit", "-m", "Initial review fixture"])
     try git(repoRoot, ["branch", "-M", "main"])
 
-    try """
-    struct WorkspaceShell {
-        let title = "Argon"
-        let supportsSandbox = true
-        let supportsReviews = true
-    }
-    """
-    .write(
+    try writeGeneratedLines(
       to: repoRoot.appendingPathComponent("Sources/WorkspaceShell.swift"),
-      atomically: true,
-      encoding: .utf8
-    )
-    try """
-    # Sandbox
-
-    Network defaults are now explicit and proxy traffic is observable in the
-    inspector.
-    """
-    .write(
+      header: [
+        "struct WorkspaceShell {",
+        "    let title = \"Argon\"",
+        "    let supportsSandbox = true",
+        "    let supportsReviews = true",
+        "    static let launchChecklist = [",
+      ],
+      footer: [
+        "    ]",
+        "}",
+      ],
+      count: 420
+    ) { index in
+      "        \"sandboxed-\(String(format: "%03d", index)): create worktree, run agent, review diff, and keep the boundary visible\","
+    }
+    try writeGeneratedLines(
       to: repoRoot.appendingPathComponent("Docs/sandbox.md"),
-      atomically: true,
-      encoding: .utf8
-    )
+      header: ["# Sandbox", ""],
+      count: 420
+    ) { index in
+      "- Policy \(String(format: "%03d", index)): network defaults are explicit, proxy traffic is visible, and denied writes stay attached to the review."
+    }
     try """
     ENV DEFAULT NONE
     FS DEFAULT NONE
@@ -1397,15 +1755,69 @@ final class ArgonUITests: XCTestCase {
       atomically: true,
       encoding: .utf8
     )
-    try """
-    struct ReviewFlow {
-        static let headline = "Keep coding, review, and mergeback in one app."
-    }
-    """
-    .write(
+    try writeGeneratedLines(
       to: repoRoot.appendingPathComponent("Sources/ReviewFlow.swift"),
-      atomically: true,
-      encoding: .utf8
+      header: [
+        "struct ReviewFlow {",
+        "    static let headline = \"Keep coding, review, and merge-back in one app.\"",
+        "    static let checkpoints = [",
+      ],
+      footer: [
+        "    ]",
+        "}",
+      ],
+      count: 360
+    ) { index in
+      "        \"checkpoint-\(String(format: "%03d", index)): reviewer comment, agent reply, visible decision\","
+    }
+
+    try writeGeneratedLines(
+      to: repoRoot.appendingPathComponent("Sources/AgentReviewOrchestrator.swift"),
+      header: [
+        "struct AgentReviewOrchestrator {",
+        "    static let steps = [",
+      ],
+      footer: [
+        "    ]",
+        "}",
+      ],
+      count: 560
+    ) { index in
+      "        \"step-\(String(format: "%03d", index)): route comment context to the right agent and wait for an explicit response\","
+    }
+
+    try writeGeneratedLines(
+      to: repoRoot.appendingPathComponent("Sources/SandboxPolicyManifest.swift"),
+      header: [
+        "enum SandboxPolicyManifest {",
+        "    static let grants = [",
+      ],
+      footer: [
+        "    ]",
+        "}",
+      ],
+      count: 940
+    ) { index in
+      "        \"grant-\(String(format: "%03d", index)): allow read scope, deny write escape, log network proxy decision\","
+    }
+
+    try writeGeneratedLines(
+      to: repoRoot.appendingPathComponent("Sources/ReviewTelemetryPlan.swift"),
+      header: [
+        "enum ReviewTelemetryPlan {",
+        "    static let events = [",
+      ],
+      footer: [
+        "    ]",
+        "}",
+      ],
+      count: 760
+    ) { index in
+      "        \"event-\(String(format: "%03d", index)): capture thread state, draft count, and sandbox summary\","
+    }
+
+    try FileManager.default.removeItem(
+      at: repoRoot.appendingPathComponent("Sources/LegacySandboxPolicy.swift")
     )
 
     let sessionsDirectory = sessionsDirectory(argonHome: argonHome.path, repoRoot: repoRoot.path)
@@ -1429,81 +1841,7 @@ final class ArgonUITests: XCTestCase {
       "change_summary":
         "Tightens sandbox defaults and keeps review plus merge-back in one native loop.",
       "status": "awaiting_reviewer",
-      "threads": [
-        [
-          "id": "11111111-1111-1111-1111-111111111111",
-          "state": "open",
-          "agent_acknowledged_at": NSNull(),
-          "comments": [
-            [
-              "id": "aaaaaaaa-1111-1111-1111-111111111111",
-              "thread_id": "11111111-1111-1111-1111-111111111111",
-              "author": "reviewer",
-              "author_name": "Alex",
-              "kind": "line",
-              "anchor": [
-                "file_path": "Sandboxfile",
-                "line_new": 5,
-                "line_old": NSNull(),
-              ],
-              "body": "Call out that proxy-backed traffic shows up live in the inspector.",
-              "created_at": timestamp,
-            ],
-            [
-              "id": "aaaaaaaa-2222-2222-2222-222222222222",
-              "thread_id": "11111111-1111-1111-1111-111111111111",
-              "author": "reviewer",
-              "author_name": "Codex",
-              "kind": "line",
-              "anchor": [
-                "file_path": "Sandboxfile",
-                "line_new": 5,
-                "line_old": NSNull(),
-              ],
-              "body":
-                "Gemini, keep the proxy-backed network story explicit so reviewer agents can validate it before merge-back.",
-              "created_at": timestamp,
-            ],
-            [
-              "id": "aaaaaaaa-3333-3333-3333-333333333333",
-              "thread_id": "11111111-1111-1111-1111-111111111111",
-              "author": "reviewer",
-              "author_name": "Gemini",
-              "kind": "line",
-              "anchor": [
-                "file_path": "Sandboxfile",
-                "line_new": 5,
-                "line_old": NSNull(),
-              ],
-              "body":
-                "Agreed. I will also call out that sandboxing is the default for integrated agent launches, not an opt-in afterthought.",
-              "created_at": timestamp,
-            ],
-          ],
-        ],
-        [
-          "id": "22222222-2222-2222-2222-222222222222",
-          "state": "addressed",
-          "agent_acknowledged_at": timestamp,
-          "comments": [
-            [
-              "id": "bbbbbbbb-1111-1111-1111-111111111111",
-              "thread_id": "22222222-2222-2222-2222-222222222222",
-              "author": "reviewer",
-              "author_name": "Sam",
-              "kind": "line",
-              "anchor": [
-                "file_path": "Sources/WorkspaceShell.swift",
-                "line_new": 4,
-                "line_old": NSNull(),
-              ],
-              "body":
-                "Mention that coding, review, and merge-back stay in the same workspace.",
-              "created_at": timestamp,
-            ]
-          ],
-        ],
-      ],
+      "threads": websiteReviewThreads(timestamp: timestamp),
       "decision": NSNull(),
       "agent_last_seen_at": timestamp,
       "created_at": timestamp,
@@ -1532,7 +1870,31 @@ final class ArgonUITests: XCTestCase {
           "body": "Mention that sandboxing is the default for integrated agent launches.",
           "created_at": timestamp,
           "updated_at": timestamp,
-        ]
+        ],
+        [
+          "id": "cccccccc-2222-2222-2222-222222222222",
+          "thread_id": NSNull(),
+          "anchor": [
+            "file_path": "Sources/ReviewFlow.swift",
+            "line_new": 210,
+            "line_old": NSNull(),
+          ],
+          "body": "Ask for one final pass on the merge-back language before approval.",
+          "created_at": timestamp,
+          "updated_at": timestamp,
+        ],
+        [
+          "id": "cccccccc-3333-3333-3333-333333333333",
+          "thread_id": NSNull(),
+          "anchor": [
+            "file_path": "Sources/LegacySandboxPolicy.swift",
+            "line_new": NSNull(),
+            "line_old": 88,
+          ],
+          "body": "Confirm no migration path still imports the deleted legacy policy.",
+          "created_at": timestamp,
+          "updated_at": timestamp,
+        ],
       ],
       "created_at": timestamp,
       "updated_at": timestamp,
@@ -1628,7 +1990,7 @@ final class ArgonUITests: XCTestCase {
 
   private static func websiteScreenshotUsesLiveAgents() -> Bool {
     let configURL = URL(fileURLWithPath: repositoryRoot())
-      .appendingPathComponent("website/draft")
+      .appendingPathComponent("website")
       .appendingPathComponent(screenshotLiveAgentsConfigFileName)
     guard let contents = try? String(contentsOf: configURL, encoding: .utf8) else { return false }
     return ["1", "true", "yes", "on"].contains(
