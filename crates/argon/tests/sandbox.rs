@@ -490,7 +490,7 @@ END
     )?;
     std::fs::write(
         repo_root.join(".argon/sandbox/intercepts/echo.sh"),
-        "#!/bin/sh\nexec \"$ARGON_SANDBOX_REAL_COMMAND\" \"$@\"\n",
+        "#!/bin/sh\ncmd=${0##*/}\nexec \"$ARGON_SANDBOX_INTERCEPT_RUNNER\" \"$cmd\" \"$@\"\n",
     )?;
 
     let output = run_argon(
@@ -1043,16 +1043,16 @@ EXEC INTERCEPT aws WITH .argon/sandbox/intercepts/aws.sh
     )?;
 
     let intercepted_file = repo_root.join("intercepted.txt");
-    let real_file = repo_root.join("real.txt");
+    let runner_file = repo_root.join("runner.txt");
     let args_file = repo_root.join("args.txt");
     let manifest_file = repo_root.join("manifest.txt");
     let handler_path = intercept_dir.join("aws.sh");
     std::fs::write(
         &handler_path,
         format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$ARGON_SANDBOX_INTERCEPTED_COMMAND\" > {}\nprintf '%s\\n' \"$ARGON_SANDBOX_REAL_COMMAND\" > {}\nprintf '%s %s\\n' \"$1\" \"$2\" > {}\nif [ -n \"$ARGON_SANDBOX_INTERCEPT_MANIFEST\" ]; then printf '%s\\n' set > {}; exit 14; fi\n",
+            "#!/bin/sh\nprintf '%s\\n' \"${{0##*/}}\" > {}\nprintf '%s\\n' \"$ARGON_SANDBOX_INTERCEPT_RUNNER\" > {}\nprintf '%s %s\\n' \"$1\" \"$2\" > {}\nif [ -n \"$ARGON_SANDBOX_INTERCEPT_MANIFEST\" ] || [ -n \"$ARGON_SANDBOX_REAL_COMMAND\" ]; then printf '%s\\n' set > {}; exit 14; fi\n",
             shell_quote(&intercepted_file),
-            shell_quote(&real_file),
+            shell_quote(&runner_file),
             shell_quote(&args_file),
             shell_quote(&manifest_file),
         ),
@@ -1088,11 +1088,181 @@ EXEC INTERCEPT aws WITH .argon/sandbox/intercepts/aws.sh
     }
 
     assert_eq!(std::fs::read_to_string(&intercepted_file)?.trim(), "aws");
-    assert_eq!(
-        std::fs::read_to_string(&real_file)?.trim(),
-        repo_root.join("aws").display().to_string()
+    assert!(
+        std::fs::read_to_string(&runner_file)?
+            .trim()
+            .ends_with("argon-intercept-run")
     );
     assert_eq!(std::fs::read_to_string(&args_file)?.trim(), "first second");
     assert!(!manifest_file.exists());
+    Ok(())
+}
+
+struct InterceptFixture {
+    _temp: tempfile::TempDir,
+    repo_root: PathBuf,
+    home: PathBuf,
+    real_bin: PathBuf,
+    handler_path: PathBuf,
+    real_command_path: PathBuf,
+}
+
+fn create_intercept_fixture() -> Result<InterceptFixture> {
+    let temp = tempdir()?;
+    let root = temp.path().canonicalize()?;
+    let repo_root = root.join("repo");
+    let home = root.join("home");
+    let real_bin = root.join("real-bin");
+    let intercept_dir = repo_root.join(".argon/sandbox/intercepts");
+    std::fs::create_dir_all(&intercept_dir)?;
+    std::fs::create_dir_all(&home)?;
+    std::fs::create_dir_all(&real_bin)?;
+    std::fs::write(
+        repo_root.join("Sandboxfile"),
+        r#"
+FS DEFAULT NONE
+EXEC DEFAULT DENY
+FS ALLOW WRITE .
+USE os
+EXEC INTERCEPT aws WITH .argon/sandbox/intercepts/aws
+"#,
+    )?;
+
+    let handler_path = intercept_dir.join("aws");
+    std::fs::write(
+        &handler_path,
+        "#!/bin/sh\nprintf 'handler:%s\\n' \"$1\" > intercepted.txt\ncmd=${0##*/}\nexec \"$ARGON_SANDBOX_INTERCEPT_RUNNER\" \"$cmd\" \"$@\"\n",
+    )?;
+    let mut permissions = std::fs::metadata(&handler_path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&handler_path, permissions)?;
+
+    let real_command_path = real_bin.join("aws");
+    std::fs::write(
+        &real_command_path,
+        "#!/bin/sh\nprintf 'real:%s\\n' \"$1\"\n",
+    )?;
+    let mut permissions = std::fs::metadata(&real_command_path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&real_command_path, permissions)?;
+
+    Ok(InterceptFixture {
+        _temp: temp,
+        repo_root,
+        home,
+        real_bin,
+        handler_path,
+        real_command_path,
+    })
+}
+
+fn intercept_command_base(fixture: &InterceptFixture) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_argon"));
+    command
+        .env("HOME", &fixture.home)
+        .env(
+            "PATH",
+            format!("{}:/bin:/usr/bin", fixture.real_bin.display()),
+        )
+        .env("SHELL", "/bin/zsh")
+        .current_dir(&fixture.repo_root)
+        .arg("sandbox")
+        .arg("exec")
+        .arg("--repo-root")
+        .arg(&fixture.repo_root);
+    command
+}
+
+#[test]
+fn sandbox_exec_intercepts_commands_through_broker() -> Result<()> {
+    let fixture = create_intercept_fixture()?;
+
+    let output = run_argon(
+        intercept_command_base(&fixture)
+            .arg("--")
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg("aws first"),
+    )?;
+
+    if !output.status.success() {
+        bail!(
+            "sandbox exec broker intercept failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "real:first\n");
+    assert_eq!(
+        std::fs::read_to_string(fixture.repo_root.join("intercepted.txt"))?,
+        "handler:first\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn sandbox_exec_denies_direct_real_intercept_command_execution() -> Result<()> {
+    let fixture = create_intercept_fixture()?;
+
+    let output = run_argon(
+        intercept_command_base(&fixture)
+            .arg("--")
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg(shell_quote(&fixture.real_command_path)),
+    )?;
+
+    assert!(
+        !output.status.success(),
+        "direct real command unexpectedly succeeded:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+#[test]
+fn sandbox_exec_denies_reading_real_intercept_command() -> Result<()> {
+    let fixture = create_intercept_fixture()?;
+
+    let output = run_argon(
+        intercept_command_base(&fixture)
+            .arg("--")
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg(format!("cat {}", shell_quote(&fixture.real_command_path))),
+    )?;
+
+    assert!(
+        !output.status.success(),
+        "reading real command unexpectedly succeeded:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+#[test]
+fn sandbox_exec_denies_writing_repo_interceptor() -> Result<()> {
+    let fixture = create_intercept_fixture()?;
+    let original = std::fs::read_to_string(&fixture.handler_path)?;
+
+    let output = run_argon(
+        intercept_command_base(&fixture)
+            .arg("--")
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg("printf bad > .argon/sandbox/intercepts/aws"),
+    )?;
+
+    assert!(
+        !output.status.success(),
+        "writing interceptor unexpectedly succeeded:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(&fixture.handler_path)?, original);
     Ok(())
 }

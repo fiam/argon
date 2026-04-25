@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod sandbox_intercept;
 mod sandbox_proxy;
 
 use anyhow::{Context, Result, bail};
@@ -137,6 +138,10 @@ enum SandboxCommands {
     Seatbelt(SandboxSeatbeltArgs),
     #[command(hide = true)]
     ProxyHelper(SandboxProxyHelperArgs),
+    #[command(hide = true)]
+    InterceptBroker(SandboxInterceptBrokerArgs),
+    #[command(hide = true)]
+    InterceptWorker(SandboxInterceptWorkerArgs),
     /// Run a command inside Argon's sandbox.
     Exec(SandboxExecArgs),
 }
@@ -326,6 +331,18 @@ struct SandboxSeatbeltArgs {
 
 #[derive(clap::Args, Debug)]
 struct SandboxProxyHelperArgs {
+    #[arg(long)]
+    config: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+struct SandboxInterceptBrokerArgs {
+    #[arg(long)]
+    config: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+struct SandboxInterceptWorkerArgs {
     #[arg(long)]
     config: PathBuf,
 }
@@ -681,7 +698,7 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    if sandbox::maybe_run_intercept_shim()? {
+    if sandbox_intercept::maybe_run_intercept_runner()? {
         return Ok(());
     }
 
@@ -864,6 +881,8 @@ fn run_sandbox(command: SandboxCommands, runtime: &RuntimeOptions) -> Result<()>
         SandboxCommands::Explain(args) => run_sandbox_explain(args),
         SandboxCommands::Seatbelt(args) => run_sandbox_seatbelt(args),
         SandboxCommands::ProxyHelper(args) => sandbox_proxy::run_proxy_helper(&args.config),
+        SandboxCommands::InterceptBroker(args) => sandbox_intercept::run_broker(&args.config),
+        SandboxCommands::InterceptWorker(args) => sandbox_intercept::run_worker(&args.config),
         SandboxCommands::Exec(args) => run_sandbox_exec(args),
     }
 }
@@ -2118,6 +2137,7 @@ fn run_sandbox_explain(args: SandboxExplainArgs) -> Result<()> {
         print_explained_sources(&explain.sources);
         print_filesystem_policy(&explain.policy);
         print_exec_policy(&explain.policy, &explain.intercepts);
+        print_intercept_broker(explain.intercept_broker.as_ref());
         print_network_policy(&explain.policy);
         print_environment_policy(
             explain.environment_default,
@@ -2127,6 +2147,18 @@ fn run_sandbox_explain(args: SandboxExplainArgs) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn print_intercept_broker(broker: Option<&sandbox::InterceptBrokerPlan>) {
+    println!("Intercept Broker:");
+    let Some(broker) = broker else {
+        println!("- (none)");
+        return;
+    };
+
+    println!("- runtime: {}", broker.runtime_dir.display());
+    println!("- runner: {}", broker.runner_path.display());
+    println!("- socket: {}", broker.socket_path.display());
 }
 
 fn run_sandbox_seatbelt(args: SandboxSeatbeltArgs) -> Result<()> {
@@ -2213,6 +2245,10 @@ fn print_filesystem_policy(policy: &sandbox::EffectiveSandboxPolicy) {
             filesystem_access_label(entry.read, entry.write)
         );
     }
+    print_path_list("Denied Read Files", &policy.denied_readable_paths);
+    print_path_list("Denied Read Directories", &policy.denied_readable_roots);
+    print_path_list("Denied Write Files", &policy.denied_writable_paths);
+    print_path_list("Denied Write Directories", &policy.denied_writable_roots);
 }
 
 fn print_exec_policy(
@@ -2223,6 +2259,11 @@ fn print_exec_policy(
     println!("- default: {:?}", policy.exec_default);
     print_path_list("Executable Files", &policy.executable_paths);
     print_path_list("Executable Directories", &policy.executable_roots);
+    print_path_list("Denied Executable Files", &policy.denied_executable_paths);
+    print_path_list(
+        "Denied Executable Directories",
+        &policy.denied_executable_roots,
+    );
     println!("Intercepts:");
     if intercepts.is_empty() {
         println!("- (none)");
@@ -2263,6 +2304,14 @@ fn print_network_policy(policy: &sandbox::EffectiveSandboxPolicy) {
                 network_protocol_label(rule.protocol),
                 rule.target
             );
+        }
+    }
+    if policy.local_socket_paths.is_empty() {
+        println!("- local sockets: (none)");
+    } else {
+        println!("- local sockets:");
+        for path in &policy.local_socket_paths {
+            println!("  - {}", path.display());
         }
     }
 }
@@ -2416,6 +2465,31 @@ fn run_sandbox_exec(args: SandboxExecArgs) -> Result<()> {
         runtime_policy
             .connect_rules
             .push(sandbox_proxy::runtime_connect_rule(proxy.port));
+    }
+    if let Some(intercept_broker) = plan.intercept_broker.as_ref() {
+        let current_exe =
+            std::env::current_exe().context("failed to resolve the current argon executable")?;
+        let base_environment = std::env::vars().collect::<BTreeMap<_, _>>();
+        let mut environment = sandbox::resolved_environment(&plan, &base_environment);
+        if let Some(original_path) = intercept_broker.original_path.as_ref() {
+            environment.insert(
+                "ARGON_SANDBOX_ORIGINAL_PATH".to_string(),
+                original_path.clone(),
+            );
+        }
+        sandbox_intercept::spawn_broker(
+            &current_exe,
+            sandbox_intercept::BrokerConfig {
+                parent_pid: std::process::id(),
+                socket_path: intercept_broker.socket_path.clone(),
+                token: intercept_broker.token.clone(),
+                current_dir: context.current_dir.clone(),
+                environment,
+                policy: runtime_policy.clone(),
+                intercepts: plan.intercepts.clone(),
+            },
+            &intercept_broker.runtime_dir.join("broker-config.json"),
+        )?;
     }
     print_sandbox_messages(&plan.infos, &plan.warnings);
     sandbox::apply_current_process(&runtime_policy)?;

@@ -4,7 +4,7 @@ mod parser;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -16,9 +16,9 @@ use parser::{ParsedProgram, StatementKind};
 const REPO_SANDBOXFILE: &str = "Sandboxfile";
 const USER_SANDBOXFILE: &str = ".Sandboxfile";
 const USER_SANDBOXFILE_COMPAT: &str = ".Sanboxfile";
-const INTERCEPT_MANIFEST_ENV: &str = "ARGON_SANDBOX_INTERCEPT_MANIFEST";
-const INTERCEPTED_COMMAND_ENV: &str = "ARGON_SANDBOX_INTERCEPTED_COMMAND";
-const REAL_COMMAND_ENV: &str = "ARGON_SANDBOX_REAL_COMMAND";
+pub const INTERCEPT_RUNNER_ENV: &str = "ARGON_SANDBOX_INTERCEPT_RUNNER";
+pub const INTERCEPT_SOCKET_ENV: &str = "ARGON_SANDBOX_INTERCEPT_SOCKET";
+pub const INTERCEPT_TOKEN_ENV: &str = "ARGON_SANDBOX_INTERCEPT_TOKEN";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -139,7 +139,7 @@ pub struct ExplainedSource {
     pub source: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EffectiveSandboxPolicy {
     pub fs_default: FsDefault,
@@ -151,17 +151,42 @@ pub struct EffectiveSandboxPolicy {
     pub writable_roots: Vec<PathBuf>,
     pub executable_paths: Vec<PathBuf>,
     pub executable_roots: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub denied_readable_paths: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub denied_readable_roots: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub denied_writable_paths: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub denied_writable_roots: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub denied_executable_paths: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub denied_executable_roots: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub local_socket_paths: Vec<PathBuf>,
     pub proxied_hosts: Vec<String>,
     pub connect_rules: Vec<NetConnectRule>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedIntercept {
     pub command_name: String,
     pub handler_path: PathBuf,
     pub real_command_path: Option<PathBuf>,
     pub shim_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InterceptBrokerPlan {
+    pub runtime_dir: PathBuf,
+    pub bin_dir: PathBuf,
+    pub runner_path: PathBuf,
+    pub socket_path: PathBuf,
+    pub token: String,
+    pub original_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -174,6 +199,7 @@ pub struct SandboxExplain {
     pub warnings: Vec<String>,
     pub policy: EffectiveSandboxPolicy,
     pub intercepts: Vec<ResolvedIntercept>,
+    pub intercept_broker: Option<InterceptBrokerPlan>,
     pub environment_default: EnvDefault,
     pub allowed_environment_patterns: Vec<String>,
     pub environment: BTreeMap<String, String>,
@@ -200,6 +226,7 @@ pub struct SandboxExecutionPlan {
     pub warnings: Vec<String>,
     pub policy: EffectiveSandboxPolicy,
     pub intercepts: Vec<ResolvedIntercept>,
+    pub intercept_broker: Option<InterceptBrokerPlan>,
     pub environment_default: EnvDefault,
     pub allowed_environment_patterns: Vec<String>,
     pub environment: BTreeMap<String, String>,
@@ -275,8 +302,6 @@ pub enum SandboxError {
     CurrentExecutable(io::Error),
     #[error("failed to prepare intercept runtime at {path}: {source}")]
     ShimIo { path: PathBuf, source: io::Error },
-    #[error("failed to parse intercept manifest at {path}: {message}")]
-    ManifestParse { path: PathBuf, message: String },
     #[error("sandboxing is not supported on this platform")]
     UnsupportedPlatform,
     #[error("failed to apply macOS sandbox: {0}")]
@@ -361,19 +386,6 @@ enum ControlFrame {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct InterceptManifest {
-    original_path: Option<String>,
-    intercepts: Vec<InterceptManifestEntry>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct InterceptManifestEntry {
-    command_name: String,
-    handler_path: PathBuf,
-    real_command_path: Option<PathBuf>,
-}
-
 impl Default for EffectiveSandboxPolicy {
     fn default() -> Self {
         Self {
@@ -386,6 +398,13 @@ impl Default for EffectiveSandboxPolicy {
             writable_roots: Vec::new(),
             executable_paths: Vec::new(),
             executable_roots: Vec::new(),
+            denied_readable_paths: Vec::new(),
+            denied_readable_roots: Vec::new(),
+            denied_writable_paths: Vec::new(),
+            denied_writable_roots: Vec::new(),
+            denied_executable_paths: Vec::new(),
+            denied_executable_roots: Vec::new(),
+            local_socket_paths: Vec::new(),
             proxied_hosts: Vec::new(),
             connect_rules: Vec::new(),
         }
@@ -439,6 +458,7 @@ impl SandboxExecutionPlan {
             warnings: self.warnings.clone(),
             policy: self.policy.clone(),
             intercepts: self.intercepts.clone(),
+            intercept_broker: self.intercept_broker.clone(),
             environment_default: self.environment_default,
             allowed_environment_patterns: self.allowed_environment_patterns.clone(),
             environment: self.environment.clone(),
@@ -607,9 +627,12 @@ pub fn build_execution_plan(
 
     resolve_pending_exec_commands(&mut state, context)?;
     let mut intercepts = resolve_pending_intercepts(&mut state, context)?;
-    let intercept_environment =
+    let (intercept_environment, intercept_broker) =
         prepare_intercept_environment(&mut state.policy, &mut intercepts, context)?;
     for (key, value) in intercept_environment {
+        if key == "PATH" {
+            state.vars.insert(key.clone(), value.clone());
+        }
         state.environment_overrides.insert(key, value);
     }
     validate_primary_command(&state.policy, &state.vars, context)?;
@@ -622,6 +645,7 @@ pub fn build_execution_plan(
         warnings: state.warnings,
         policy: state.policy,
         intercepts,
+        intercept_broker,
         environment_default: state.environment_default,
         allowed_environment_patterns: state.allowed_environment_patterns,
         environment: state.environment_overrides,
@@ -701,6 +725,12 @@ pub fn profile_source(policy: &EffectiveSandboxPolicy) -> String {
         }
         lines.push(")".to_string());
     }
+    for (index, path) in policy.local_socket_paths.iter().enumerate() {
+        let _ = path;
+        lines.push(format!(
+            "(allow network-outbound (literal (param \"LOCAL_SOCKET_PATH_{index}\")))"
+        ));
+    }
 
     match policy.fs_default {
         FsDefault::None => {}
@@ -756,6 +786,42 @@ pub fn profile_source(policy: &EffectiveSandboxPolicy) -> String {
             "(allow file-read* file-test-existence process-exec process-exec-interpreter file-map-executable (subpath (param \"EXEC_ROOT_{index}\")))"
         ));
     }
+    for (index, path) in policy.denied_readable_paths.iter().enumerate() {
+        let _ = path;
+        lines.push(format!(
+            "(deny file-read* file-test-existence (literal (param \"DENY_READ_PATH_{index}\")))"
+        ));
+    }
+    for (index, root) in policy.denied_readable_roots.iter().enumerate() {
+        let _ = root;
+        lines.push(format!(
+            "(deny file-read* file-test-existence (subpath (param \"DENY_READ_ROOT_{index}\")))"
+        ));
+    }
+    for (index, path) in policy.denied_writable_paths.iter().enumerate() {
+        let _ = path;
+        lines.push(format!(
+            "(deny file-write* (literal (param \"DENY_WRITE_PATH_{index}\")))"
+        ));
+    }
+    for (index, root) in policy.denied_writable_roots.iter().enumerate() {
+        let _ = root;
+        lines.push(format!(
+            "(deny file-write* (subpath (param \"DENY_WRITE_ROOT_{index}\")))"
+        ));
+    }
+    for (index, path) in policy.denied_executable_paths.iter().enumerate() {
+        let _ = path;
+        lines.push(format!(
+            "(deny process-exec process-exec-interpreter file-map-executable (literal (param \"DENY_EXEC_PATH_{index}\")))"
+        ));
+    }
+    for (index, root) in policy.denied_executable_roots.iter().enumerate() {
+        let _ = root;
+        lines.push(format!(
+            "(deny process-exec process-exec-interpreter file-map-executable (subpath (param \"DENY_EXEC_ROOT_{index}\")))"
+        ));
+    }
 
     lines.join("\n")
 }
@@ -789,6 +855,34 @@ pub fn profile_parameters(policy: &EffectiveSandboxPolicy) -> Vec<String> {
     for (index, root) in policy.executable_roots.iter().enumerate() {
         parameters.push(format!("EXEC_ROOT_{index}"));
         parameters.push(root.to_string_lossy().into_owned());
+    }
+    for (index, path) in policy.denied_readable_paths.iter().enumerate() {
+        parameters.push(format!("DENY_READ_PATH_{index}"));
+        parameters.push(path.to_string_lossy().into_owned());
+    }
+    for (index, root) in policy.denied_readable_roots.iter().enumerate() {
+        parameters.push(format!("DENY_READ_ROOT_{index}"));
+        parameters.push(root.to_string_lossy().into_owned());
+    }
+    for (index, path) in policy.denied_writable_paths.iter().enumerate() {
+        parameters.push(format!("DENY_WRITE_PATH_{index}"));
+        parameters.push(path.to_string_lossy().into_owned());
+    }
+    for (index, root) in policy.denied_writable_roots.iter().enumerate() {
+        parameters.push(format!("DENY_WRITE_ROOT_{index}"));
+        parameters.push(root.to_string_lossy().into_owned());
+    }
+    for (index, path) in policy.denied_executable_paths.iter().enumerate() {
+        parameters.push(format!("DENY_EXEC_PATH_{index}"));
+        parameters.push(path.to_string_lossy().into_owned());
+    }
+    for (index, root) in policy.denied_executable_roots.iter().enumerate() {
+        parameters.push(format!("DENY_EXEC_ROOT_{index}"));
+        parameters.push(root.to_string_lossy().into_owned());
+    }
+    for (index, path) in policy.local_socket_paths.iter().enumerate() {
+        parameters.push(format!("LOCAL_SOCKET_PATH_{index}"));
+        parameters.push(path.to_string_lossy().into_owned());
     }
     parameters
 }
@@ -832,7 +926,7 @@ pub fn apply_current_process(policy: &EffectiveSandboxPolicy) -> Result<(), Sand
 
 fn macos_policy_summary(policy: &EffectiveSandboxPolicy) -> String {
     format!(
-        "fs_default={:?}, exec_default={:?}, net_default={:?}, read_files={}, read_dirs={}, write_files={}, write_dirs={}, exec_files={}, exec_dirs={}, proxied_hosts={}, connect_rules={}",
+        "fs_default={:?}, exec_default={:?}, net_default={:?}, read_files={}, read_dirs={}, write_files={}, write_dirs={}, exec_files={}, exec_dirs={}, proxied_hosts={}, connect_rules={}, local_sockets={}",
         policy.fs_default,
         policy.exec_default,
         policy.net_default,
@@ -843,7 +937,8 @@ fn macos_policy_summary(policy: &EffectiveSandboxPolicy) -> String {
         policy.executable_paths.len(),
         policy.executable_roots.len(),
         policy.proxied_hosts.len(),
-        policy.connect_rules.len()
+        policy.connect_rules.len(),
+        policy.local_socket_paths.len()
     )
 }
 
@@ -888,87 +983,6 @@ fn format_macos_api_error(
         message.push_str(&hint);
     }
     message
-}
-
-pub fn maybe_run_intercept_shim() -> Result<bool, SandboxError> {
-    let manifest_path = match std::env::var_os(INTERCEPT_MANIFEST_ENV) {
-        Some(value) if !value.is_empty() => PathBuf::from(value),
-        _ => return Ok(false),
-    };
-
-    let argv0 = std::env::args()
-        .next()
-        .and_then(|value| basename(Path::new(&value)).map(str::to_string))
-        .unwrap_or_default();
-    if argv0.is_empty() {
-        return Ok(false);
-    }
-
-    let payload = fs::read_to_string(&manifest_path).map_err(|source| SandboxError::Read {
-        path: manifest_path.clone(),
-        source,
-    })?;
-    let manifest = serde_json::from_str::<InterceptManifest>(&payload).map_err(|error| {
-        SandboxError::ManifestParse {
-            path: manifest_path.clone(),
-            message: error.to_string(),
-        }
-    })?;
-    let Some(entry) = manifest
-        .intercepts
-        .iter()
-        .find(|entry| entry.command_name == argv0)
-        .cloned()
-    else {
-        return Ok(false);
-    };
-
-    let mut command = std::process::Command::new(&entry.handler_path);
-    command.args(std::env::args().skip(1));
-    command.env_remove(INTERCEPT_MANIFEST_ENV);
-    command.env_remove(INTERCEPTED_COMMAND_ENV);
-    command.env_remove(REAL_COMMAND_ENV);
-    match manifest.original_path {
-        Some(path) if !path.is_empty() => {
-            command.env("PATH", path);
-        }
-        _ => {
-            command.env_remove("PATH");
-        }
-    }
-    command.env(INTERCEPTED_COMMAND_ENV, &entry.command_name);
-    if let Some(real_command_path) = entry.real_command_path.as_ref() {
-        command.env(REAL_COMMAND_ENV, real_command_path);
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-
-        let error = command.exec();
-        Err(SandboxError::Write {
-            path: entry.handler_path,
-            source: error,
-        })
-    }
-
-    #[cfg(not(unix))]
-    {
-        let status = command.status().map_err(|source| SandboxError::Write {
-            path: entry.handler_path.clone(),
-            source,
-        })?;
-        if status.success() {
-            return Ok(true);
-        }
-        return Err(SandboxError::Write {
-            path: entry.handler_path,
-            source: io::Error::new(
-                io::ErrorKind::Other,
-                format!("handler exited with {status}"),
-            ),
-        });
-    }
 }
 
 fn load_config_sources(paths: &ResolvedConfigPaths) -> Result<Vec<SourceFile>, SandboxError> {
@@ -1327,21 +1341,32 @@ fn evaluate_source(
                     }
                     let resolved =
                         resolve_path_value(handler, &state.vars, source, statement.line_number)?;
+                    if !matches!(resolved.kind, PathKind::File) {
+                        return Err(SandboxError::InvalidPath {
+                            origin: source_label(source),
+                            line: statement.line_number,
+                            message: format!(
+                                "intercept handler must be an executable file, not a directory: {}",
+                                resolved.path.display()
+                            ),
+                        });
+                    }
                     validate_exec_allowance(
                         &resolved.path,
                         resolved.kind,
                         source,
                         statement.line_number,
                     )?;
-                    state.pending_exec_commands.push(PendingExecCommand {
-                        command_name: command.clone(),
-                        source_name: source_label(source),
-                        line_number: statement.line_number,
-                    });
                     add_exec_allowances(&mut state.policy, &resolved.aliases, resolved.kind);
                     add_fs_allowances(
                         &mut state.policy,
                         FsAccess::Read,
+                        &resolved.aliases,
+                        resolved.kind,
+                    );
+                    add_fs_denials(
+                        &mut state.policy,
+                        FsAccess::Write,
                         &resolved.aliases,
                         resolved.kind,
                     );
@@ -1529,17 +1554,22 @@ fn resolve_pending_intercepts(
         }
 
         let real_command_path =
-            resolve_first_command_from_path(&intercept.command_name, &path_value);
-        if let Some(path) = real_command_path.as_ref() {
-            let aliases = path_aliases(path);
-            add_exec_allowances(&mut state.policy, &aliases, PathKind::File);
-            add_fs_allowances(&mut state.policy, FsAccess::Read, &aliases, PathKind::File);
-        }
+            resolve_first_command_from_path(&intercept.command_name, &path_value).ok_or_else(
+                || SandboxError::CommandNotFound {
+                    command: intercept.command_name.clone(),
+                    origin: intercept.source_name.clone(),
+                    line: intercept.line_number,
+                },
+            )?;
+        let aliases = path_aliases(&real_command_path);
+        add_fs_denials(&mut state.policy, FsAccess::Read, &aliases, PathKind::File);
+        add_fs_denials(&mut state.policy, FsAccess::Write, &aliases, PathKind::File);
+        add_exec_denials(&mut state.policy, &aliases, PathKind::File);
 
         intercepts.push(ResolvedIntercept {
             command_name: intercept.command_name,
             handler_path: intercept.handler_path,
-            real_command_path,
+            real_command_path: Some(real_command_path),
             shim_path: None,
         });
     }
@@ -1551,9 +1581,9 @@ fn prepare_intercept_environment(
     policy: &mut EffectiveSandboxPolicy,
     intercepts: &mut [ResolvedIntercept],
     context: &SandboxContext,
-) -> Result<BTreeMap<String, String>, SandboxError> {
+) -> Result<(BTreeMap<String, String>, Option<InterceptBrokerPlan>), SandboxError> {
     if intercepts.is_empty() {
-        return Ok(BTreeMap::new());
+        return Ok((BTreeMap::new(), None));
     }
 
     let runtime_dir = create_intercept_runtime_dir()?;
@@ -1564,48 +1594,45 @@ fn prepare_intercept_environment(
     })?;
 
     let current_exe = std::env::current_exe().map_err(SandboxError::CurrentExecutable)?;
-    let manifest_path = runtime_dir.join("manifest.json");
+    let runner_path = bin_dir.join("argon-intercept-run");
+    fs::copy(&current_exe, &runner_path).map_err(|source| SandboxError::ShimIo {
+        path: runner_path.clone(),
+        source,
+    })?;
+    set_executable_permissions(&runner_path)?;
 
     let original_path = context
         .env
         .get("PATH")
         .cloned()
         .filter(|value| !value.is_empty());
-    let mut manifest = InterceptManifest {
-        original_path: original_path.clone(),
-        intercepts: Vec::new(),
-    };
 
     for intercept in intercepts.iter_mut() {
         let shim_path = bin_dir.join(&intercept.command_name);
-        fs::copy(&current_exe, &shim_path).map_err(|source| SandboxError::ShimIo {
-            path: shim_path.clone(),
-            source,
+        create_intercept_link(&intercept.handler_path, &shim_path).map_err(|source| {
+            SandboxError::ShimIo {
+                path: shim_path.clone(),
+                source,
+            }
         })?;
-        set_executable_permissions(&shim_path)?;
-        intercept.shim_path = Some(shim_path.clone());
-        manifest.intercepts.push(InterceptManifestEntry {
-            command_name: intercept.command_name.clone(),
-            handler_path: intercept.handler_path.clone(),
-            real_command_path: intercept.real_command_path.clone(),
-        });
+        intercept.shim_path = Some(shim_path);
     }
 
-    let manifest_payload =
-        serde_json::to_string_pretty(&manifest).expect("intercept manifest should serialize");
-    fs::write(&manifest_path, manifest_payload).map_err(|source| SandboxError::ShimIo {
-        path: manifest_path.clone(),
-        source,
-    })?;
+    let socket_path = runtime_dir.join("broker.sock");
+    let token = random_intercept_token();
 
     add_fs_allowance(policy, FsAccess::Read, &runtime_dir, PathKind::Root);
+    add_fs_allowance(policy, FsAccess::Write, &socket_path, PathKind::File);
+    push_unique_path(&mut policy.local_socket_paths, socket_path.clone());
     add_exec_allowance(policy, &bin_dir, PathKind::Root);
     add_fs_allowance(policy, FsAccess::Read, &bin_dir, PathKind::Root);
+    add_exec_allowance(policy, &runner_path, PathKind::File);
+    add_fs_allowance(policy, FsAccess::Read, &runner_path, PathKind::File);
 
     let mut environment = BTreeMap::new();
     environment.insert(
         "PATH".to_string(),
-        match original_path {
+        match original_path.as_ref() {
             Some(path) if !path.is_empty() => {
                 format!("{}:{}", runtime_dir.join("bin").display(), path)
             }
@@ -1613,10 +1640,84 @@ fn prepare_intercept_environment(
         },
     );
     environment.insert(
-        INTERCEPT_MANIFEST_ENV.to_string(),
-        manifest_path.display().to_string(),
+        INTERCEPT_RUNNER_ENV.to_string(),
+        runner_path.display().to_string(),
     );
-    Ok(environment)
+    environment.insert(
+        INTERCEPT_SOCKET_ENV.to_string(),
+        socket_path.display().to_string(),
+    );
+    environment.insert(INTERCEPT_TOKEN_ENV.to_string(), token.clone());
+
+    Ok((
+        environment,
+        Some(InterceptBrokerPlan {
+            runtime_dir,
+            bin_dir,
+            runner_path,
+            socket_path,
+            token,
+            original_path,
+        }),
+    ))
+}
+
+#[cfg(unix)]
+fn create_intercept_link(target: &Path, link: &Path) -> io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(not(unix))]
+fn create_intercept_link(target: &Path, link: &Path) -> io::Result<()> {
+    fs::copy(target, link).map(|_| ())
+}
+
+fn random_intercept_token() -> String {
+    let mut bytes = [0_u8; 32];
+    match fs::File::open("/dev/urandom").and_then(|mut file| file.read_exact(&mut bytes)) {
+        Ok(()) => {}
+        Err(_) => {
+            let seed = format!(
+                "{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            );
+            for (index, byte) in seed.as_bytes().iter().enumerate() {
+                bytes[index % bytes.len()] ^= *byte;
+            }
+        }
+    }
+
+    let mut token = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(&mut token, "{byte:02x}");
+    }
+    token
+}
+
+pub fn intercept_inner_policy(
+    base_policy: &EffectiveSandboxPolicy,
+    intercept: &ResolvedIntercept,
+) -> EffectiveSandboxPolicy {
+    let mut policy = base_policy.clone();
+    let Some(real_command_path) = intercept.real_command_path.as_ref() else {
+        return policy;
+    };
+    let aliases = path_aliases(real_command_path);
+    remove_paths(&mut policy.denied_readable_paths, &aliases);
+    remove_paths(&mut policy.denied_executable_paths, &aliases);
+    policy.local_socket_paths.clear();
+    add_fs_allowances(&mut policy, FsAccess::Read, &aliases, PathKind::File);
+    add_exec_allowances(&mut policy, &aliases, PathKind::File);
+    policy
+}
+
+fn remove_paths(paths: &mut Vec<PathBuf>, removals: &[PathBuf]) {
+    paths.retain(|path| !removals.contains(path));
 }
 
 fn validate_primary_command(
@@ -2420,6 +2521,52 @@ fn add_exec_allowance(policy: &mut EffectiveSandboxPolicy, path: &Path, kind: Pa
     }
 }
 
+fn add_fs_denials(
+    policy: &mut EffectiveSandboxPolicy,
+    access: FsAccess,
+    paths: &[PathBuf],
+    kind: PathKind,
+) {
+    for path in paths {
+        add_fs_denial(policy, access, path, kind);
+    }
+}
+
+fn add_fs_denial(
+    policy: &mut EffectiveSandboxPolicy,
+    access: FsAccess,
+    path: &Path,
+    kind: PathKind,
+) {
+    match (access, kind) {
+        (FsAccess::Read, PathKind::File) => {
+            push_unique_path(&mut policy.denied_readable_paths, path.to_path_buf())
+        }
+        (FsAccess::Read, PathKind::Root) => {
+            push_unique_path(&mut policy.denied_readable_roots, path.to_path_buf())
+        }
+        (FsAccess::Write, PathKind::File) => {
+            push_unique_path(&mut policy.denied_writable_paths, path.to_path_buf())
+        }
+        (FsAccess::Write, PathKind::Root) => {
+            push_unique_path(&mut policy.denied_writable_roots, path.to_path_buf())
+        }
+    }
+}
+
+fn add_exec_denials(policy: &mut EffectiveSandboxPolicy, paths: &[PathBuf], kind: PathKind) {
+    for path in paths {
+        add_exec_denial(policy, path, kind);
+    }
+}
+
+fn add_exec_denial(policy: &mut EffectiveSandboxPolicy, path: &Path, kind: PathKind) {
+    match kind {
+        PathKind::File => push_unique_path(&mut policy.denied_executable_paths, path.to_path_buf()),
+        PathKind::Root => push_unique_path(&mut policy.denied_executable_roots, path.to_path_buf()),
+    }
+}
+
 fn resolve_command_paths_from_path(command: &str, path_value: &str) -> Vec<PathBuf> {
     let candidate = Path::new(command);
     if candidate.components().count() > 1 {
@@ -2449,6 +2596,9 @@ fn resolve_first_command_from_path(command: &str, path_value: &str) -> Option<Pa
 }
 
 fn create_intercept_runtime_dir() -> Result<PathBuf, SandboxError> {
+    #[cfg(unix)]
+    let base = PathBuf::from("/tmp").join("argon-sandbox");
+    #[cfg(not(unix))]
     let base = std::env::temp_dir().join("argon-sandbox");
     fs::create_dir_all(&base).map_err(|source| SandboxError::ShimIo {
         path: base.clone(),
@@ -3659,7 +3809,6 @@ END
     #[test]
     fn profile_source_uses_deny_default_with_explicit_fs_defaults() {
         let mut policy = EffectiveSandboxPolicy::default();
-        policy.fs_default = FsDefault::None;
         policy.readable_roots.push(PathBuf::from("/tmp/repo"));
 
         let profile = profile_source(&policy);
@@ -4062,6 +4211,7 @@ END
             warnings: Vec::new(),
             policy: EffectiveSandboxPolicy::default(),
             intercepts: Vec::new(),
+            intercept_broker: None,
             environment_default: EnvDefault::None,
             allowed_environment_patterns: vec!["FOO_*".to_string(), "HOME".to_string()],
             environment: BTreeMap::from([("BAR".to_string(), "override".to_string())]),
@@ -4158,7 +4308,105 @@ END
         let plan = build_execution_plan(&context, &[]).expect("plan");
         assert_eq!(plan.intercepts.len(), 1);
         assert!(plan.environment.contains_key("PATH"));
-        assert!(plan.environment.contains_key(INTERCEPT_MANIFEST_ENV));
+        assert!(
+            !plan
+                .environment
+                .contains_key("ARGON_SANDBOX_INTERCEPT_MANIFEST")
+        );
+        assert!(plan.environment.contains_key(INTERCEPT_RUNNER_ENV));
+        assert!(plan.environment.contains_key(INTERCEPT_SOCKET_ENV));
+        assert!(plan.environment.contains_key(INTERCEPT_TOKEN_ENV));
         assert!(plan.intercepts[0].shim_path.is_some());
+        let broker = plan.intercept_broker.as_ref().expect("broker");
+        assert_eq!(
+            plan.environment
+                .get(INTERCEPT_RUNNER_ENV)
+                .map(String::as_str),
+            Some(broker.runner_path.to_str().expect("runner path"))
+        );
+        assert!(
+            plan.policy
+                .denied_writable_paths
+                .iter()
+                .any(|path| path.ends_with(".argon/sandbox/intercepts/aws.sh"))
+        );
+        assert!(
+            plan.policy
+                .denied_readable_paths
+                .iter()
+                .any(|path| path == &normalize_absolute_path(repo_root.join("aws")))
+        );
+        assert!(
+            plan.policy
+                .denied_executable_paths
+                .iter()
+                .any(|path| path == &normalize_absolute_path(repo_root.join("aws")))
+        );
+        assert!(
+            !plan
+                .policy
+                .executable_paths
+                .iter()
+                .any(|path| path == &normalize_absolute_path(repo_root.join("aws")))
+        );
+
+        #[cfg(unix)]
+        {
+            let shim = plan.intercepts[0].shim_path.as_ref().expect("shim");
+            assert!(
+                std::fs::symlink_metadata(shim)
+                    .expect("shim metadata")
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(
+                std::fs::read_link(shim).expect("shim target"),
+                normalize_absolute_path(repo_root.join(".argon/sandbox/intercepts/aws.sh"))
+            );
+        }
+    }
+
+    #[test]
+    fn intercept_inner_policy_reallows_real_command_read_and_exec() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        let home = repo_root.join("home");
+        fs::create_dir_all(repo_root.join(".argon/sandbox/intercepts")).expect("repo");
+        fs::create_dir_all(&home).expect("home");
+        fs::write(
+            repo_root.join("Sandboxfile"),
+            "EXEC INTERCEPT aws WITH .argon/sandbox/intercepts/aws.sh\n",
+        )
+        .expect("sandbox");
+        fs::write(
+            repo_root.join(".argon/sandbox/intercepts/aws.sh"),
+            "#!/bin/sh\n",
+        )
+        .expect("handler");
+        fs::write(repo_root.join("aws"), "#!/bin/sh\n").expect("aws");
+
+        let mut context = context_for(&repo_root, &["aws"]);
+        context
+            .env
+            .insert("PATH".to_string(), repo_root.display().to_string());
+        context
+            .env
+            .insert("HOME".to_string(), home.display().to_string());
+
+        let plan = build_execution_plan(&context, &[]).expect("plan");
+        let intercept = plan.intercepts.first().expect("intercept");
+        let real = normalize_absolute_path(repo_root.join("aws"));
+        let inner = intercept_inner_policy(&plan.policy, intercept);
+
+        assert!(inner.readable_paths.iter().any(|path| path == &real));
+        assert!(inner.executable_paths.iter().any(|path| path == &real));
+        assert!(!inner.denied_readable_paths.iter().any(|path| path == &real));
+        assert!(
+            !inner
+                .denied_executable_paths
+                .iter()
+                .any(|path| path == &real)
+        );
+        assert!(inner.denied_writable_paths.iter().any(|path| path == &real));
     }
 }

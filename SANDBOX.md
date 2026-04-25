@@ -82,7 +82,7 @@ Argon evaluates policy in this order:
 3. evaluate one discovered sandbox file per directory, from nearest to farthest
 4. append explicit `--write-root` launch roots
 5. resolve bare `EXEC ALLOW <command>` entries against `PATH`
-6. resolve `EXEC INTERCEPT` handlers and prepare the shim runtime
+6. resolve `EXEC INTERCEPT` handlers and prepare the broker runtime
 
 `USE` expands builtins inline at the point where it appears. That makes
 source order meaningful without turning the language into a general scripting
@@ -425,20 +425,49 @@ EXEC INTERCEPT aws WITH .argon/sandbox/intercepts/aws.sh
 
 Semantics:
 
-- Argon resolves the real command from `PATH`
-- Argon creates a temporary shim directory and prepends it to `PATH`
-- the shim re-enters the Argon binary and dispatches to the handler
-- the handler still runs inside the same sandbox
+- Argon resolves the real command from the original `PATH`
+- the outer sandbox denies read, write, and exec access to that real command
+- the repo handler is allowed for read/exec but explicitly denied for writes
+- Argon creates a temporary runtime directory and prepends its `bin` to `PATH`
+- `runtime/bin/<command>` is a symlink to the repo handler, so edits made
+  outside the sandbox are picked up by the next invocation
+- the handler still runs inside the same outer sandbox
+- the handler does not receive the real command path
 - the handler receives:
-  - `ARGON_SANDBOX_INTERCEPTED_COMMAND`
-  - `ARGON_SANDBOX_REAL_COMMAND`
-- the handler sees the original `PATH`, not the shim-prefixed one
+  - `ARGON_SANDBOX_INTERCEPT_RUNNER`
+  - `ARGON_SANDBOX_INTERCEPT_SOCKET`
+  - `ARGON_SANDBOX_INTERCEPT_TOKEN`
 
-This keeps interception compatible with future policy work instead of treating
-wrapped commands as an escape hatch.
+The handler can choose to deny the command, rewrite arguments, or delegate to
+the real command through Argon's broker runner:
 
-`EXEC INTERCEPT` only mediates command lookup through `PATH`. If a child
-process executes an absolute path directly, the intercept does not fire.
+```sh
+#!/bin/sh
+cmd=${0##*/}
+exec "$ARGON_SANDBOX_INTERCEPT_RUNNER" "$cmd" "$@"
+```
+
+The runner sends the request to a per-launch Argon broker. The broker starts a
+short-lived worker, applies a fresh sandbox derived from the same resolved
+policy, restores read/exec access to only the resolved real command, and then
+execs that command. Direct execution of `/absolute/path/to/aws` from inside the
+outer sandbox remains denied.
+
+The Rust CLI implementation currently uses a per-launch local broker IPC
+transport. The protocol and trust boundary are intentionally broker-shaped so
+the macOS app can replace the transport with an app-bundled XPC service without
+changing `Sandboxfile` semantics.
+
+Custom repo handlers are useful for local workflow policy, but the handler is
+not a complete authorization boundary by itself: any process with the broker
+token can ask the broker to run a declared intercepted command under the
+derived sandbox. Builtin interceptors will move command-specific allow/deny
+policy into trusted Argon code.
+
+`EXEC INTERCEPT` only mediates command lookup through `PATH`, but the resolved
+real command is also denied by absolute path in the outer sandbox. Equivalent
+tools or API clients are separate programs and must be controlled by normal
+exec, filesystem, credential, and network policy.
 
 ## Check
 
@@ -521,7 +550,7 @@ Today the macOS implementation enforces:
 - read restrictions
 - write restrictions
 - executable allow/deny policy
-- intercept shims inside the sandbox
+- intercept handler symlinks, write protection, and broker-mediated execution
 
 ## Cross-Platform Structure
 
