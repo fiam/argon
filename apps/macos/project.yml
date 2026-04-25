@@ -1,6 +1,6 @@
 name: Argon
 options:
-  bundleIdPrefix: dev.argon
+  bundleIdPrefix: dev.argonapp
   deploymentTarget:
     macOS: "14.0"
   xcodeVersion: "16.0"
@@ -123,7 +123,7 @@ targets:
         embed: false
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.argon.app
+        PRODUCT_BUNDLE_IDENTIFIER: dev.argonapp.macos
         INFOPLIST_FILE: Resources/Info.plist
         CODE_SIGN_ENTITLEMENTS: Resources/Argon.entitlements
         PRODUCT_NAME: Argon
@@ -151,7 +151,7 @@ targets:
       - target: Argon
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.argon.app.tests
+        PRODUCT_BUNDLE_IDENTIFIER: dev.argonapp.macos.tests
         GENERATE_INFOPLIST_FILE: true
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Argon.app/Contents/MacOS/Argon"
         BUNDLE_LOADER: "$(TEST_HOST)"
@@ -165,7 +165,7 @@ targets:
       - target: Argon
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.argon.app.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: dev.argonapp.macos.uitests
         GENERATE_INFOPLIST_FILE: true
         TEST_TARGET_NAME: Argon
     scheme:

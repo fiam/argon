@@ -8,9 +8,7 @@ RELEASE_TAG="${ARGON_RELEASE_TAG:-v$VERSION}"
 REPOSITORY="${ARGON_REPOSITORY:-fiam/argon}"
 DOWNLOAD_URL_PREFIX="${ARGON_DOWNLOAD_URL_PREFIX:-https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG}"
 BUILD_NUMBER="${ARGON_BUILD_NUMBER:-1}"
-RELEASE_BUNDLE_IDENTIFIER="${ARGON_RELEASE_BUNDLE_IDENTIFIER:-app.argon.macos}"
-APPCAST_FEED_URL_DEFAULT="https://github.com/$REPOSITORY/releases/latest/download/appcast.xml"
-APPCAST_FEED_URL="${ARGON_APPCAST_FEED_URL:-$APPCAST_FEED_URL_DEFAULT}"
+APPCAST_FEED_URL="${ARGON_APPCAST_FEED_URL:-https://argonapp.dev/appcast.xml}"
 APPCAST_LINK_URL="${ARGON_APPCAST_LINK_URL:-https://argonapp.dev}"
 
 DERIVED_DATA_PATH="$ROOT_DIR/.derived-release"
@@ -26,6 +24,7 @@ GHOSTTY_NATIVE_BACKUP="$DERIVED_DATA_PATH/ghostty-native-backup"
 UNIVERSAL_CLI_DIR="$DERIVED_DATA_PATH/universal-cli"
 UNIVERSAL_CLI_PATH="$UNIVERSAL_CLI_DIR/argon"
 APP_PATH=""
+RELEASE_BUNDLE_IDENTIFIER=""
 APPCAST_DIR="$DIST_DIR/appcast"
 SPARKLE_TOOLS_DIR="$ROOT_DIR/.sparkle-tools"
 VERSIONED_ZIP_NAME="Argon-${VERSION}.zip"
@@ -208,7 +207,6 @@ xcodebuild_args=(
   ARCHS="arm64 x86_64"
   MARKETING_VERSION="$VERSION"
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
-  PRODUCT_BUNDLE_IDENTIFIER="$RELEASE_BUNDLE_IDENTIFIER"
   ARGON_GHOSTTY_STATIC_LIB=libghostty.a
   ARGON_APPCAST_FEED_URL="${ARGON_APPCAST_FEED_URL:-}"
   SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
@@ -259,6 +257,15 @@ BUNDLED_CLI_PATH="$APP_PATH/Contents/Resources/bin/argon"
 
 if [[ ! -d "$APP_PATH" ]]; then
   echo "expected app not found at $APP_PATH" >&2
+  exit 1
+fi
+
+RELEASE_BUNDLE_IDENTIFIER="$(
+  /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Contents/Info.plist"
+)"
+
+if [[ -z "$RELEASE_BUNDLE_IDENTIFIER" ]]; then
+  echo "built app is missing CFBundleIdentifier" >&2
   exit 1
 fi
 

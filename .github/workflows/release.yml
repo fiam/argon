@@ -172,8 +172,7 @@ jobs:
           ARGON_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
           ARGON_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_API_ISSUER_ID }}
           ARGON_NOTARY_KEY_FILE: ${{ env.APPLE_NOTARY_API_KEY_PATH }}
-          ARGON_APPCAST_FEED_URL: ${{ vars.ARGON_APPCAST_FEED_URL != '' && vars.ARGON_APPCAST_FEED_URL || format('https://github.com/{0}/releases/latest/download/appcast.xml', github.repository) }}
-          ARGON_RELEASE_BUNDLE_IDENTIFIER: ${{ vars.ARGON_RELEASE_BUNDLE_IDENTIFIER }}
+          ARGON_APPCAST_FEED_URL: ${{ vars.ARGON_APPCAST_FEED_URL }}
           SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
           SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
         run: ./scripts/build-release-assets.sh "${{ env.ARGON_PUBLISH_VERSION }}"
@@ -203,10 +202,6 @@ jobs:
             "dist/release-metadata.json"
             "dist/argon.rb"
           )
-
-          if [[ -f dist/appcast.xml ]]; then
-            assets+=("dist/appcast.xml")
-          fi
 
           gh release upload "${{ env.ARGON_PUBLISH_TAG }}" "${assets[@]}" --clobber
 
@@ -253,7 +248,7 @@ jobs:
             echo
             echo "- Tag: \`${{ env.ARGON_PUBLISH_TAG }}\`"
             echo "- Version: \`${{ env.ARGON_PUBLISH_VERSION }}\`"
-            echo "- Artifacts: signed universal app, notarized DMG, Sparkle appcast asset, generated Homebrew cask"
+            echo "- Artifacts: signed universal app, notarized DMG, Pages appcast, generated Homebrew cask"
             echo "- Homebrew tap: \`${{ vars.ARGON_HOMEBREW_TAP_REPOSITORY != '' && vars.ARGON_HOMEBREW_TAP_REPOSITORY || 'fiam/homebrew-tap' }}\`"
             echo
             echo '```text'
