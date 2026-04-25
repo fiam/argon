@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "versioning": "always-bump-minor",
+      "initial-version": "0.1.0",
+      "include-v-in-tag": true,
+      "changelog-path": "CHANGELOG.md",
+      "version-file": "version.txt",
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "Cargo.toml",
+          "jsonpath": "$.workspace.package.version"
+        },
+        {
+          "type": "yaml",
+          "path": "apps/macos/project.yml",
+          "jsonpath": "$.targets.Argon.settings.base.MARKETING_VERSION"
+        }
+      ]
+    }
+  }
+}

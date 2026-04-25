@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  rust-checks:
+    name: Rust Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Run Rust checks
+        run: |
+          cargo fmt --check
+          cargo clippy --workspace -- -D warnings
+          cargo deny check
+          cargo test --workspace
+
+  macos-check:
+    name: macOS Check
+    runs-on: macos-26
+    timeout-minutes: 50
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+
+      - name: Install build tools
+        run: brew install cargo-deny xcodegen swift-format zig@0.15
+
+      - name: Install Metal Toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Run full check
+        run: make check
+
+  ui-smoke:
+    name: UI Smoke Test
+    runs-on: macos-26
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+
+      - name: Install build tools
+        run: brew install xcodegen swift-format zig@0.15
+
+      - name: Install Metal Toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Run UI smoke test
+        run: make test-ui
+
+  release-packaging-smoke:
+    name: Release Packaging Smoke Test
+    runs-on: macos-26
+    needs:
+      - rust-checks
+      - macos-check
+      - ui-smoke
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+
+      - name: Install build tools
+        run: brew install xcodegen zig@0.15 uv
+
+      - name: Install Metal Toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Install Rust targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Build unsigned release artifacts
+        env:
+          ARGON_BUILD_NUMBER: ${{ github.run_number }}
+        run: ./scripts/build-release-assets.sh "$(cat version.txt)"
+
+      - name: Upload release smoke-test metadata
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v4.6.2
+        with:
+          name: argon-release-smoke-${{ github.run_id }}
+          path: |
+            dist/checksums.txt
+            dist/release-metadata.json
+            dist/argon.rb
+          if-no-files-found: error
+          retention-days: 7

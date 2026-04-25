@@ -39,7 +39,11 @@ targets:
         script: |
           set -euo pipefail
           REPO_ROOT="$(cd "$SRCROOT/../.." && pwd)"
-          GHOSTTY_XCFRAMEWORK="$REPO_ROOT/target/libghostty/native/macos/GhosttyKit.xcframework"
+          if [ -n "${ARGON_GHOSTTYKIT_PATH:-}" ]; then
+            GHOSTTY_XCFRAMEWORK="$ARGON_GHOSTTYKIT_PATH"
+          else
+            GHOSTTY_XCFRAMEWORK="$REPO_ROOT/target/libghostty/native/macos/GhosttyKit.xcframework"
+          fi
           if [ ! -d "$GHOSTTY_XCFRAMEWORK" ]; then
             if [ "${CONFIGURATION:-Debug}" = "Release" ]; then
               bash "$REPO_ROOT/scripts/build-libghostty.sh" --release
@@ -52,6 +56,9 @@ targets:
         script: |
           set -euo pipefail
           REPO_ROOT="$(cd "$SRCROOT/../.." && pwd)"
+          if [ "${ARGON_SKIP_BUNDLED_CLI_BUILD:-0}" = "1" ]; then
+            exit 0
+          fi
           if [ -n "${CARGO:-}" ] && [ -x "${CARGO}" ]; then
             CARGO_BIN="${CARGO}"
           elif [ -x "$HOME/.cargo/bin/cargo" ]; then
@@ -73,7 +80,11 @@ targets:
         script: |
           set -euo pipefail
           REPO_ROOT="$(cd "$SRCROOT/../.." && pwd)"
-          SRC_DIR="$REPO_ROOT/target/libghostty/native/share/ghostty"
+          if [ -n "${ARGON_GHOSTTY_RESOURCES_PATH:-}" ]; then
+            SRC_DIR="$ARGON_GHOSTTY_RESOURCES_PATH"
+          else
+            SRC_DIR="$REPO_ROOT/target/libghostty/native/share/ghostty"
+          fi
           DEST_DIR="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/ghostty"
           if [ -d "$SRC_DIR" ]; then
             rm -rf "$DEST_DIR"
@@ -84,7 +95,15 @@ targets:
         script: |
           set -euo pipefail
           REPO_ROOT="$(cd "$SRCROOT/../.." && pwd)"
-          CLI_PATH="$REPO_ROOT/target/release/argon"
+          if [ -n "${ARGON_BUNDLED_CLI_PATH:-}" ]; then
+            CLI_PATH="$ARGON_BUNDLED_CLI_PATH"
+          else
+            CLI_PATH="$REPO_ROOT/target/release/argon"
+          fi
+          if [ ! -f "$CLI_PATH" ]; then
+            echo "error: bundled argon CLI not found at $CLI_PATH" >&2
+            exit 1
+          fi
           DEST_DIR="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/bin"
           mkdir -p "$DEST_DIR"
           cp "$CLI_PATH" "$DEST_DIR/argon"
@@ -115,12 +134,13 @@ targets:
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: true
-        "OTHER_LDFLAGS[arch=*]": "-lstdc++ -force_load $(TARGET_BUILD_DIR)/libghostty-fat.a"
+        "OTHER_LDFLAGS[arch=*]": "-lstdc++ -force_load $(TARGET_BUILD_DIR)/$(ARGON_GHOSTTY_STATIC_LIB)"
         # Embedded Ghostty runtime paths used by the terminal renderer.
+        ARGON_GHOSTTY_STATIC_LIB: "libghostty-fat.a"
         ARGON_GHOSTTYKIT_PATH: "$(SRCROOT)/../../target/libghostty/native/macos/GhosttyKit.xcframework"
         ARGON_GHOSTTY_RESOURCES_PATH: "$(SRCROOT)/../../target/libghostty/native/share/ghostty"
         ARGON_APPCAST_FEED_URL: ""
-        SPARKLE_PUBLIC_ED_KEY: ""
+        SPARKLE_PUBLIC_ED_KEY: "VOqf6oj0ku8jGXlujf5+bwHAMI10fnBppdY/+7MOaZE="
 
   ArgonTests:
     type: bundle.unit-test

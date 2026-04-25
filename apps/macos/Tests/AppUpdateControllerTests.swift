@@ -19,6 +19,20 @@ struct AppUpdateControllerTests {
     #expect(configuration.isConfigured)
   }
 
+  @Test("configuration requires the Sparkle public key")
+  func configurationRequiresTheSparklePublicKey() {
+    let configuration = AppUpdateConfiguration(
+      infoDictionary: [
+        "SUFeedURL": "https://example.com/appcast.xml",
+        "SUPublicEDKey": "",
+      ]
+    )
+
+    #expect(configuration.feedURL?.absoluteString == "https://example.com/appcast.xml")
+    #expect(configuration.publicEDKey == nil)
+    #expect(!configuration.isConfigured)
+  }
+
   @Test("configuration ignores blank Sparkle values")
   func configurationIgnoresBlankSparkleValues() {
     let configuration = AppUpdateConfiguration(

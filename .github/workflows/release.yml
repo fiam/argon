@@ -1,0 +1,276 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      release_as:
+        description: Force the next release version (for example 0.2.0)
+        required: false
+        type: string
+      publish_tag:
+        description: Existing or new release tag to publish assets for
+        required: false
+        type: string
+      publish_version:
+        description: Version string that corresponds to publish_tag
+        required: false
+        type: string
+      publish_ref:
+        description: Git ref to build for manual publish (defaults to this workflow commit)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  id-token: write
+  pages: write
+  pull-requests: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release-please:
+    name: Release Please
+    if: ${{ github.event_name != 'workflow_dispatch' || (github.event.inputs.publish_tag == '' && github.event.inputs.publish_version == '') }}
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      release_sha: ${{ steps.release.outputs.sha }}
+      release_tag: ${{ steps.release.outputs.tag_name }}
+      release_version: ${{ steps.release.outputs.version }}
+
+    steps:
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN != '' && secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          release-as: ${{ github.event.inputs.release_as }}
+
+  publish-release:
+    name: Build And Publish Release
+    needs: release-please
+    if: ${{ always() && (needs.release-please.outputs.release_created == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_tag != '' && github.event.inputs.publish_version != '')) }}
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      ARGON_PUBLISH_TAG: ${{ github.event.inputs.publish_tag != '' && github.event.inputs.publish_tag || needs.release-please.outputs.release_tag }}
+      ARGON_PUBLISH_VERSION: ${{ github.event.inputs.publish_version != '' && github.event.inputs.publish_version || needs.release-please.outputs.release_version }}
+      ARGON_PUBLISH_REF: ${{ github.event.inputs.publish_tag != '' && (github.event.inputs.publish_ref != '' && github.event.inputs.publish_ref || github.sha) || needs.release-please.outputs.release_sha }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.ARGON_PUBLISH_REF }}
+          submodules: recursive
+
+      - name: Validate release secrets
+        env:
+          APPLE_CODESIGN_CERT_P12_BASE64: ${{ secrets.APPLE_CODESIGN_CERT_P12_BASE64 }}
+          APPLE_CODESIGN_CERT_PASSWORD: ${{ secrets.APPLE_CODESIGN_CERT_PASSWORD }}
+          APPLE_DEVELOPER_ID_APPLICATION: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION }}
+          APPLE_DEVELOPER_TEAM_ID: ${{ secrets.APPLE_DEVELOPER_TEAM_ID }}
+          APPLE_NOTARY_API_KEY_ID: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
+          APPLE_NOTARY_API_ISSUER_ID: ${{ secrets.APPLE_NOTARY_API_ISSUER_ID }}
+          APPLE_NOTARY_API_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_API_PRIVATE_KEY }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+          SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
+        run: |
+          required_vars=(
+            APPLE_CODESIGN_CERT_P12_BASE64
+            APPLE_CODESIGN_CERT_PASSWORD
+            APPLE_DEVELOPER_ID_APPLICATION
+            APPLE_DEVELOPER_TEAM_ID
+            APPLE_NOTARY_API_KEY_ID
+            APPLE_NOTARY_API_ISSUER_ID
+            APPLE_NOTARY_API_PRIVATE_KEY
+            HOMEBREW_TAP_DEPLOY_KEY
+            SPARKLE_PRIVATE_ED_KEY
+            SPARKLE_PUBLIC_ED_KEY
+          )
+
+          missing=()
+          for name in "${required_vars[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing required release secret(s) or variable(s): %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Install build tools
+        run: brew install xcodegen zig@0.15 uv
+
+      - name: Install Metal Toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Install Rust targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Import Developer ID certificate
+        uses: Apple-Actions/import-codesign-certs@b610f78488812c1e56b20e6df63ec42d833f2d14 # v6.0.0
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CODESIGN_CERT_P12_BASE64 }}
+          p12-password: ${{ secrets.APPLE_CODESIGN_CERT_PASSWORD }}
+
+      - name: Write App Store Connect API key
+        env:
+          APPLE_NOTARY_API_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_API_PRIVATE_KEY }}
+          APPLE_NOTARY_API_KEY_ID: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
+        run: |
+          KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_NOTARY_API_KEY_ID}.p8"
+          printf '%s' "$APPLE_NOTARY_API_PRIVATE_KEY" > "$KEY_PATH"
+          echo "APPLE_NOTARY_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Write Homebrew tap deploy key
+        env:
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          KEY_PATH="$RUNNER_TEMP/homebrew_tap"
+          printf '%s\n' "$HOMEBREW_TAP_DEPLOY_KEY" > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          echo "ARGON_HOMEBREW_TAP_SSH_KEY=$KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Compute release build number
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN != '' && secrets.RELEASE_PLEASE_TOKEN || github.token }}
+        run: |
+          BUILD_NUMBER="$(
+            gh api "repos/${{ github.repository }}/releases" --paginate \
+              --jq '[.[] | select(.draft == false and .prerelease == false and .tag_name != "${{ env.ARGON_PUBLISH_TAG }}")] | length'
+          )"
+          if [[ -z "$BUILD_NUMBER" || ! "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "invalid release build number: ${BUILD_NUMBER:-<empty>}" >&2
+            exit 1
+          fi
+          echo "ARGON_BUILD_NUMBER=$((BUILD_NUMBER + 1))" >> "$GITHUB_ENV"
+
+      - name: Build signed and notarized release artifacts
+        env:
+          ARGON_RELEASE_TAG: ${{ env.ARGON_PUBLISH_TAG }}
+          ARGON_REPOSITORY: ${{ github.repository }}
+          ARGON_BUILD_NUMBER: ${{ env.ARGON_BUILD_NUMBER }}
+          ARGON_CODESIGN_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION }}
+          ARGON_APPLE_TEAM_ID: ${{ secrets.APPLE_DEVELOPER_TEAM_ID }}
+          ARGON_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
+          ARGON_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_API_ISSUER_ID }}
+          ARGON_NOTARY_KEY_FILE: ${{ env.APPLE_NOTARY_API_KEY_PATH }}
+          ARGON_APPCAST_FEED_URL: ${{ vars.ARGON_APPCAST_FEED_URL != '' && vars.ARGON_APPCAST_FEED_URL || format('https://github.com/{0}/releases/latest/download/appcast.xml', github.repository) }}
+          ARGON_RELEASE_BUNDLE_IDENTIFIER: ${{ vars.ARGON_RELEASE_BUNDLE_IDENTIFIER }}
+          SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+          SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
+        run: ./scripts/build-release-assets.sh "${{ env.ARGON_PUBLISH_VERSION }}"
+
+      - name: Ensure GitHub release exists
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN != '' && secrets.RELEASE_PLEASE_TOKEN || github.token }}
+        run: |
+          if gh release view "${{ env.ARGON_PUBLISH_TAG }}" >/dev/null 2>&1; then
+            exit 0
+          fi
+          gh release create "${{ env.ARGON_PUBLISH_TAG }}" \
+            --title "Argon ${{ env.ARGON_PUBLISH_VERSION }}" \
+            --notes "" \
+            --target "${{ env.ARGON_PUBLISH_REF }}"
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN != '' && secrets.RELEASE_PLEASE_TOKEN || github.token }}
+        run: |
+          assets=(
+            "dist/Argon-${{ env.ARGON_PUBLISH_VERSION }}.dmg"
+            "dist/Argon-${{ env.ARGON_PUBLISH_VERSION }}.zip"
+            "dist/Argon.dmg"
+            "dist/Argon.zip"
+            "dist/checksums.txt"
+            "dist/release-metadata.json"
+            "dist/argon.rb"
+          )
+
+          if [[ -f dist/appcast.xml ]]; then
+            assets+=("dist/appcast.xml")
+          fi
+
+          gh release upload "${{ env.ARGON_PUBLISH_TAG }}" "${assets[@]}" --clobber
+
+      - name: Prepare Pages artifact
+        run: |
+          rm -rf .pages-dist
+          mkdir -p .pages-dist
+          cp -R website/. .pages-dist/
+          cp dist/appcast.xml .pages-dist/appcast.xml
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: .pages-dist
+
+      - name: Publish Homebrew tap
+        env:
+          ARGON_REPOSITORY: ${{ github.repository }}
+          ARGON_HOMEBREW_TAP_REPOSITORY: ${{ vars.ARGON_HOMEBREW_TAP_REPOSITORY != '' && vars.ARGON_HOMEBREW_TAP_REPOSITORY || 'fiam/homebrew-tap' }}
+          ARGON_HOMEBREW_TAP_SSH_KEY: ${{ env.ARGON_HOMEBREW_TAP_SSH_KEY }}
+        run: |
+          ./scripts/publish-homebrew-tap.sh \
+            --cask dist/argon.rb \
+            --tap-repo "$ARGON_HOMEBREW_TAP_REPOSITORY" \
+            --ssh-key "$ARGON_HOMEBREW_TAP_SSH_KEY" \
+            --app-repo "$ARGON_REPOSITORY"
+
+      - name: Upload release bundle as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v4.6.2
+        with:
+          name: argon-release-${{ env.ARGON_PUBLISH_TAG }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish release summary
+        run: |
+          {
+            echo "## Published release"
+            echo
+            echo "- Tag: \`${{ env.ARGON_PUBLISH_TAG }}\`"
+            echo "- Version: \`${{ env.ARGON_PUBLISH_VERSION }}\`"
+            echo "- Artifacts: signed universal app, notarized DMG, Sparkle appcast asset, generated Homebrew cask"
+            echo "- Homebrew tap: \`${{ vars.ARGON_HOMEBREW_TAP_REPOSITORY != '' && vars.ARGON_HOMEBREW_TAP_REPOSITORY || 'fiam/homebrew-tap' }}\`"
+            echo
+            echo '```text'
+            cat dist/checksums.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-pages:
+    name: Deploy Pages
+    needs: publish-release
+    if: ${{ needs.publish-release.result == 'success' }}
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

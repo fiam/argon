@@ -22,7 +22,7 @@ struct AppUpdateConfiguration: Equatable {
   }
 
   var isConfigured: Bool {
-    feedURL != nil
+    feedURL != nil && publicEDKey != nil
   }
 
   private static func stringValue(

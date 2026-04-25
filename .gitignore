@@ -1,4 +1,7 @@
 /target
+/.derived-release/
+/.sparkle-tools/
+/dist/
 /.claude/
 *.xcodeproj
 *.xcworkspace
