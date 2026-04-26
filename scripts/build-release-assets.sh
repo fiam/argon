@@ -292,8 +292,22 @@ require_arches "$APP_EXECUTABLE_PATH"
 require_arches "$BUNDLED_CLI_PATH"
 
 if [[ "$SIGNED_RELEASE" == "true" ]]; then
+  codesign --force \
+    --sign "$ARGON_CODESIGN_IDENTITY" \
+    --options runtime \
+    --timestamp \
+    "$BUNDLED_CLI_PATH"
+
+  codesign --force \
+    --sign "$ARGON_CODESIGN_IDENTITY" \
+    --options runtime \
+    --timestamp \
+    --entitlements "$ROOT_DIR/apps/macos/Resources/Argon.entitlements" \
+    "$APP_PATH"
+
   codesign --verify --deep --strict --verbose=2 "$APP_PATH"
   require_hardened_runtime "$APP_PATH"
+  require_hardened_runtime "$BUNDLED_CLI_PATH"
 fi
 
 if [[ "$NOTARIZED_RELEASE" == "true" ]]; then
