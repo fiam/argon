@@ -2866,17 +2866,16 @@ mod tests {
         let envs = vec![("ARGON_SESSION_ID", "test-session".to_string())];
         spawn_desktop_command(command, temp.path(), &envs).expect("spawn desktop command");
 
+        let mut child_sid = String::new();
         for _ in 0..20 {
-            if sid_path.exists() {
+            child_sid = fs::read_to_string(&sid_path).unwrap_or_default();
+            child_sid = child_sid.trim().to_string();
+            if !child_sid.is_empty() {
                 break;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
 
-        let child_sid = fs::read_to_string(&sid_path)
-            .expect("child sid file")
-            .trim()
-            .to_string();
         assert!(!child_sid.is_empty(), "child sid should not be empty");
 
         let parent_sid = unsafe { libc::getsid(0) };
