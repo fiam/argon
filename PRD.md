@@ -72,6 +72,8 @@ screen anymore. The workspace window is.
   bookkeeping.
 - Make terminals first-class so coding work can happen inside Argon, not
   beside it.
+- Make agent activity visible so humans can tell which agents are thinking,
+  idle, blocked, or done without opening every terminal.
 - Keep review explicit, native, and machine-readable.
 - Detect merge conflicts continuously as the base branch changes.
 - Route merge-back and conflict-fix actions through the active coder
@@ -110,6 +112,8 @@ screen anymore. The workspace window is.
   generation should be driven through a visible agent action path.
 - Deterministic state: worktree status, review status, and conflict status
   should be explicit and inspectable.
+- Human-visible agent state: Argon should expose whether agents are
+  thinking, waiting, idle, or finished at the tab and workspace levels.
 - Machine-readable first: CLI and internal contracts should stay stable
   for agent workflows.
 - Human-convenient launch: the same CLI should be ergonomic for users who
@@ -236,6 +240,7 @@ The left pane must list all worktrees for the repository, including:
 - filesystem path
 - selected state
 - active agent count
+- overall agent status
 - diff status summary
 - review status summary
 - conflict indicator
@@ -267,9 +272,55 @@ Requirements:
 - users can create a new shell tab
 - tabs stay associated with one worktree
 - tab titles should expose worktree + terminal identity
+- agent tabs should surface current agent activity, including when the
+  agent appears to be thinking
 - closed tabs should not destroy worktree state
 
-#### FR-5 Diff Inspector
+#### FR-5 Agent Activity Awareness
+
+Argon should infer and display the current activity state of each agent
+terminal.
+
+At minimum, Argon should distinguish:
+
+- unknown
+- idle
+- thinking
+- running a command
+- waiting for human input
+- finished
+- failed
+
+Detection should use the most reliable available signal for each agent:
+
+- structured control-channel events when available
+- terminal title or status text emitted by supported agents
+- process lifecycle and exit status
+- conservative terminal-output heuristics as a fallback
+
+Many agents write transient status text near the top of the terminal or tab
+area while they are thinking. Argon should use Ghostty integration points to
+observe that status where possible, but the UI must treat heuristic detection
+as best-effort and allow an unknown state.
+
+The tab strip must show agent activity directly on each agent tab, with a
+clear visual treatment for thinking agents.
+
+The worktree sidebar row must aggregate agent activity for that worktree so
+the user can scan the workspace list and see whether any agent is thinking,
+blocked, failed, or done without selecting the worktree.
+
+Argon should include a setting:
+
+- `Prevent sleep while agents are thinking`
+
+The setting should default to enabled. When enabled, Argon should prevent
+system sleep while any agent tab is in the thinking state. The prevention
+must end promptly when no agent is thinking, the relevant workspace closes,
+or Argon exits. The UI should make this behavior discoverable without
+interrupting normal agent work.
+
+#### FR-6 Diff Inspector
 
 The right pane must show diff information for the selected worktree
 relative to its configured base branch.
@@ -282,7 +333,7 @@ It must include:
 - review session status if a review exists
 - last updated timestamp or refresh state
 
-#### FR-6 Review Action
+#### FR-7 Review Action
 
 The right pane must expose a "Review" action that opens the existing
 review UI for the selected worktree.
@@ -305,7 +356,7 @@ The captured summary must be:
 - editable by the human before review submission
 - passed to reviewer agents as context
 
-#### FR-7 Merge Back Action
+#### FR-8 Merge Back Action
 
 The right pane must expose a "Merge Back" action for the selected
 worktree.
@@ -331,7 +382,7 @@ On successful merge-back, Argon should offer or automatically perform:
 
 based on repository configuration.
 
-#### FR-8 Continuous Conflict Detection
+#### FR-9 Continuous Conflict Detection
 
 Argon must continuously detect whether each open worktree conflicts with
 the latest base branch.
@@ -346,7 +397,7 @@ Triggers:
 Conflict state must update in the workspace UI without requiring the user
 to reopen the window.
 
-#### FR-9 Fix Conflicts Action
+#### FR-10 Fix Conflicts Action
 
 When a worktree is marked conflicted, the right pane must expose a
 "Fix Conflicts" action.
@@ -357,7 +408,7 @@ This action uses the same agent-selection rules as merge-back:
 - multiple eligible coder agents: ask the user to choose
 - no eligible coder agents: prompt the user to launch one
 
-#### FR-10 GitHub Detection and PR Action
+#### FR-11 GitHub Detection and PR Action
 
 Argon must automatically detect when the repository is connected to
 GitHub.
@@ -373,7 +424,7 @@ Phase 1 behavior may be:
 
 Later milestones may add direct PR creation and status sync.
 
-#### FR-11 Explicit State Model
+#### FR-12 Explicit State Model
 
 Review state must remain explicit:
 
@@ -392,7 +443,7 @@ Each worktree should track at least:
 - terminal / agent activity state
 - merge readiness state
 
-#### FR-12 Review Handoff Context
+#### FR-13 Review Handoff Context
 
 When a review is launched from the workspace, reviewer agents must receive
 the coder summary as first-class context, not just the raw diff.
@@ -404,7 +455,7 @@ The summary should resemble a PR description and include:
 - testing performed
 - known risks or follow-ups
 
-#### FR-13 Prompt-Driven Agent Interop
+#### FR-14 Prompt-Driven Agent Interop
 
 Agent workflows must be usable without requiring a skill installation.
 
@@ -417,7 +468,7 @@ Requirements:
 - skills may accelerate the workflow, but they must not be the only
   supported path
 
-#### FR-14 Post-Commit Review Reset
+#### FR-15 Post-Commit Review Reset
 
 Argon must not continue showing an old review decision as if it applied to
 new changes after the coder agent commits or otherwise materially changes
@@ -432,7 +483,7 @@ Requirements:
 - the UI must refresh so fresh post-commit changes appear unreviewed unless
   a new review session has been created for them
 
-#### FR-15 Persistence
+#### FR-16 Persistence
 
 Argon must persist enough workspace state to restore:
 
@@ -445,13 +496,14 @@ Argon must persist enough workspace state to restore:
 
 Terminal scrollback persistence is optional in the first milestone.
 
-#### FR-16 Configuration
+#### FR-17 Configuration
 
 The repository-level config must support:
 
 - base branch selection
 - merge-back cleanup policy
 - default agent selection
+- prevent sleep while agents are thinking, default enabled
 - GitHub remote preference if multiple remotes exist
 
 ### 10.2 Non-Functional Requirements
@@ -473,6 +525,8 @@ The repository-level config must support:
 - worktree detection and branch mapping should be reproducible
 - conflict status should be derived from explicit Git checks, not heuristics
 - action availability should be based on explicit state, not inferred UI timing
+- heuristic agent activity detection must expose confidence and fall back to
+  `unknown` instead of presenting uncertain state as fact
 
 #### NFR-4 Machine-Readable Contracts
 
@@ -506,6 +560,7 @@ The repository-level config must support:
 - `review_state`
 - `conflict_state`
 - `merge_state`
+- `aggregate_activity_state`
 - `agent_tabs`
 - `latest_summary`
 - `pull_request`
@@ -520,6 +575,9 @@ The repository-level config must support:
 - `launch_command`
 - `agent_capabilities`
 - `status`
+- `activity_state`
+- `activity_confidence`
+- `last_activity_signal_at`
 
 #### PullRequestReference
 
@@ -548,7 +606,8 @@ Recommended axes:
 - `merge_state`
   `idle` | `ready` | `merging` | `merged` | `failed`
 - `activity_state`
-  `idle` | `running_agent` | `running_shell_only`
+  `unknown` | `idle` | `thinking` | `running_command` | `waiting_for_human`
+  | `finished` | `failed` | `running_shell_only`
 
 This prevents review lifecycle from being confused with Git mergeability or
 terminal activity.
@@ -559,6 +618,7 @@ terminal activity.
 
 - worktree rows with branch, short path, and badges
 - inline status badges for review / conflict / PR presence
+- aggregate agent activity badges, including a visible thinking state
 - sorting by base worktree first, then active worktrees, then recency
 - action affordance to create a new worktree
 
@@ -567,6 +627,7 @@ terminal activity.
 - tab strip scoped to the selected worktree
 - new agent tab button
 - new shell tab button
+- per-tab agent activity indicator
 - terminal view embedded with Ghostty
 - optional empty state when no tabs exist for the selected worktree
 
@@ -818,10 +879,14 @@ Exit criteria:
 - support bare shell tabs
 - support agent tabs
 - bind tabs to selected worktree
+- detect and display agent activity state in each agent tab
+- add the default-enabled sleep prevention setting for thinking agents
+- aggregate agent activity state into each worktree row
 
 Exit criteria:
 
-- user can do actual coding work inside Argon
+- user can do actual coding work inside Argon and can see which agents are
+  actively thinking without opening each terminal
 
 ### Phase 4 - Diff Inspector and Review Handoff
 
@@ -900,7 +965,7 @@ Exit criteria:
 | M1 | CLI routing | `argon <dir>` opens workspace, `argon review <dir>` opens review, compatibility preserved. |
 | M2 | Workspace shell | Left / center / right layout ships with repository-scoped window model. |
 | M3 | Worktree management | Worktree discovery, selection, status badges, and persistence land. |
-| M4 | Terminal tabs | Agent tabs and shell tabs work in the center pane. |
+| M4 | Terminal tabs | Agent tabs and shell tabs work in the center pane, with visible agent activity and sleep prevention. |
 | M5 | Diff inspector | Right pane shows diff summary, full `--stat`, and review entry point. |
 | M6 | Review handoff | Coder summary is requested and injected into review / reviewer context. |
 | M7 | Merge-back flow | Merge-back action delegates to coder agent and supports close / cleanup. |
