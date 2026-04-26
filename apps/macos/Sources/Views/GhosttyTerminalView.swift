@@ -233,6 +233,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
   var waitAfterCommand = true
   var onProcessExit: (() -> Void)?
   var onAttention: ((TerminalAttentionEvent) -> Void)?
+  var onTitleChange: ((TerminalTitleChange) -> Void)?
   var focusRequestID: UUID?
 
   @MainActor
@@ -257,6 +258,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
     waitAfterCommand: Bool = true,
     onProcessExit: (() -> Void)? = nil,
     onAttention: ((TerminalAttentionEvent) -> Void)? = nil,
+    onTitleChange: ((TerminalTitleChange) -> Void)? = nil,
     focusRequestID: UUID? = nil
   ) {
     self.controller = controller
@@ -267,6 +269,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
     self.waitAfterCommand = waitAfterCommand
     self.onProcessExit = onProcessExit
     self.onAttention = onAttention
+    self.onTitleChange = onTitleChange
     self.focusRequestID = focusRequestID
   }
 
@@ -293,6 +296,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
       waitAfterCommand: waitAfterCommand,
       onProcessExit: onProcessExit,
       onAttention: onAttention,
+      onTitleChange: onTitleChange,
       focusRequestID: focusRequestID
     )
   }
@@ -302,6 +306,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
     nsView.updateGhosttyConfigurationText(ghosttyConfigurationText)
     nsView.updateProcessExitHandler(onProcessExit)
     nsView.updateAttentionHandler(onAttention)
+    nsView.updateTitleChangeHandler(onTitleChange)
     nsView.updateFocusRequestID(focusRequestID)
   }
 
@@ -371,6 +376,7 @@ final class GhosttyTerminalHostView: NSView {
   private let waitAfterCommand: Bool
   private var onProcessExit: (() -> Void)?
   private var onAttention: ((TerminalAttentionEvent) -> Void)?
+  private var onTitleChange: ((TerminalTitleChange) -> Void)?
   private var pendingFocusRequestID: UUID?
   private var appliedFocusRequestID: UUID?
   private var callbackUserdata: UnsafeMutableRawPointer?
@@ -410,6 +416,7 @@ final class GhosttyTerminalHostView: NSView {
     waitAfterCommand: Bool,
     onProcessExit: (() -> Void)?,
     onAttention: ((TerminalAttentionEvent) -> Void)?,
+    onTitleChange: ((TerminalTitleChange) -> Void)?,
     focusRequestID: UUID?
   ) {
     self.controller = controller
@@ -420,6 +427,7 @@ final class GhosttyTerminalHostView: NSView {
     self.waitAfterCommand = waitAfterCommand
     self.onProcessExit = onProcessExit
     self.onAttention = onAttention
+    self.onTitleChange = onTitleChange
     self.pendingFocusRequestID = focusRequestID
     super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
     self.callbackUserdata = GhosttyHostRegistry.register(self, terminalID: terminalID)
@@ -491,6 +499,10 @@ final class GhosttyTerminalHostView: NSView {
 
   func updateAttentionHandler(_ onAttention: ((TerminalAttentionEvent) -> Void)?) {
     self.onAttention = onAttention
+  }
+
+  func updateTitleChangeHandler(_ onTitleChange: ((TerminalTitleChange) -> Void)?) {
+    self.onTitleChange = onTitleChange
   }
 
   func updateFocusRequestID(_ focusRequestID: UUID?) {
@@ -1096,6 +1108,10 @@ final class GhosttyTerminalHostView: NSView {
     onAttention?(event)
   }
 
+  private func handleTitleChange(_ event: TerminalTitleChange) {
+    onTitleChange?(event)
+  }
+
   private func applyPendingFocusRequestIfNeeded() {
     guard let requestID = pendingFocusRequestID, appliedFocusRequestID != requestID else { return }
     guard window != nil else { return }
@@ -1252,11 +1268,20 @@ final class GhosttyTerminalHostView: NSView {
     target: ghostty_target_s,
     action: ghostty_action_s
   ) -> Bool {
-    guard let event = attentionEvent(from: action) else { return false }
+    if let event = attentionEvent(from: action) {
+      let userdataBox = UnsafeRawPointerBox(value: userdata(from: app, target: target))
+      MainActorDispatch.async {
+        guard let host = host(from: userdataBox.value) else { return }
+        host.handleAttention(event)
+      }
+      return true
+    }
+
+    guard let event = titleChange(from: action) else { return false }
     let userdataBox = UnsafeRawPointerBox(value: userdata(from: app, target: target))
     MainActorDispatch.async {
       guard let host = host(from: userdataBox.value) else { return }
-      host.handleAttention(event)
+      host.handleTitleChange(event)
     }
     return true
   }
@@ -1366,6 +1391,23 @@ final class GhosttyTerminalHostView: NSView {
     default:
       return nil
     }
+  }
+
+  nonisolated private static func titleChange(from action: ghostty_action_s)
+    -> TerminalTitleChange?
+  {
+    switch action.tag {
+    case GHOSTTY_ACTION_SET_TITLE:
+      return .window(actionString(action.action.set_title.title))
+    case GHOSTTY_ACTION_SET_TAB_TITLE:
+      return .tab(actionString(action.action.set_tab_title.title))
+    default:
+      return nil
+    }
+  }
+
+  nonisolated private static func actionString(_ pointer: UnsafePointer<CChar>?) -> String {
+    pointer.flatMap { String(cString: $0, encoding: .utf8) } ?? ""
   }
 }
 

@@ -19,6 +19,24 @@ enum WorkspaceTerminalKind: Equatable, Sendable {
   }
 }
 
+enum WorkspaceAgentActivityState: Equatable, Sendable {
+  case idle
+  case thinking
+  case waitingForHuman
+}
+
+struct WorktreeAgentActivitySummary: Equatable, Sendable {
+  let waitingForHumanCount: Int
+  let thinkingCount: Int
+  let runningAgentCount: Int
+
+  static let empty = WorktreeAgentActivitySummary(
+    waitingForHumanCount: 0,
+    thinkingCount: 0,
+    runningAgentCount: 0
+  )
+}
+
 struct WorkspaceAgentLaunchRequest: Sendable {
   let displayName: String
   let command: String
@@ -118,6 +136,8 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
   var isRunning: Bool
   var hasAttention: Bool
   var isShowingBellIndicator: Bool
+  var agentActivityState: WorkspaceAgentActivityState
+  var lastObservedTerminalTitle: String?
   var lastDeselectedAt: Date?
 
   init(
@@ -138,6 +158,8 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
     isRunning: Bool = true,
     hasAttention: Bool = false,
     isShowingBellIndicator: Bool = false,
+    agentActivityState: WorkspaceAgentActivityState = .idle,
+    lastObservedTerminalTitle: String? = nil,
     lastDeselectedAt: Date? = nil
   ) {
     self.id = id
@@ -157,6 +179,8 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
     self.isRunning = isRunning
     self.hasAttention = hasAttention
     self.isShowingBellIndicator = isShowingBellIndicator
+    self.agentActivityState = agentActivityState
+    self.lastObservedTerminalTitle = lastObservedTerminalTitle
     self.lastDeselectedAt = lastDeselectedAt
   }
 }

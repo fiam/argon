@@ -67,6 +67,113 @@ struct WorkspaceStateTests {
     #expect(state.activeAgentCount(for: "/tmp/repo") == 0)
   }
 
+  @Test("agent title changes mark the tab thinking until the idle timeout")
+  @MainActor
+  func agentTitleChangesMarkTheTabThinkingUntilIdleTimeout() async throws {
+    let previousTimeout = WorkspaceState.agentThinkingIdleTimeout
+    WorkspaceState.agentThinkingIdleTimeout = .milliseconds(40)
+    defer {
+      WorkspaceState.agentThinkingIdleTimeout = previousTimeout
+    }
+
+    let state = makeState()
+    let tab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          sandboxEnabled: false
+        ))
+    )
+
+    state.recordTerminalTitleChange("working", for: tab.id)
+
+    #expect(tab.agentActivityState == .thinking)
+    #expect(
+      state.agentActivitySummary(for: "/tmp/repo")
+        == WorktreeAgentActivitySummary(
+          waitingForHumanCount: 0,
+          thinkingCount: 1,
+          runningAgentCount: 1
+        )
+    )
+    #expect(await waitUntil { tab.agentActivityState == .idle })
+  }
+
+  @Test("repeated agent title values do not refresh thinking")
+  @MainActor
+  func repeatedAgentTitleValuesDoNotRefreshThinking() async throws {
+    let previousTimeout = WorkspaceState.agentThinkingIdleTimeout
+    WorkspaceState.agentThinkingIdleTimeout = .milliseconds(40)
+    defer {
+      WorkspaceState.agentThinkingIdleTimeout = previousTimeout
+    }
+
+    let state = makeState()
+    let tab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          sandboxEnabled: false
+        ))
+    )
+
+    state.recordTerminalTitleChange("working", for: tab.id)
+    #expect(await waitUntil { tab.agentActivityState == .idle })
+
+    state.recordTerminalTitleChange("working", for: tab.id)
+
+    #expect(tab.agentActivityState == .idle)
+  }
+
+  @Test("desktop notifications mark agent tabs waiting for human")
+  @MainActor
+  func desktopNotificationsMarkAgentTabsWaitingForHuman() throws {
+    let state = makeState()
+    let tab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          sandboxEnabled: false
+        ))
+    )
+
+    state.markAgentWaitingForHuman(tab.id)
+
+    #expect(tab.agentActivityState == .waitingForHuman)
+    #expect(
+      state.agentActivitySummary(for: "/tmp/repo")
+        == WorktreeAgentActivitySummary(
+          waitingForHumanCount: 1,
+          thinkingCount: 0,
+          runningAgentCount: 1
+        )
+    )
+
+    state.selectTerminalTab(tab.id)
+
+    #expect(tab.agentActivityState == .idle)
+  }
+
+  @Test("shell tabs do not participate in agent activity")
+  @MainActor
+  func shellTabsDoNotParticipateInAgentActivity() throws {
+    let state = makeState()
+    state.openShellTab()
+    let tab = try #require(state.selectedTerminalTab)
+
+    state.recordTerminalTitleChange("busy", for: tab.id)
+    state.markAgentWaitingForHuman(tab.id)
+
+    #expect(tab.agentActivityState == .idle)
+    #expect(state.agentActivitySummary(for: "/tmp/repo") == .empty)
+  }
+
   @Test("sandboxed tabs pass their tab id into the launch environment")
   @MainActor
   func sandboxedTabsPassTheirTabIDIntoTheLaunchEnvironment() throws {

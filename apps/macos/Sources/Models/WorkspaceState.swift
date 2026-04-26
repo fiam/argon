@@ -5,6 +5,7 @@ import Foundation
 final class WorkspaceState {
   nonisolated(unsafe) static var tabRestoreTestDelay: Duration?
   nonisolated(unsafe) static var terminalBellFlashDuration: Duration = .seconds(1)
+  nonisolated(unsafe) static var agentThinkingIdleTimeout: Duration = .seconds(1)
   nonisolated(unsafe) static var sessionRecordsProvider: (@Sendable () -> [AgentSessionRecord])?
   nonisolated(unsafe) static var sandboxfilePromptLoader:
     (@Sendable (String, SandboxfileLaunchKind) async throws -> SandboxfilePromptRequest?) = {
@@ -69,6 +70,7 @@ final class WorkspaceState {
   private var pendingSandboxedShellLaunchCount = 0
   private var isResolvingSandboxedShellLaunch = false
   private var terminalBellTasksByTabID: [UUID: Task<Void, Never>] = [:]
+  private var agentActivityIdleTasksByTabID: [UUID: Task<Void, Never>] = [:]
   private var activeAgentControlRequestsByID: [UUID: PendingWorkspaceAgentControlRequest] = [:]
   private var agentControlWatchTasksByRequestID: [UUID: Task<Void, Never>] = [:]
   private var pendingRestorableTabsByWorktreePath: [String: [PersistedWorkspaceTerminalTab]] = [:]
@@ -574,6 +576,21 @@ final class WorkspaceState {
     }
   }
 
+  func agentActivitySummary(for worktreePath: String) -> WorktreeAgentActivitySummary {
+    let tabs = terminalTabsByWorktreePath[normalizedPath(worktreePath)] ?? []
+    return tabs.reduce(into: .empty) { summary, tab in
+      guard case .agent = tab.kind, tab.isRunning else { return }
+
+      summary = WorktreeAgentActivitySummary(
+        waitingForHumanCount: summary.waitingForHumanCount
+          + (tab.agentActivityState == .waitingForHuman ? 1 : 0),
+        thinkingCount: summary.thinkingCount
+          + (tab.agentActivityState == .thinking ? 1 : 0),
+        runningAgentCount: summary.runningAgentCount + 1
+      )
+    }
+  }
+
   func worktreeNeedsAttention(for worktreePath: String) -> Bool {
     let tabs = terminalTabsByWorktreePath[normalizedPath(worktreePath)] ?? []
     return tabs.contains { $0.hasAttention }
@@ -1015,6 +1032,7 @@ final class WorkspaceState {
     else { return }
     selectedTerminalTabIDsByWorktreePath[worktreePath] = tabID
     tab.hasAttention = false
+    clearAgentWaitingForHuman(tabID)
     requestTerminalFocus(in: worktreePath)
     notifyRestorableStateChanged()
   }
@@ -1035,6 +1053,7 @@ final class WorkspaceState {
     if let tab = terminalTab(for: tabID) {
       tab.hasAttention = false
     }
+    clearAgentWaitingForHuman(tabID)
     requestTerminalFocus(in: normalizedWorktreePath)
     notifyRestorableStateChanged()
     return true
@@ -1045,6 +1064,34 @@ final class WorkspaceState {
     guard !tab.hasAttention else { return }
     tab.hasAttention = true
     notifyRestorableStateChanged()
+  }
+
+  func recordTerminalTitleChange(_ title: String, for tabID: UUID) {
+    guard let tab = terminalTab(for: tabID), tab.isRunning else { return }
+    guard case .agent = tab.kind else { return }
+
+    let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalizedTitle.isEmpty else {
+      tab.lastObservedTerminalTitle = nil
+      agentActivityIdleTasksByTabID.removeValue(forKey: tabID)?.cancel()
+      if tab.agentActivityState == .thinking {
+        tab.agentActivityState = .idle
+      }
+      return
+    }
+
+    guard tab.lastObservedTerminalTitle != normalizedTitle else { return }
+    tab.lastObservedTerminalTitle = normalizedTitle
+    tab.agentActivityState = .thinking
+    scheduleAgentActivityIdle(tabID)
+  }
+
+  func markAgentWaitingForHuman(_ tabID: UUID) {
+    guard let tab = terminalTab(for: tabID), tab.isRunning else { return }
+    guard case .agent = tab.kind else { return }
+
+    agentActivityIdleTasksByTabID.removeValue(forKey: tabID)?.cancel()
+    tab.agentActivityState = .waitingForHuman
   }
 
   func flashTerminalBell(_ tabID: UUID) {
@@ -1067,8 +1114,37 @@ final class WorkspaceState {
     }
   }
 
+  private func scheduleAgentActivityIdle(_ tabID: UUID) {
+    agentActivityIdleTasksByTabID.removeValue(forKey: tabID)?.cancel()
+
+    let timeout = Self.agentThinkingIdleTimeout
+    agentActivityIdleTasksByTabID[tabID] = Task { @MainActor [weak self] in
+      do {
+        try await Task.sleep(for: timeout)
+      } catch {
+        return
+      }
+
+      guard let self else { return }
+      self.agentActivityIdleTasksByTabID.removeValue(forKey: tabID)
+
+      guard let tab = self.terminalTab(for: tabID), tab.agentActivityState == .thinking else {
+        return
+      }
+      tab.agentActivityState = .idle
+    }
+  }
+
+  private func clearAgentWaitingForHuman(_ tabID: UUID) {
+    guard let tab = terminalTab(for: tabID), tab.agentActivityState == .waitingForHuman else {
+      return
+    }
+    tab.agentActivityState = .idle
+  }
+
   func closeTerminalTab(_ tabID: UUID) {
     terminalBellTasksByTabID.removeValue(forKey: tabID)?.cancel()
+    agentActivityIdleTasksByTabID.removeValue(forKey: tabID)?.cancel()
 
     for (worktreePath, tabs) in terminalTabsByWorktreePath {
       guard let index = tabs.firstIndex(where: { $0.id == tabID }) else { continue }
@@ -1094,7 +1170,9 @@ final class WorkspaceState {
 
   func handleTerminalExit(_ tabID: UUID, exitBehavior: WorkspaceFinishedTerminalBehavior) {
     guard let tab = terminalTab(for: tabID) else { return }
+    agentActivityIdleTasksByTabID.removeValue(forKey: tabID)?.cancel()
     tab.isRunning = false
+    tab.agentActivityState = .idle
 
     guard exitBehavior == .autoClose else { return }
 
@@ -1912,6 +1990,8 @@ final class WorkspaceState {
 
     let worktreePath = normalizedPath(worktree.path)
     for tab in terminalTabsByWorktreePath[worktreePath] ?? [] {
+      terminalBellTasksByTabID.removeValue(forKey: tab.id)?.cancel()
+      agentActivityIdleTasksByTabID.removeValue(forKey: tab.id)?.cancel()
       GhosttyTerminalView.releaseTerminal(tab.id)
     }
     terminalTabsByWorktreePath[worktreePath] = []
@@ -2138,6 +2218,8 @@ final class WorkspaceState {
       .flatMap { $0.map(\.id) }
 
     for tabID in removedTabIDs {
+      terminalBellTasksByTabID.removeValue(forKey: tabID)?.cancel()
+      agentActivityIdleTasksByTabID.removeValue(forKey: tabID)?.cancel()
       GhosttyTerminalView.releaseTerminal(tabID)
     }
 

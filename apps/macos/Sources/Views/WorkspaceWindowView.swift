@@ -521,7 +521,9 @@ private struct WorkspaceSidebarRow: View {
               )
             }
 
-            if needsAttention {
+            if let waitingForHumanAgentActivity {
+              WorkspaceSidebarAgentActivityIndicator(kind: waitingForHumanAgentActivity)
+            } else if needsAttention {
               WorkspaceSidebarMetadataItem(
                 label: "Needs attention",
                 symbolTint: .orange,
@@ -537,10 +539,8 @@ private struct WorkspaceSidebarRow: View {
               )
             }
 
-            if activeAgentCount > 0 {
-              WorkspaceSidebarMetadataItem(
-                label: activeAgentCount == 1 ? "1 agent" : "\(activeAgentCount) agents"
-              )
+            if let workingAgentActivity {
+              WorkspaceSidebarAgentActivityIndicator(kind: workingAgentActivity)
             }
 
             Spacer(minLength: 0)
@@ -603,6 +603,26 @@ private struct WorkspaceSidebarRow: View {
     workspaceState.activeAgentCount(for: worktree.path)
   }
 
+  private var agentActivitySummary: WorktreeAgentActivitySummary {
+    workspaceState.agentActivitySummary(for: worktree.path)
+  }
+
+  private var waitingForHumanAgentActivity: WorkspaceSidebarAgentActivityIndicator.Kind? {
+    guard agentActivitySummary.waitingForHumanCount > 0 else { return nil }
+    return .needsInput(count: agentActivitySummary.waitingForHumanCount)
+  }
+
+  private var workingAgentActivity: WorkspaceSidebarAgentActivityIndicator.Kind? {
+    guard agentActivitySummary.waitingForHumanCount == 0 else { return nil }
+    if agentActivitySummary.thinkingCount > 0 {
+      return .thinking(count: agentActivitySummary.thinkingCount)
+    }
+    if activeAgentCount > 0 {
+      return .active(count: activeAgentCount)
+    }
+    return nil
+  }
+
   private var reviewSnapshot: WorkspaceReviewSnapshot? {
     workspaceState.reviewSnapshot(for: worktree.path)
   }
@@ -638,12 +658,18 @@ private struct WorkspaceSidebarRow: View {
 
 private struct WorkspaceSidebarMetadataItem: View {
   let label: String
+  var symbolName: String? = nil
   var symbolTint: Color? = nil
   var accessibilityIdentifier: String? = nil
 
   var body: some View {
     HStack(spacing: 4) {
-      if let symbolTint {
+      if let symbolName {
+        Image(systemName: symbolName)
+          .font(.system(size: 9, weight: .semibold))
+          .foregroundStyle(symbolTint ?? .secondary)
+          .accessibilityHidden(true)
+      } else if let symbolTint {
         Circle()
           .fill(symbolTint)
           .frame(width: 6, height: 6)
@@ -658,6 +684,119 @@ private struct WorkspaceSidebarMetadataItem: View {
     .accessibilityElement(children: .combine)
     .accessibilityLabel(Text(label))
     .accessibilityIdentifier(accessibilityIdentifier ?? "")
+  }
+}
+
+private struct WorkspaceSidebarAgentActivityIndicator: View {
+  enum Kind: Equatable {
+    case needsInput(count: Int)
+    case thinking(count: Int)
+    case active(count: Int)
+
+    var symbolName: String {
+      switch self {
+      case .needsInput:
+        "exclamationmark.circle.fill"
+      case .thinking:
+        "sparkles"
+      case .active:
+        "sparkles.rectangle.stack"
+      }
+    }
+
+    var tint: Color {
+      switch self {
+      case .needsInput:
+        .orange
+      case .thinking:
+        Color(nsColor: .controlAccentColor)
+      case .active:
+        .secondary
+      }
+    }
+
+    var helpLabel: String {
+      switch self {
+      case .needsInput(let count):
+        count == 1 ? "Agent needs input" : "\(count) agents need input"
+      case .thinking(let count):
+        count == 1 ? "Agent thinking" : "\(count) agents thinking"
+      case .active(let count):
+        count == 1 ? "1 agent" : "\(count) agents"
+      }
+    }
+
+    var accessibilityIdentifier: String {
+      switch self {
+      case .needsInput:
+        "workspace-sidebar-agent-needs-input"
+      case .thinking:
+        "workspace-sidebar-agent-thinking"
+      case .active:
+        "workspace-sidebar-agent-active"
+      }
+    }
+  }
+
+  let kind: Kind
+  @State private var isPulsing = false
+
+  var body: some View {
+    Group {
+      switch kind {
+      case .thinking:
+        TimelineView(.animation) { context in
+          Image(systemName: kind.symbolName)
+            .rotationEffect(rotation(at: context.date))
+        }
+      case .needsInput:
+        Image(systemName: kind.symbolName)
+          .scaleEffect(isPulsing ? 1.12 : 0.96)
+          .opacity(isPulsing ? 1 : 0.72)
+      case .active:
+        Image(systemName: kind.symbolName)
+      }
+    }
+    .font(.system(size: 10, weight: .semibold))
+    .foregroundStyle(kind.tint)
+    .frame(width: 14, height: 14)
+    .help(kind.helpLabel)
+    .accessibilityLabel(Text(kind.helpLabel))
+    .accessibilityIdentifier(kind.accessibilityIdentifier)
+    .onAppear {
+      updatePulseAnimation()
+    }
+    .onChange(of: kind) { _, _ in
+      updatePulseAnimation()
+    }
+    .animation(pulseAnimation, value: isPulsing)
+  }
+
+  private func rotation(at date: Date) -> Angle {
+    let period = 2.0
+    let progress =
+      date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period)
+      / period
+    return .degrees(progress * 360)
+  }
+
+  private var pulseAnimation: Animation? {
+    if case .needsInput = kind {
+      return .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+    }
+    return nil
+  }
+
+  private func updatePulseAnimation() {
+    guard case .needsInput = kind else {
+      isPulsing = false
+      return
+    }
+
+    isPulsing = false
+    DispatchQueue.main.async {
+      isPulsing = true
+    }
   }
 }
 
@@ -1025,17 +1164,14 @@ private struct WorkspaceTerminalTabItem: View {
       Button(action: onSelect) {
         HStack(spacing: 5) {
           if case .agent = tab.kind {
-            AgentIconView(icon: resolvedAgentTabIconName, size: 12)
-              .foregroundStyle(.primary)
+            agentIcon
           } else {
             Image(systemName: tab.isSandboxed ? "terminal" : "lock.open")
               .font(.system(size: 11, weight: .medium))
           }
 
           ZStack {
-            Circle()
-              .fill(attentionIndicatorColor)
-              .frame(width: 6, height: 6)
+            activityIndicator
               .opacity(tab.isShowingBellIndicator ? 0 : 1)
 
             Image(systemName: "bell.fill")
@@ -1083,8 +1219,44 @@ private struct WorkspaceTerminalTabItem: View {
     }
   }
 
+  @ViewBuilder
+  private var agentIcon: some View {
+    if isThinking {
+      TimelineView(.animation) { context in
+        AgentIconView(icon: resolvedAgentTabIconName, size: 12)
+          .foregroundStyle(.primary)
+          .rotationEffect(thinkingRotation(at: context.date))
+      }
+    } else {
+      AgentIconView(icon: resolvedAgentTabIconName, size: 12)
+        .foregroundStyle(.primary)
+    }
+  }
+
   private var tabHelp: String {
-    "\(tab.title) in \(tab.worktreeLabel)\n\(tab.commandDescription)"
+    let activity =
+      if case .agent = tab.kind {
+        "\nAgent state: \(agentActivityHelpLabel)"
+      } else {
+        ""
+      }
+
+    return "\(tab.title) in \(tab.worktreeLabel)\n\(tab.commandDescription)\(activity)"
+  }
+
+  @ViewBuilder
+  private var activityIndicator: some View {
+    if tab.agentActivityState == .waitingForHuman, case .agent = tab.kind {
+      Image(systemName: "exclamationmark.circle.fill")
+        .font(.system(size: 9, weight: .semibold))
+        .foregroundStyle(Color.orange)
+        .frame(width: 10, height: 10)
+    } else {
+      Circle()
+        .fill(attentionIndicatorColor)
+        .frame(width: 6, height: 6)
+        .frame(width: 10, height: 10)
+    }
   }
 
   private var attentionIndicatorColor: Color {
@@ -1092,6 +1264,29 @@ private struct WorkspaceTerminalTabItem: View {
       return .orange
     }
     return tab.isRunning ? Color(nsColor: .systemGreen) : .secondary
+  }
+
+  private var isThinking: Bool {
+    tab.agentActivityState == .thinking
+  }
+
+  private var agentActivityHelpLabel: String {
+    switch tab.agentActivityState {
+    case .idle:
+      "idle"
+    case .thinking:
+      "thinking"
+    case .waitingForHuman:
+      "waiting for input"
+    }
+  }
+
+  private func thinkingRotation(at date: Date) -> Angle {
+    let period = 2.0
+    let progress =
+      date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period)
+      / period
+    return .degrees(progress * 360)
   }
 
   private var resolvedAgentTabIconName: String {
@@ -1451,6 +1646,10 @@ private struct WorkspaceTerminalStage: View {
             )
           },
           onAttention: { event in
+            if case .desktopNotification = event {
+              workspaceState.markAgentWaitingForHuman(tab.id)
+            }
+
             switch WorkspaceTerminalAttentionRouting.disposition(
               for: event,
               isVisibleTerminal: isVisibleTerminal(tabID: tab.id)
@@ -1466,6 +1665,9 @@ private struct WorkspaceTerminalStage: View {
                 tab: tab
               )
             }
+          },
+          onTitleChange: { titleChange in
+            workspaceState.recordTerminalTitleChange(titleChange.title, for: tab.id)
           },
           focusRequestID: isSelected ? workspaceState.selectedTerminalFocusRequestID : nil
         )
