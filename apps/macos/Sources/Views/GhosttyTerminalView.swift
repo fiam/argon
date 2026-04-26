@@ -235,6 +235,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
   var onAttention: ((TerminalAttentionEvent) -> Void)?
   var onTitleChange: ((TerminalTitleChange) -> Void)?
   var focusRequestID: UUID?
+  var uiTestReadySignal: String?
 
   @MainActor
   init(
@@ -247,6 +248,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
     self.terminalID = nil
     self.terminalFontSize = terminalFontSize
     self.ghosttyConfigurationText = ghosttyConfigurationText
+    self.uiTestReadySignal = "reviewer-tabs-appeared"
   }
 
   init(
@@ -259,7 +261,8 @@ struct GhosttyTerminalView: NSViewRepresentable {
     onProcessExit: (() -> Void)? = nil,
     onAttention: ((TerminalAttentionEvent) -> Void)? = nil,
     onTitleChange: ((TerminalTitleChange) -> Void)? = nil,
-    focusRequestID: UUID? = nil
+    focusRequestID: UUID? = nil,
+    uiTestReadySignal: String? = nil
   ) {
     self.controller = controller
     self.launch = launch
@@ -271,22 +274,17 @@ struct GhosttyTerminalView: NSViewRepresentable {
     self.onAttention = onAttention
     self.onTitleChange = onTitleChange
     self.focusRequestID = focusRequestID
+    self.uiTestReadySignal = uiTestReadySignal
   }
 
   func makeNSView(context: Context) -> GhosttyTerminalHostView {
     if let terminalID, let host = GhosttyHostRegistry.host(for: terminalID) {
       host.prepareForAttachment()
-      UITestAutomationSignal.write(
-        "ghostty-terminal-host-created",
-        to: UITestAutomationConfig.current().signalFilePath
-      )
+      writeUITestReadySignals()
       return host
     }
 
-    UITestAutomationSignal.write(
-      "ghostty-terminal-host-created",
-      to: UITestAutomationConfig.current().signalFilePath
-    )
+    writeUITestReadySignals()
     return GhosttyTerminalHostView(
       controller: controller,
       launch: launch,
@@ -299,6 +297,17 @@ struct GhosttyTerminalView: NSViewRepresentable {
       onTitleChange: onTitleChange,
       focusRequestID: focusRequestID
     )
+  }
+
+  private func writeUITestReadySignals() {
+    let signalFilePath = UITestAutomationConfig.current().signalFilePath
+    UITestAutomationSignal.write(
+      "ghostty-terminal-host-created",
+      to: signalFilePath
+    )
+    if let uiTestReadySignal {
+      UITestAutomationSignal.write(uiTestReadySignal, to: signalFilePath)
+    }
   }
 
   func updateNSView(_ nsView: GhosttyTerminalHostView, context: Context) {

@@ -114,10 +114,17 @@ struct UITestAutomationConfig: Equatable, Sendable {
 }
 
 enum UITestAutomationSignal {
+  private static let writeQueue = DispatchQueue(label: "dev.argonapp.ui-test-signal")
+
   static func write(_ value: String, to path: String?) {
     guard let path, !path.isEmpty else { return }
     let line = "\(value)\n"
+    writeQueue.sync {
+      writeLine(line, to: path)
+    }
+  }
 
+  private static func writeLine(_ line: String, to path: String) {
     if FileManager.default.fileExists(atPath: path) {
       guard let handle = FileHandle(forWritingAtPath: path) else { return }
       do {

@@ -665,6 +665,7 @@ struct ReviewerFeedback {
     created_at: DateTime<Utc>,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SandboxSeatbeltDebugResponse {
@@ -3286,7 +3287,8 @@ fn try_launch_desktop_app_for_session(
 ) -> Result<&'static str> {
     let session = session_id.to_string();
     let reviewed_repo = repo_root.to_string_lossy().to_string();
-    let launch_args = vec![
+    #[cfg(target_os = "macos")]
+    let launch_args = [
         "--session-id".to_string(),
         session.clone(),
         "--repo-root".to_string(),
@@ -3361,7 +3363,8 @@ fn try_launch_desktop_app_for_workspace(
     let repo_root = target.repo_root.to_string_lossy().to_string();
     let repo_common_dir = target.repo_common_dir.to_string_lossy().to_string();
     let selected_worktree = target.selected_worktree_root.to_string_lossy().to_string();
-    let launch_args = vec![
+    #[cfg(target_os = "macos")]
+    let launch_args = [
         "--workspace-repo-root".to_string(),
         repo_root.clone(),
         "--workspace-common-dir".to_string(),

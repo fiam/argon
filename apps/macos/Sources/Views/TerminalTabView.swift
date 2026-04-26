@@ -98,12 +98,19 @@ struct ReviewerAgentTabsView: View {
       }
       .accessibilityIdentifier("reviewer-agent-tabs")
       .onAppear {
-        UITestAutomationSignal.write(
-          "reviewer-tabs-appeared",
-          to: UITestAutomationConfig.current().signalFilePath
-        )
+        writeReviewerTabsAppearedSignal()
+      }
+      .task(id: appState.reviewerAgents.count) {
+        writeReviewerTabsAppearedSignal()
       }
     }
+  }
+
+  private func writeReviewerTabsAppearedSignal() {
+    UITestAutomationSignal.write(
+      "reviewer-tabs-appeared",
+      to: UITestAutomationConfig.current().signalFilePath
+    )
   }
 
   private var effectiveSelectedId: UUID? {

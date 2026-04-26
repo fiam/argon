@@ -6,7 +6,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use tempfile::tempdir;
@@ -56,6 +56,29 @@ fn start_http_server(body: &'static str) -> Result<(u16, thread::JoinHandle<()>)
         }
     });
     Ok((port, handle))
+}
+
+fn read_file_until(path: &Path, predicate: impl Fn(&str) -> bool) -> Result<String> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut last_contents = String::new();
+    loop {
+        match std::fs::read_to_string(path) {
+            Ok(contents) => {
+                if predicate(&contents) || Instant::now() >= deadline {
+                    return Ok(contents);
+                }
+                last_contents = contents;
+            }
+            Err(error) if Instant::now() >= deadline => {
+                return Err(error).with_context(|| format!("missing {}", path.display()));
+            }
+            Err(_) => {}
+        }
+        thread::sleep(Duration::from_millis(25));
+        if Instant::now() >= deadline && !last_contents.is_empty() {
+            return Ok(last_contents);
+        }
+    }
 }
 
 #[test]
@@ -976,16 +999,41 @@ USE os
         );
     }
 
-    let contents = std::fs::read_to_string(&log_path)
-        .with_context(|| format!("missing {}", log_path.display()))?;
-    assert!(contents.contains("\"kind\":\"http\""));
-    assert!(contents.contains("\"outcome\":\"proxied\""));
-    assert!(contents.contains("\"method\":\"GET\""));
-    assert!(contents.contains("\"host\":\"127.0.0.1\""));
-    assert!(contents.contains(&format!("\"port\":{port}")));
-    assert!(contents.contains("\"path\":\"/hello\""));
-    assert!(contents.contains("\"bytes_up\":"));
-    assert!(contents.contains("\"bytes_down\":"));
+    let contents = read_file_until(&log_path, |contents| {
+        contents.contains("\"kind\":\"http\"") && contents.contains("\"outcome\":\"proxied\"")
+    })?;
+    assert!(
+        contents.contains("\"kind\":\"http\""),
+        "unexpected proxy log contents: {contents}"
+    );
+    assert!(
+        contents.contains("\"outcome\":\"proxied\""),
+        "unexpected proxy log contents: {contents}"
+    );
+    assert!(
+        contents.contains("\"method\":\"GET\""),
+        "unexpected proxy log contents: {contents}"
+    );
+    assert!(
+        contents.contains("\"host\":\"127.0.0.1\""),
+        "unexpected proxy log contents: {contents}"
+    );
+    assert!(
+        contents.contains(&format!("\"port\":{port}")),
+        "unexpected proxy log contents: {contents}"
+    );
+    assert!(
+        contents.contains("\"path\":\"/hello\""),
+        "unexpected proxy log contents: {contents}"
+    );
+    assert!(
+        contents.contains("\"bytes_up\":"),
+        "unexpected proxy log contents: {contents}"
+    );
+    assert!(
+        contents.contains("\"bytes_down\":"),
+        "unexpected proxy log contents: {contents}"
+    );
     Ok(())
 }
 
