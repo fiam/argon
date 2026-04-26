@@ -1,0 +1,70 @@
+From 381c15a6ee519aff3766ea094b00c4adb9ce7690 Mon Sep 17 00:00:00 2001
+From: Alberto G. Hierro <alberto@garciahierro.com>
+Date: Thu, 16 Apr 2026 09:29:20 +0100
+Subject: [PATCH] Fix Darwin archive repack
+
+Expand input archives to object files before calling Apple libtool so vendored
+dependencies are preserved inside libghostty-fat.a.
+---
+ src/build/LibtoolStep.zig | 45 ++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 44 insertions(+), 1 deletion(-)
+
+diff --git a/src/build/LibtoolStep.zig b/src/build/LibtoolStep.zig
+index d2b514927..441d649c8 100644
+--- a/src/build/LibtoolStep.zig
++++ b/src/build/LibtoolStep.zig
+@@ -31,7 +31,50 @@ pub fn create(b: *std.Build, opts: Options) *LibtoolStep {
+     const self = b.allocator.create(LibtoolStep) catch @panic("OOM");
+ 
+     const run_step = RunStep.create(b, b.fmt("libtool {s}", .{opts.name}));
+-    run_step.addArgs(&.{ "libtool", "-static", "-o" });
++    run_step.addArgs(&.{
++        "/bin/sh",
++        "-c",
++        \\set -eu
++        \\out="$1"
++        \\shift
++        \\tmp="$(mktemp -d "${TMPDIR:-/tmp}/ghostty-libtool.XXXXXX")"
++        \\cleanup() {
++        \\  rm -rf "$tmp"
++        \\}
++        \\trap cleanup EXIT HUP INT TERM
++        \\
++        \\for src in "$@"; do
++        \\  src_dir="$(cd "$(dirname "$src")" && pwd)"
++        \\  src_abs="$src_dir/$(basename "$src")"
++        \\  case "$src" in
++        \\    *.a)
++        \\      dir="$tmp/$(basename "$src_abs" .a)"
++        \\      mkdir -p "$dir"
++        \\      (cd "$dir" && ar -x "$src_abs")
++        \\      chmod u+r,u+w "$dir"/*.o 2>/dev/null || true
++        \\      ;;
++        \\    *.o)
++        \\      dest="$tmp/$(basename "$src_abs")"
++        \\      cp "$src_abs" "$dest"
++        \\      chmod u+r,u+w "$dest" || true
++        \\      ;;
++        \\    *)
++        \\      echo "unsupported libtool input: $src" >&2
++        \\      exit 1
++        \\      ;;
++        \\  esac
++        \\done
++        \\
++        \\find "$tmp" -type f -name '*.o' | LC_ALL=C sort > "$tmp/objects.list"
++        \\if [ ! -s "$tmp/objects.list" ]; then
++        \\  echo "no object files extracted for libtool" >&2
++        \\  exit 1
++        \\fi
++        \\
++        \\xcrun libtool -static -o "$out" -filelist "$tmp/objects.list"
++        ,
++        "sh",
++    });
+     const output = run_step.addOutputFileArg(opts.out_name);
+     for (opts.sources) |source| run_step.addFileArg(source);
+ 
+-- 
+2.50.1 (Apple Git-155)
+

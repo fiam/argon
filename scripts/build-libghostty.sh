@@ -29,6 +29,7 @@ EOF
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 GHOSTTY_DIR="${REPO_ROOT}/third_party/ghostty"
+GHOSTTY_PATCH_DIR="${REPO_ROOT}/third_party/patches/ghostty"
 HOST_ARCH="$(uname -m)"
 
 TARGET="native"
@@ -196,6 +197,29 @@ build_with_zig() {
   )
 }
 
+apply_argon_patches() {
+  local patch=""
+  local patch_name=""
+
+  [[ -d "${GHOSTTY_PATCH_DIR}" ]] || return 0
+
+  for patch in "${GHOSTTY_PATCH_DIR}"/*.patch; do
+    [[ -e "${patch}" ]] || continue
+    patch_name="$(basename "${patch}")"
+
+    if (cd "${GHOSTTY_DIR}" && git apply --check "${patch}" >/dev/null 2>&1); then
+      echo "  patch: ${patch_name}"
+      (cd "${GHOSTTY_DIR}" && git apply "${patch}")
+    elif (cd "${GHOSTTY_DIR}" && git apply --reverse --check "${patch}" >/dev/null 2>&1); then
+      echo "  patch: ${patch_name} already applied"
+    else
+      echo "error: Ghostty patch does not apply cleanly: ${patch}" >&2
+      echo "hint: reset the submodule with 'git submodule update --init --checkout third_party/ghostty'" >&2
+      exit 1
+    fi
+  done
+}
+
 require_metal_tools() {
   local missing=()
 
@@ -357,6 +381,8 @@ echo "  optimize: ${OPTIMIZE}"
 echo "  output: ${INSTALL_ROOT}"
 echo "  staging: ${STAGING_ROOT}"
 echo "  required zig: ${REQUIRED_ZIG_VERSION}"
+
+apply_argon_patches
 
 if [[ ${CLEAN} -eq 1 ]]; then
   rm -rf "${STAGING_ROOT}" "${UPSTREAM_XCFRAMEWORK_PATH}"
