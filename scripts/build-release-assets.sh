@@ -30,8 +30,6 @@ APPCAST_DIR="$DIST_DIR/appcast"
 SPARKLE_TOOLS_DIR="$ROOT_DIR/.sparkle-tools"
 VERSIONED_ZIP_NAME="Argon-${VERSION}.zip"
 VERSIONED_DMG_NAME="Argon-${VERSION}.dmg"
-STABLE_ZIP_NAME="Argon.zip"
-STABLE_DMG_NAME="Argon.dmg"
 NOTARY_SUBMISSION_ZIP_NAME=".Argon-notary-submit.zip"
 CASK_NAME="argon.rb"
 APPCAST_NAME="appcast.xml"
@@ -335,9 +333,6 @@ if [[ "$NOTARIZED_RELEASE" == "true" ]]; then
   xcrun stapler staple "$DIST_DIR/$VERSIONED_DMG_NAME"
 fi
 
-cp "$DIST_DIR/$VERSIONED_ZIP_NAME" "$DIST_DIR/$STABLE_ZIP_NAME"
-cp "$DIST_DIR/$VERSIONED_DMG_NAME" "$DIST_DIR/$STABLE_DMG_NAME"
-
 if [[ "$SPARKLE_APPCAST" == "true" ]]; then
   rm -rf "$APPCAST_DIR"
   mkdir -p "$APPCAST_DIR"
@@ -362,14 +357,7 @@ ARGON_HOMEBREW_CASK_BUNDLE_ID="$RELEASE_BUNDLE_IDENTIFIER" \
 checksum_inputs=(
   "$VERSIONED_ZIP_NAME"
   "$VERSIONED_DMG_NAME"
-  "$STABLE_ZIP_NAME"
-  "$STABLE_DMG_NAME"
-  "$CASK_NAME"
 )
-
-if [[ -f "$DIST_DIR/$APPCAST_NAME" ]]; then
-  checksum_inputs+=("$APPCAST_NAME")
-fi
 
 (
   cd "$DIST_DIR"
@@ -388,9 +376,6 @@ cat > "$DIST_DIR/release-metadata.json" <<EOF
   "notarized": $NOTARIZED_RELEASE,
   "zip": "$VERSIONED_ZIP_NAME",
   "dmg": "$VERSIONED_DMG_NAME",
-  "stableZip": "$STABLE_ZIP_NAME",
-  "stableDmg": "$STABLE_DMG_NAME",
-  "homebrewCask": "$CASK_NAME",
   "downloadURLPrefix": "$DOWNLOAD_URL_PREFIX",
   "appcast": $( [[ -f "$DIST_DIR/$APPCAST_NAME" ]] && printf '"%s"' "$APPCAST_NAME" || printf 'null' )
 }

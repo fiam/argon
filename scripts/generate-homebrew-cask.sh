@@ -9,19 +9,13 @@ DOWNLOAD_URL="${ARGON_HOMEBREW_CASK_URL:-}"
 BUNDLE_ID="${ARGON_HOMEBREW_CASK_BUNDLE_ID:-dev.argonapp.macos}"
 HOMEPAGE="${ARGON_HOMEBREW_CASK_HOMEPAGE:-https://argonapp.dev}"
 
-if [[ -n "$VERSION" || -n "$SHA256" || -n "$DOWNLOAD_URL" ]]; then
-  if [[ -z "$VERSION" || -z "$SHA256" || -z "$DOWNLOAD_URL" ]]; then
-    echo "versioned cask generation requires version, sha256, and download URL" >&2
-    exit 1
-  fi
-
-  VERSION_LINE="  version \"$VERSION\""
-  SHA256_LINE="  sha256 \"$SHA256\""
-else
-  DOWNLOAD_URL="https://github.com/${REPOSITORY}/releases/latest/download/Argon.dmg"
-  VERSION_LINE="  version :latest"
-  SHA256_LINE="  sha256 :no_check"
+if [[ -z "$VERSION" || -z "$SHA256" || -z "$DOWNLOAD_URL" ]]; then
+  echo "cask generation requires version, sha256, and download URL" >&2
+  exit 1
 fi
+
+VERSION_LINE="  version \"$VERSION\""
+SHA256_LINE="  sha256 \"$SHA256\""
 
 cat <<EOF
 cask "argon" do

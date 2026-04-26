@@ -200,11 +200,8 @@ jobs:
           assets=(
             "dist/Argon-${{ env.ARGON_PUBLISH_VERSION }}.dmg"
             "dist/Argon-${{ env.ARGON_PUBLISH_VERSION }}.zip"
-            "dist/Argon.dmg"
-            "dist/Argon.zip"
             "dist/checksums.txt"
             "dist/release-metadata.json"
-            "dist/argon.rb"
           )
 
           gh release upload "${{ env.ARGON_PUBLISH_TAG }}" "${assets[@]}" --clobber
@@ -252,7 +249,8 @@ jobs:
             echo
             echo "- Tag: \`${{ env.ARGON_PUBLISH_TAG }}\`"
             echo "- Version: \`${{ env.ARGON_PUBLISH_VERSION }}\`"
-            echo "- Artifacts: signed universal app, notarized DMG, Pages appcast, generated Homebrew cask"
+            echo "- Release assets: versioned DMG, versioned ZIP, checksums, metadata"
+            echo "- Published extras: Pages appcast, generated Homebrew cask"
             echo "- Homebrew tap: \`${{ vars.ARGON_HOMEBREW_TAP_REPOSITORY != '' && vars.ARGON_HOMEBREW_TAP_REPOSITORY || 'fiam/homebrew-tap' }}\`"
             echo
             echo '```text'

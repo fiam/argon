@@ -5,7 +5,6 @@ const latestReleaseURL = `https://api.github.com/repos/${repoOwner}/${repoName}/
 
 const downloadButton = document.getElementById("download-button");
 const downloadCardLink = document.getElementById("download-card-link");
-const releaseStatus = document.getElementById("release-status");
 
 function preferredAsset(assets, suffix) {
   return assets.find((asset) => asset.name.endsWith(suffix));
@@ -15,10 +14,7 @@ function useReleaseFallback(message) {
   downloadButton.href = releasesURL;
   downloadButton.textContent = "Download";
   downloadCardLink.href = releasesURL;
-
-  if (releaseStatus) {
-    releaseStatus.textContent = message;
-  }
+  downloadCardLink.textContent = message || "Download Argon";
 }
 
 async function loadLatestRelease() {
@@ -44,21 +40,11 @@ async function loadLatestRelease() {
     }
 
     const primaryAsset = dmg ?? zip;
+    const downloadText = `Download ${release.tag_name}`;
     downloadButton.href = primaryAsset.browser_download_url;
-    downloadButton.textContent = `Download ${release.tag_name}`;
+    downloadButton.textContent = downloadText;
     downloadCardLink.href = primaryAsset.browser_download_url;
-
-    const formats = [];
-    if (dmg) {
-      formats.push("DMG");
-    }
-    if (zip) {
-      formats.push("ZIP");
-    }
-
-    if (releaseStatus) {
-      releaseStatus.textContent = `${release.tag_name} - ${formats.join(" + ")}`;
-    }
+    downloadCardLink.textContent = downloadText;
   } catch (error) {
     useReleaseFallback("");
   }
