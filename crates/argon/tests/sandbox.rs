@@ -491,7 +491,7 @@ END
     )?;
     std::fs::write(
         repo_root.join(".argon/sandbox/intercepts/echo.sh"),
-        "#!/bin/sh\ncmd=${0##*/}\nexec \"$ARGON_SANDBOX_INTERCEPT_RUNNER\" \"$cmd\" \"$@\"\n",
+        "#!/bin/sh\nexec \"$ARGON_EXEC\" \"$@\"\n",
     )?;
 
     let output = run_argon(
@@ -530,6 +530,10 @@ END
     assert!(stdout.contains("/bin/echo"));
     assert!(stdout.contains("Intercepts:"));
     assert!(stdout.contains("handler:"));
+    assert!(stdout.contains("handler kind:"));
+    assert!(stdout.contains("handler write protected: true"));
+    assert!(stdout.contains("exec helper:"));
+    assert!(stdout.contains("info helper:"));
     assert!(stdout.contains("FOO=sandboxed"));
     assert!(stdout.contains("allow:"));
     assert!(stdout.contains("unset:"));
@@ -1104,16 +1108,18 @@ EXEC INTERCEPT aws WITH .argon/sandbox/intercepts/aws.sh
     )?;
 
     let intercepted_file = repo_root.join("intercepted.txt");
-    let runner_file = repo_root.join("runner.txt");
+    let exec_file = repo_root.join("exec.txt");
+    let helpers_file = repo_root.join("helpers.txt");
     let args_file = repo_root.join("args.txt");
     let manifest_file = repo_root.join("manifest.txt");
     let handler_path = intercept_dir.join("aws.sh");
     std::fs::write(
         &handler_path,
         format!(
-            "#!/bin/sh\nprintf '%s\\n' \"${{0##*/}}\" > {}\nprintf '%s\\n' \"$ARGON_SANDBOX_INTERCEPT_RUNNER\" > {}\nprintf '%s %s\\n' \"$1\" \"$2\" > {}\nif [ -n \"$ARGON_SANDBOX_INTERCEPT_MANIFEST\" ] || [ -n \"$ARGON_SANDBOX_REAL_COMMAND\" ]; then printf '%s\\n' set > {}; exit 14; fi\n",
+            "#!/bin/sh\nprintf '%s\\n' \"${{0##*/}}\" > {}\nprintf '%s\\n' \"$ARGON_EXEC\" > {}\nprintf '%s\\n%s\\n%s\\n' \"$ARGON_INFO\" \"$ARGON_WARN\" \"$ARGON_ERROR\" > {}\nprintf '%s %s\\n' \"$1\" \"$2\" > {}\nif [ -n \"$ARGON_SANDBOX_INTERCEPT_MANIFEST\" ] || [ -n \"$ARGON_SANDBOX_REAL_COMMAND\" ]; then printf '%s\\n' set > {}; exit 14; fi\n",
             shell_quote(&intercepted_file),
-            shell_quote(&runner_file),
+            shell_quote(&exec_file),
+            shell_quote(&helpers_file),
             shell_quote(&args_file),
             shell_quote(&manifest_file),
         ),
@@ -1150,10 +1156,14 @@ EXEC INTERCEPT aws WITH .argon/sandbox/intercepts/aws.sh
 
     assert_eq!(std::fs::read_to_string(&intercepted_file)?.trim(), "aws");
     assert!(
-        std::fs::read_to_string(&runner_file)?
+        std::fs::read_to_string(&exec_file)?
             .trim()
-            .ends_with("argon-intercept-run")
+            .ends_with("argon-intercept-exec")
     );
+    let helpers = std::fs::read_to_string(&helpers_file)?;
+    assert!(helpers.contains("argon-intercept-info"));
+    assert!(helpers.contains("argon-intercept-warn"));
+    assert!(helpers.contains("argon-intercept-error"));
     assert_eq!(std::fs::read_to_string(&args_file)?.trim(), "first second");
     assert!(!manifest_file.exists());
     Ok(())
@@ -1192,7 +1202,7 @@ EXEC INTERCEPT aws WITH .argon/sandbox/intercepts/aws
     let handler_path = intercept_dir.join("aws");
     std::fs::write(
         &handler_path,
-        "#!/bin/sh\nprintf 'handler:%s\\n' \"$1\" > intercepted.txt\ncmd=${0##*/}\nexec \"$ARGON_SANDBOX_INTERCEPT_RUNNER\" \"$cmd\" \"$@\"\n",
+        "#!/bin/sh\nprintf 'handler:%s\\n' \"$1\" > intercepted.txt\nexec \"$ARGON_EXEC\" \"$@\"\n",
     )?;
     let mut permissions = std::fs::metadata(&handler_path)?.permissions();
     permissions.set_mode(0o755);
@@ -1259,6 +1269,209 @@ fn sandbox_exec_intercepts_commands_through_broker() -> Result<()> {
     assert_eq!(
         std::fs::read_to_string(fixture.repo_root.join("intercepted.txt"))?,
         "handler:first\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn sandbox_exec_inline_interceptor_uses_helper_contract() -> Result<()> {
+    let temp = tempdir()?;
+    let root = temp.path().canonicalize()?;
+    let repo_root = root.join("repo");
+    let home = root.join("home");
+    let real_bin = root.join("real-bin");
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&home)?;
+    std::fs::create_dir_all(&real_bin)?;
+    std::fs::write(
+        repo_root.join("Sandboxfile"),
+        r#"
+FS DEFAULT READWRITE
+EXEC DEFAULT DENY
+USE os
+EXEC INTERCEPT aws WITH SCRIPT <<'ARGON'
+#!/bin/sh
+"$ARGON_INFO" "inline handler"
+if printf bad > "$0"; then
+    "$ARGON_ERROR" "inline handler was writable"
+    exit $?
+fi
+exec "$ARGON_EXEC" "$@"
+ARGON
+"#,
+    )?;
+    let real_command_path = real_bin.join("aws");
+    std::fs::write(
+        &real_command_path,
+        "#!/bin/sh\nprintf 'inline-real:%s\\n' \"$1\"\n",
+    )?;
+    let mut permissions = std::fs::metadata(&real_command_path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&real_command_path, permissions)?;
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("PATH", format!("{}:/bin:/usr/bin", real_bin.display()))
+            .env("SHELL", "/bin/zsh")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("exec")
+            .arg("--repo-root")
+            .arg(&repo_root)
+            .arg("--")
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg("aws first"),
+    )?;
+
+    if !output.status.success() {
+        bail!(
+            "sandbox exec inline intercept failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "inline-real:first\n"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("argon intercept info: inline handler"));
+    Ok(())
+}
+
+#[test]
+fn sandbox_exec_intercept_error_helper_reports_and_returns_failure() -> Result<()> {
+    let temp = tempdir()?;
+    let root = temp.path().canonicalize()?;
+    let repo_root = root.join("repo");
+    let home = root.join("home");
+    let real_bin = root.join("real-bin");
+    let intercept_dir = repo_root.join(".argon/sandbox/intercepts");
+    std::fs::create_dir_all(&intercept_dir)?;
+    std::fs::create_dir_all(&home)?;
+    std::fs::create_dir_all(&real_bin)?;
+    std::fs::write(
+        repo_root.join("Sandboxfile"),
+        r#"
+FS DEFAULT NONE
+EXEC DEFAULT DENY
+FS ALLOW READ .
+USE os
+EXEC INTERCEPT aws WITH .argon/sandbox/intercepts/aws
+"#,
+    )?;
+    let handler_path = intercept_dir.join("aws");
+    std::fs::write(
+        &handler_path,
+        "#!/bin/sh\n\"$ARGON_INFO\" \"checking\"\n\"$ARGON_WARN\" \"careful\"\n\"$ARGON_ERROR\" \"denied\"\nexit $?\n",
+    )?;
+    let mut permissions = std::fs::metadata(&handler_path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&handler_path, permissions)?;
+    let real_command_path = real_bin.join("aws");
+    std::fs::write(&real_command_path, "#!/bin/sh\nexit 0\n")?;
+    let mut permissions = std::fs::metadata(&real_command_path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&real_command_path, permissions)?;
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("PATH", format!("{}:/bin:/usr/bin", real_bin.display()))
+            .env("SHELL", "/bin/zsh")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("exec")
+            .arg("--repo-root")
+            .arg(&repo_root)
+            .arg("--")
+            .arg("aws"),
+    )?;
+
+    assert!(
+        !output.status.success(),
+        "intercept error unexpectedly succeeded:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.status.code(), Some(126));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("argon intercept info: checking"));
+    assert!(stderr.contains("argon intercept warning: careful"));
+    assert!(stderr.contains("argon intercept error: denied"));
+    Ok(())
+}
+
+#[test]
+fn sandbox_exec_argon_exec_is_command_specific() -> Result<()> {
+    let temp = tempdir()?;
+    let root = temp.path().canonicalize()?;
+    let repo_root = root.join("repo");
+    let home = root.join("home");
+    let real_bin = root.join("real-bin");
+    let intercept_dir = repo_root.join(".argon/sandbox/intercepts");
+    std::fs::create_dir_all(&intercept_dir)?;
+    std::fs::create_dir_all(&home)?;
+    std::fs::create_dir_all(&real_bin)?;
+    std::fs::write(
+        repo_root.join("Sandboxfile"),
+        r#"
+FS DEFAULT NONE
+EXEC DEFAULT DENY
+FS ALLOW READ .
+USE os
+EXEC INTERCEPT aws WITH .argon/sandbox/intercepts/aws
+EXEC INTERCEPT gh WITH .argon/sandbox/intercepts/gh
+"#,
+    )?;
+    for name in ["aws", "gh"] {
+        let handler_path = intercept_dir.join(name);
+        std::fs::write(&handler_path, "#!/bin/sh\nexec \"$ARGON_EXEC\" \"$@\"\n")?;
+        let mut permissions = std::fs::metadata(&handler_path)?.permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&handler_path, permissions)?;
+
+        let real_command_path = real_bin.join(name);
+        std::fs::write(
+            &real_command_path,
+            format!("#!/bin/sh\nprintf '{name}:%s\\n' \"$1\"\n"),
+        )?;
+        let mut permissions = std::fs::metadata(&real_command_path)?.permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&real_command_path, permissions)?;
+    }
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("PATH", format!("{}:/bin:/usr/bin", real_bin.display()))
+            .env("SHELL", "/bin/zsh")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("exec")
+            .arg("--repo-root")
+            .arg(&repo_root)
+            .arg("--")
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg("aws first && gh second"),
+    )?;
+
+    if !output.status.success() {
+        bail!(
+            "sandbox exec multi-intercept failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "aws:first\ngh:second\n"
     );
     Ok(())
 }

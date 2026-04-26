@@ -140,6 +140,10 @@ EXEC DEFAULT DENY
 EXEC ALLOW git
 EXEC ALLOW ./bin
 EXEC INTERCEPT aws WITH .argon/sandbox/intercepts/aws.sh
+EXEC INTERCEPT gh WITH SCRIPT <<'ARGON'
+#!/bin/sh
+exec "$ARGON_EXEC" "$@"
+ARGON
 
 NET DEFAULT ALLOW
 NET DEFAULT NONE
@@ -432,35 +436,82 @@ argon sandbox builtin print os/macos
 EXEC INTERCEPT aws WITH .argon/sandbox/intercepts/aws.sh
 ```
 
+Handlers can also be written inline with a heredoc:
+
+```text
+EXEC INTERCEPT gh WITH SCRIPT <<'ARGON'
+#!/bin/sh
+"$ARGON_INFO" "checking gh command"
+exec "$ARGON_EXEC" "$@"
+ARGON
+```
+
 Semantics:
 
 - Argon resolves the real command from the original `PATH`
 - the outer sandbox denies read, write, and exec access to that real command
-- the repo handler is allowed for read/exec but explicitly denied for writes
+- file-backed handlers are allowed for read/exec but explicitly denied for
+  writes
+- inline handlers are materialized into Argon's temporary runtime directory and
+  explicitly denied for writes
 - Argon creates a temporary runtime directory and prepends its `bin` to `PATH`
-- `runtime/bin/<command>` is a symlink to the repo handler, so edits made
-  outside the sandbox are picked up by the next invocation
-- the handler still runs inside the same outer sandbox
+- `runtime/bin/<command>` is a command-specific shim that sets the interceptor
+  helper environment and then execs the file-backed or inline handler
+- file-backed handler edits made outside the sandbox are picked up by the next
+  invocation because the shim execs a runtime symlink to the original handler
+- the handler runs inside the same outer sandbox, not in the broker and not in
+  the derived inner sandbox used for the real command
 - the handler does not receive the real command path
-- the handler receives:
-  - `ARGON_SANDBOX_INTERCEPT_RUNNER`
-  - `ARGON_SANDBOX_INTERCEPT_SOCKET`
-  - `ARGON_SANDBOX_INTERCEPT_TOKEN`
+- the handler receives helper executable paths in:
+  - `ARGON_INFO`
+  - `ARGON_WARN`
+  - `ARGON_ERROR`
+  - `ARGON_EXEC`
 
 The handler can choose to deny the command, rewrite arguments, or delegate to
-the real command through Argon's broker runner:
+the real command through Argon's broker:
 
 ```sh
 #!/bin/sh
-cmd=${0##*/}
-exec "$ARGON_SANDBOX_INTERCEPT_RUNNER" "$cmd" "$@"
+exec "$ARGON_EXEC" "$@"
 ```
 
-The runner sends the request to a per-launch Argon broker. The broker starts a
+`ARGON_EXEC` sends the request to a per-launch Argon broker. The broker starts a
 short-lived worker, applies a fresh sandbox derived from the same resolved
 policy, restores read/exec access to only the resolved real command, and then
 execs that command. Direct execution of `/absolute/path/to/aws` from inside the
 outer sandbox remains denied.
+
+The helper executables are language-agnostic. They do not stop the parent
+script by magic; they only print and return an exit status:
+
+```sh
+"$ARGON_INFO" "message"   # stderr diagnostic, exits 0
+"$ARGON_WARN" "message"   # stderr diagnostic, exits 0
+"$ARGON_ERROR" "message"  # stderr diagnostic, exits nonzero
+```
+
+To deny from a shell script, either tail-call the error helper:
+
+```sh
+exec "$ARGON_ERROR" "denied: destructive aws operation"
+```
+
+or preserve its status explicitly:
+
+```sh
+"$ARGON_ERROR" "denied: destructive aws operation"
+exit $?
+```
+
+To delegate, use `exec "$ARGON_EXEC" "$@"`. `ARGON_EXEC` is command-specific;
+the script passes only the argv it wants the real command to receive and never
+passes the command name or real command path.
+
+`argon sandbox explain` shows each interceptor's handler kind, materialized or
+file-backed handler path, shim path, exec helper path, and whether the handler
+is write-protected. The same protection also appears in the denied write path
+or directory lists used by the macOS sandbox profile.
 
 The Rust CLI implementation currently uses a per-launch local broker IPC
 transport. The protocol and trust boundary are intentionally broker-shaped so
@@ -565,7 +616,8 @@ Today the macOS implementation enforces:
 - write restrictions
 - executable allow/deny policy
 - loaded Sandboxfile write protection
-- intercept handler symlinks, write protection, and broker-mediated execution
+- intercept shims, helper executables, handler write protection, and
+  broker-mediated execution
 
 ## Cross-Platform Structure
 

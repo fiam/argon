@@ -56,7 +56,7 @@ pub(crate) enum StatementKind {
     },
     ExecIntercept {
         command: String,
-        handler: String,
+        handler: InterceptHandler,
     },
     NetDefault {
         value: NetDefault,
@@ -82,13 +82,23 @@ pub(crate) enum StatementKind {
     End,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum InterceptHandler {
+    Path(String),
+    InlineScript { source: String },
+}
+
 pub(crate) fn parse_program(
     source_name: &str,
     source: &str,
 ) -> Result<ParsedProgram, SandboxError> {
     let mut statements = Vec::new();
-    for (index, raw_line) in source.lines().enumerate() {
+    let lines = source.lines().collect::<Vec<_>>();
+    let mut index = 0;
+    while index < lines.len() {
+        let raw_line = lines[index];
         let line_number = index + 1;
+        index += 1;
         let raw = raw_line.trim().to_string();
         if raw.is_empty() {
             continue;
@@ -103,7 +113,35 @@ pub(crate) fn parse_program(
             continue;
         }
 
-        let kind = parse_tokens(source_name, line_number, &tokens)?;
+        let kind = if let Some((command, delimiter)) =
+            parse_intercept_script_start(source_name, line_number, &tokens)?
+        {
+            let mut script = String::new();
+            let mut terminated = false;
+            while index < lines.len() {
+                let candidate = lines[index];
+                index += 1;
+                if candidate.trim() == delimiter {
+                    terminated = true;
+                    break;
+                }
+                script.push_str(candidate);
+                script.push('\n');
+            }
+            if !terminated {
+                return Err(parse_error(
+                    source_name,
+                    line_number,
+                    format!("unterminated EXEC INTERCEPT SCRIPT heredoc: expected {delimiter}"),
+                ));
+            }
+            StatementKind::ExecIntercept {
+                command,
+                handler: InterceptHandler::InlineScript { source: script },
+            }
+        } else {
+            parse_tokens(source_name, line_number, &tokens)?
+        };
         statements.push(Statement {
             line_number,
             raw,
@@ -112,6 +150,44 @@ pub(crate) fn parse_program(
     }
 
     Ok(ParsedProgram { statements })
+}
+
+fn parse_intercept_script_start(
+    source_name: &str,
+    line_number: usize,
+    tokens: &[String],
+) -> Result<Option<(String, String)>, SandboxError> {
+    if tokens.first().map(String::as_str) != Some("EXEC")
+        || tokens.get(1).map(String::as_str) != Some("INTERCEPT")
+        || tokens.get(3).map(String::as_str) != Some("WITH")
+        || tokens.get(4).map(String::as_str) != Some("SCRIPT")
+    {
+        return Ok(None);
+    }
+
+    if tokens.len() != 6 {
+        return Err(parse_error(
+            source_name,
+            line_number,
+            "EXEC INTERCEPT SCRIPT expects `EXEC INTERCEPT <command> WITH SCRIPT <<DELIMITER`",
+        ));
+    }
+    let delimiter = tokens[5].strip_prefix("<<").ok_or_else(|| {
+        parse_error(
+            source_name,
+            line_number,
+            "EXEC INTERCEPT SCRIPT expects a heredoc delimiter like `<<ARGON`",
+        )
+    })?;
+    if delimiter.is_empty() {
+        return Err(parse_error(
+            source_name,
+            line_number,
+            "EXEC INTERCEPT SCRIPT heredoc delimiter cannot be empty",
+        ));
+    }
+
+    Ok(Some((tokens[2].clone(), delimiter.to_string())))
 }
 
 fn parse_error(source_name: &str, line_number: usize, message: impl Into<String>) -> SandboxError {
@@ -461,12 +537,12 @@ fn parse_exec(
                 return Err(parse_error(
                     source_name,
                     line_number,
-                    "EXEC INTERCEPT expects `EXEC INTERCEPT <command> WITH <handler>`",
+                    "EXEC INTERCEPT expects `EXEC INTERCEPT <command> WITH <handler>` or `EXEC INTERCEPT <command> WITH SCRIPT <<DELIMITER`",
                 ));
             }
             Ok(StatementKind::ExecIntercept {
                 command: tokens[2].clone(),
-                handler: tokens[4].clone(),
+                handler: InterceptHandler::Path(tokens[4].clone()),
             })
         }
         Some(other) => Err(parse_error(
@@ -689,6 +765,52 @@ mod tests {
         assert!(matches!(
             program.statements[0].kind,
             StatementKind::Info { .. }
+        ));
+    }
+
+    #[test]
+    fn parse_exec_intercept_inline_script() {
+        let program = parse_program(
+            "repo/Sandboxfile",
+            r#"
+                EXEC INTERCEPT aws WITH SCRIPT <<'ARGON'
+#!/bin/sh
+exec "$ARGON_EXEC" "$@"
+ARGON
+                WARN "after"
+            "#,
+        )
+        .expect("program");
+
+        assert_eq!(program.statements.len(), 2);
+        match &program.statements[0].kind {
+            StatementKind::ExecIntercept {
+                command,
+                handler: InterceptHandler::InlineScript { source },
+            } => {
+                assert_eq!(command, "aws");
+                assert!(source.contains("exec \"$ARGON_EXEC\" \"$@\""));
+            }
+            other => panic!("unexpected statement: {other:?}"),
+        }
+        assert!(matches!(
+            program.statements[1].kind,
+            StatementKind::Warn { .. }
+        ));
+    }
+
+    #[test]
+    fn parse_exec_intercept_inline_script_rejects_unterminated_heredoc() {
+        let error = parse_program(
+            "repo/Sandboxfile",
+            "EXEC INTERCEPT aws WITH SCRIPT <<ARGON\n#!/bin/sh\n",
+        )
+        .expect_err("parse error");
+
+        assert!(matches!(
+            error,
+            SandboxError::Parse { ref message, .. }
+            if message.contains("unterminated EXEC INTERCEPT SCRIPT heredoc")
         ));
     }
 

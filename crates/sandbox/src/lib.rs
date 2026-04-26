@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use parser::{ParsedProgram, StatementKind};
+use parser::{InterceptHandler, ParsedProgram, StatementKind};
 
 const REPO_SANDBOXFILE: &str = "Sandboxfile";
 const USER_SANDBOXFILE: &str = ".Sandboxfile";
@@ -19,6 +19,11 @@ const USER_SANDBOXFILE_COMPAT: &str = ".Sanboxfile";
 pub const INTERCEPT_RUNNER_ENV: &str = "ARGON_SANDBOX_INTERCEPT_RUNNER";
 pub const INTERCEPT_SOCKET_ENV: &str = "ARGON_SANDBOX_INTERCEPT_SOCKET";
 pub const INTERCEPT_TOKEN_ENV: &str = "ARGON_SANDBOX_INTERCEPT_TOKEN";
+pub const INTERCEPT_COMMAND_ENV: &str = "ARGON_SANDBOX_INTERCEPT_COMMAND";
+pub const ARGON_INFO_ENV: &str = "ARGON_INFO";
+pub const ARGON_WARN_ENV: &str = "ARGON_WARN";
+pub const ARGON_ERROR_ENV: &str = "ARGON_ERROR";
+pub const ARGON_EXEC_ENV: &str = "ARGON_EXEC";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -174,8 +179,20 @@ pub struct EffectiveSandboxPolicy {
 pub struct ResolvedIntercept {
     pub command_name: String,
     pub handler_path: PathBuf,
+    pub handler_kind: InterceptHandlerKind,
+    pub handler_write_protected: bool,
     pub real_command_path: Option<PathBuf>,
     pub shim_path: Option<PathBuf>,
+    pub exec_helper_path: Option<PathBuf>,
+    #[serde(skip)]
+    inline_script: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InterceptHandlerKind {
+    File,
+    InlineScript,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -183,7 +200,11 @@ pub struct ResolvedIntercept {
 pub struct InterceptBrokerPlan {
     pub runtime_dir: PathBuf,
     pub bin_dir: PathBuf,
-    pub runner_path: PathBuf,
+    pub helper_dir: PathBuf,
+    pub info_helper_path: PathBuf,
+    pub warn_helper_path: PathBuf,
+    pub error_helper_path: PathBuf,
+    pub exec_helper_path: PathBuf,
     pub socket_path: PathBuf,
     pub token: String,
     pub original_path: Option<String>,
@@ -327,9 +348,15 @@ struct ResolvedPathValue {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingIntercept {
     command_name: String,
-    handler_path: PathBuf,
+    handler: PendingInterceptHandler,
     source_name: String,
     line_number: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PendingInterceptHandler {
+    File { path: PathBuf },
+    InlineScript { source: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1355,40 +1382,60 @@ fn evaluate_source(
                     if command.contains('/') || command.is_empty() {
                         return Err(SandboxError::InvalidInterceptCommand(command.clone()));
                     }
-                    let resolved =
-                        resolve_path_value(handler, &state.vars, source, statement.line_number)?;
-                    if !matches!(resolved.kind, PathKind::File) {
-                        return Err(SandboxError::InvalidPath {
-                            origin: source_label(source),
-                            line: statement.line_number,
-                            message: format!(
-                                "intercept handler must be an executable file, not a directory: {}",
-                                resolved.path.display()
-                            ),
-                        });
-                    }
-                    validate_exec_allowance(
-                        &resolved.path,
-                        resolved.kind,
-                        source,
-                        statement.line_number,
-                    )?;
-                    add_exec_allowances(&mut state.policy, &resolved.aliases, resolved.kind);
-                    add_fs_allowances(
-                        &mut state.policy,
-                        FsAccess::Read,
-                        &resolved.aliases,
-                        resolved.kind,
-                    );
-                    add_fs_denials(
-                        &mut state.policy,
-                        FsAccess::Write,
-                        &resolved.aliases,
-                        resolved.kind,
-                    );
+                    let handler = match handler {
+                        InterceptHandler::Path(handler) => {
+                            let resolved = resolve_path_value(
+                                handler,
+                                &state.vars,
+                                source,
+                                statement.line_number,
+                            )?;
+                            if !matches!(resolved.kind, PathKind::File) {
+                                return Err(SandboxError::InvalidPath {
+                                    origin: source_label(source),
+                                    line: statement.line_number,
+                                    message: format!(
+                                        "intercept handler must be an executable file, not a directory: {}",
+                                        resolved.path.display()
+                                    ),
+                                });
+                            }
+                            validate_exec_allowance(
+                                &resolved.path,
+                                resolved.kind,
+                                source,
+                                statement.line_number,
+                            )?;
+                            add_exec_allowances(
+                                &mut state.policy,
+                                &resolved.aliases,
+                                resolved.kind,
+                            );
+                            add_fs_allowances(
+                                &mut state.policy,
+                                FsAccess::Read,
+                                &resolved.aliases,
+                                resolved.kind,
+                            );
+                            add_fs_denials(
+                                &mut state.policy,
+                                FsAccess::Write,
+                                &resolved.aliases,
+                                resolved.kind,
+                            );
+                            PendingInterceptHandler::File {
+                                path: resolved.path,
+                            }
+                        }
+                        InterceptHandler::InlineScript { source } => {
+                            PendingInterceptHandler::InlineScript {
+                                source: source.clone(),
+                            }
+                        }
+                    };
                     state.pending_intercepts.push(PendingIntercept {
                         command_name: command.clone(),
-                        handler_path: resolved.path,
+                        handler,
                         source_name: source_label(source),
                         line_number: statement.line_number,
                     });
@@ -1582,11 +1629,28 @@ fn resolve_pending_intercepts(
         add_fs_denials(&mut state.policy, FsAccess::Write, &aliases, PathKind::File);
         add_exec_denials(&mut state.policy, &aliases, PathKind::File);
 
+        let (handler_path, handler_kind, handler_write_protected, inline_script) =
+            match intercept.handler {
+                PendingInterceptHandler::File { path } => {
+                    (path, InterceptHandlerKind::File, true, None)
+                }
+                PendingInterceptHandler::InlineScript { source } => (
+                    PathBuf::new(),
+                    InterceptHandlerKind::InlineScript,
+                    false,
+                    Some(source),
+                ),
+            };
+
         intercepts.push(ResolvedIntercept {
             command_name: intercept.command_name,
-            handler_path: intercept.handler_path,
+            handler_path,
+            handler_kind,
+            handler_write_protected,
             real_command_path: Some(real_command_path),
             shim_path: None,
+            exec_helper_path: None,
+            inline_script,
         });
     }
 
@@ -1610,12 +1674,26 @@ fn prepare_intercept_environment(
     })?;
 
     let current_exe = std::env::current_exe().map_err(SandboxError::CurrentExecutable)?;
-    let runner_path = bin_dir.join("argon-intercept-run");
-    fs::copy(&current_exe, &runner_path).map_err(|source| SandboxError::ShimIo {
-        path: runner_path.clone(),
+    let helper_dir = runtime_dir.join("helpers");
+    fs::create_dir_all(&helper_dir).map_err(|source| SandboxError::ShimIo {
+        path: helper_dir.clone(),
         source,
     })?;
-    set_executable_permissions(&runner_path)?;
+    let handler_dir = runtime_dir.join("handlers");
+    fs::create_dir_all(&handler_dir).map_err(|source| SandboxError::ShimIo {
+        path: handler_dir.clone(),
+        source,
+    })?;
+    let info_helper_path =
+        copy_intercept_helper(&current_exe, &helper_dir, "argon-intercept-info")?;
+    let warn_helper_path =
+        copy_intercept_helper(&current_exe, &helper_dir, "argon-intercept-warn")?;
+    let error_helper_path =
+        copy_intercept_helper(&current_exe, &helper_dir, "argon-intercept-error")?;
+    let exec_helper_path =
+        copy_intercept_helper(&current_exe, &helper_dir, "argon-intercept-exec")?;
+    let legacy_runner_path =
+        copy_intercept_helper(&current_exe, &helper_dir, "argon-intercept-run")?;
 
     let original_path = context
         .env
@@ -1623,27 +1701,71 @@ fn prepare_intercept_environment(
         .cloned()
         .filter(|value| !value.is_empty());
 
-    for intercept in intercepts.iter_mut() {
-        let shim_path = bin_dir.join(&intercept.command_name);
-        create_intercept_link(&intercept.handler_path, &shim_path).map_err(|source| {
-            SandboxError::ShimIo {
-                path: shim_path.clone(),
-                source,
-            }
-        })?;
-        intercept.shim_path = Some(shim_path);
-    }
-
     let socket_path = runtime_dir.join("broker.sock");
     let token = random_intercept_token();
+
+    for intercept in intercepts.iter_mut() {
+        let runtime_handler_path = handler_dir.join(&intercept.command_name);
+        if matches!(intercept.handler_kind, InterceptHandlerKind::InlineScript) {
+            let source = intercept.inline_script.take().unwrap_or_default();
+            fs::write(&runtime_handler_path, source).map_err(|source| SandboxError::ShimIo {
+                path: runtime_handler_path.clone(),
+                source,
+            })?;
+            set_executable_permissions(&runtime_handler_path)?;
+            add_exec_allowance(policy, &runtime_handler_path, PathKind::File);
+            add_fs_allowance(
+                policy,
+                FsAccess::Read,
+                &runtime_handler_path,
+                PathKind::File,
+            );
+            add_fs_denial(
+                policy,
+                FsAccess::Write,
+                &runtime_handler_path,
+                PathKind::File,
+            );
+            intercept.handler_path = runtime_handler_path.clone();
+            intercept.handler_write_protected = true;
+        } else {
+            create_intercept_link(&intercept.handler_path, &runtime_handler_path).map_err(
+                |source| SandboxError::ShimIo {
+                    path: runtime_handler_path.clone(),
+                    source,
+                },
+            )?;
+        }
+
+        let shim_path = bin_dir.join(&intercept.command_name);
+        write_intercept_shim(
+            &shim_path,
+            &intercept.command_name,
+            &runtime_handler_path,
+            &info_helper_path,
+            &warn_helper_path,
+            &error_helper_path,
+            &exec_helper_path,
+            &legacy_runner_path,
+            &socket_path,
+            &token,
+        )?;
+        intercept.shim_path = Some(shim_path);
+        intercept.exec_helper_path = Some(exec_helper_path.clone());
+    }
 
     add_fs_allowance(policy, FsAccess::Read, &runtime_dir, PathKind::Root);
     add_fs_allowance(policy, FsAccess::Write, &socket_path, PathKind::File);
     push_unique_path(&mut policy.local_socket_paths, socket_path.clone());
     add_exec_allowance(policy, &bin_dir, PathKind::Root);
     add_fs_allowance(policy, FsAccess::Read, &bin_dir, PathKind::Root);
-    add_exec_allowance(policy, &runner_path, PathKind::File);
-    add_fs_allowance(policy, FsAccess::Read, &runner_path, PathKind::File);
+    add_exec_allowance(policy, &helper_dir, PathKind::Root);
+    add_fs_allowance(policy, FsAccess::Read, &helper_dir, PathKind::Root);
+    add_exec_allowance(policy, &handler_dir, PathKind::Root);
+    add_fs_allowance(policy, FsAccess::Read, &handler_dir, PathKind::Root);
+    add_fs_denial(policy, FsAccess::Write, &bin_dir, PathKind::Root);
+    add_fs_denial(policy, FsAccess::Write, &helper_dir, PathKind::Root);
+    add_fs_denial(policy, FsAccess::Write, &handler_dir, PathKind::Root);
 
     let mut environment = BTreeMap::new();
     environment.insert(
@@ -1655,22 +1777,17 @@ fn prepare_intercept_environment(
             _ => runtime_dir.join("bin").display().to_string(),
         },
     );
-    environment.insert(
-        INTERCEPT_RUNNER_ENV.to_string(),
-        runner_path.display().to_string(),
-    );
-    environment.insert(
-        INTERCEPT_SOCKET_ENV.to_string(),
-        socket_path.display().to_string(),
-    );
-    environment.insert(INTERCEPT_TOKEN_ENV.to_string(), token.clone());
 
     Ok((
         environment,
         Some(InterceptBrokerPlan {
             runtime_dir,
             bin_dir,
-            runner_path,
+            helper_dir,
+            info_helper_path,
+            warn_helper_path,
+            error_helper_path,
+            exec_helper_path,
             socket_path,
             token,
             original_path,
@@ -1686,6 +1803,74 @@ fn create_intercept_link(target: &Path, link: &Path) -> io::Result<()> {
 #[cfg(not(unix))]
 fn create_intercept_link(target: &Path, link: &Path) -> io::Result<()> {
     fs::copy(target, link).map(|_| ())
+}
+
+fn copy_intercept_helper(
+    current_exe: &Path,
+    helper_dir: &Path,
+    name: &str,
+) -> Result<PathBuf, SandboxError> {
+    let path = helper_dir.join(name);
+    fs::copy(current_exe, &path).map_err(|source| SandboxError::ShimIo {
+        path: path.clone(),
+        source,
+    })?;
+    set_executable_permissions(&path)?;
+    Ok(path)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_intercept_shim(
+    path: &Path,
+    command_name: &str,
+    handler_path: &Path,
+    info_helper_path: &Path,
+    warn_helper_path: &Path,
+    error_helper_path: &Path,
+    exec_helper_path: &Path,
+    legacy_runner_path: &Path,
+    socket_path: &Path,
+    token: &str,
+) -> Result<(), SandboxError> {
+    let source = format!(
+        "#!/bin/sh\n\
+         export {info_env}={info}\n\
+         export {warn_env}={warn}\n\
+         export {error_env}={error}\n\
+         export {exec_env}={exec}\n\
+         export {runner_env}={runner}\n\
+         export {socket_env}={socket}\n\
+         export {token_env}={token}\n\
+         export {command_env}={command}\n\
+         exec {handler} \"$@\"\n",
+        info_env = ARGON_INFO_ENV,
+        info = shell_quote(info_helper_path),
+        warn_env = ARGON_WARN_ENV,
+        warn = shell_quote(warn_helper_path),
+        error_env = ARGON_ERROR_ENV,
+        error = shell_quote(error_helper_path),
+        exec_env = ARGON_EXEC_ENV,
+        exec = shell_quote(exec_helper_path),
+        runner_env = INTERCEPT_RUNNER_ENV,
+        runner = shell_quote(legacy_runner_path),
+        socket_env = INTERCEPT_SOCKET_ENV,
+        socket = shell_quote(socket_path),
+        token_env = INTERCEPT_TOKEN_ENV,
+        token = shell_quote(token),
+        command_env = INTERCEPT_COMMAND_ENV,
+        command = shell_quote(command_name),
+        handler = shell_quote(handler_path),
+    );
+    fs::write(path, source).map_err(|source| SandboxError::ShimIo {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    set_executable_permissions(path)
+}
+
+fn shell_quote(value: impl AsRef<OsStr>) -> String {
+    let value = value.as_ref().to_string_lossy();
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn random_intercept_token() -> String {
@@ -4372,16 +4557,24 @@ END
                 .environment
                 .contains_key("ARGON_SANDBOX_INTERCEPT_MANIFEST")
         );
-        assert!(plan.environment.contains_key(INTERCEPT_RUNNER_ENV));
-        assert!(plan.environment.contains_key(INTERCEPT_SOCKET_ENV));
-        assert!(plan.environment.contains_key(INTERCEPT_TOKEN_ENV));
+        assert!(!plan.environment.contains_key(INTERCEPT_RUNNER_ENV));
+        assert!(!plan.environment.contains_key(INTERCEPT_SOCKET_ENV));
+        assert!(!plan.environment.contains_key(INTERCEPT_TOKEN_ENV));
+        assert!(!plan.environment.contains_key(ARGON_INFO_ENV));
+        assert!(!plan.environment.contains_key(ARGON_WARN_ENV));
+        assert!(!plan.environment.contains_key(ARGON_ERROR_ENV));
+        assert!(!plan.environment.contains_key(ARGON_EXEC_ENV));
         assert!(plan.intercepts[0].shim_path.is_some());
         let broker = plan.intercept_broker.as_ref().expect("broker");
+        assert!(broker.info_helper_path.ends_with("argon-intercept-info"));
+        assert!(broker.warn_helper_path.ends_with("argon-intercept-warn"));
+        assert!(broker.error_helper_path.ends_with("argon-intercept-error"));
+        assert!(broker.exec_helper_path.ends_with("argon-intercept-exec"));
+        assert_eq!(plan.intercepts[0].handler_kind, InterceptHandlerKind::File);
+        assert!(plan.intercepts[0].handler_write_protected);
         assert_eq!(
-            plan.environment
-                .get(INTERCEPT_RUNNER_ENV)
-                .map(String::as_str),
-            Some(broker.runner_path.to_str().expect("runner path"))
+            plan.intercepts[0].exec_helper_path.as_ref(),
+            Some(&broker.exec_helper_path)
         );
         assert!(
             plan.policy
@@ -4416,13 +4609,69 @@ END
                 std::fs::symlink_metadata(shim)
                     .expect("shim metadata")
                     .file_type()
+                    .is_file()
+            );
+            let shim_source = std::fs::read_to_string(shim).expect("shim source");
+            assert!(shim_source.contains("ARGON_EXEC="));
+            assert!(shim_source.contains("ARGON_SANDBOX_INTERCEPT_COMMAND='aws'"));
+            assert!(shim_source.contains("/handlers/aws"));
+            let runtime_handler = broker.runtime_dir.join("handlers/aws");
+            assert!(
+                std::fs::symlink_metadata(&runtime_handler)
+                    .expect("runtime handler metadata")
+                    .file_type()
                     .is_symlink()
             );
             assert_eq!(
-                std::fs::read_link(shim).expect("shim target"),
+                std::fs::read_link(runtime_handler).expect("runtime handler target"),
                 normalize_absolute_path(repo_root.join(".argon/sandbox/intercepts/aws.sh"))
             );
         }
+    }
+
+    #[test]
+    fn inline_intercepts_materialize_write_protected_handlers() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        let home = repo_root.join("home");
+        fs::create_dir_all(&repo_root).expect("repo");
+        fs::create_dir_all(&home).expect("home");
+        fs::write(
+            repo_root.join("Sandboxfile"),
+            r#"
+EXEC INTERCEPT aws WITH SCRIPT <<'ARGON'
+#!/bin/sh
+exec "$ARGON_EXEC" "$@"
+ARGON
+"#,
+        )
+        .expect("sandbox");
+        fs::write(repo_root.join("aws"), "#!/bin/sh\n").expect("aws");
+
+        let mut context = context_for(&repo_root, &["aws"]);
+        context
+            .env
+            .insert("PATH".to_string(), repo_root.display().to_string());
+        context
+            .env
+            .insert("HOME".to_string(), home.display().to_string());
+
+        let plan = build_execution_plan(&context, &[]).expect("plan");
+        let intercept = plan.intercepts.first().expect("intercept");
+
+        assert_eq!(intercept.handler_kind, InterceptHandlerKind::InlineScript);
+        assert!(intercept.handler_write_protected);
+        assert!(intercept.handler_path.ends_with("handlers/aws"));
+        assert!(
+            plan.policy
+                .denied_writable_paths
+                .iter()
+                .any(|path| path == &intercept.handler_path)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&intercept.handler_path).expect("inline handler"),
+            "#!/bin/sh\nexec \"$ARGON_EXEC\" \"$@\"\n"
+        );
     }
 
     #[test]

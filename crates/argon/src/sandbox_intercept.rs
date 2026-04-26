@@ -92,7 +92,7 @@ pub fn spawn_broker(current_exe: &Path, config: BrokerConfig, config_path: &Path
     Ok(())
 }
 
-pub fn maybe_run_intercept_runner() -> Result<bool> {
+pub fn maybe_run_intercept_helper() -> Result<bool> {
     let argv0 = std::env::args()
         .next()
         .and_then(|value| {
@@ -102,15 +102,62 @@ pub fn maybe_run_intercept_runner() -> Result<bool> {
                 .map(str::to_string)
         })
         .unwrap_or_default();
-    if argv0 != "argon-intercept-run" {
-        return Ok(false);
+    match argv0.as_str() {
+        "argon-intercept-info" => {
+            run_message_helper("info", 0);
+        }
+        "argon-intercept-warn" => {
+            run_message_helper("warning", 0);
+        }
+        "argon-intercept-error" => {
+            run_message_helper("error", 126);
+        }
+        "argon-intercept-exec" => {
+            run_intercept_exec_helper()?;
+            Ok(true)
+        }
+        "argon-intercept-run" => {
+            run_legacy_intercept_runner()?;
+            Ok(true)
+        }
+        _ => Ok(false),
     }
-
-    run_intercept_runner()?;
-    Ok(true)
 }
 
-fn run_intercept_runner() -> Result<()> {
+fn run_message_helper(label: &str, code: i32) -> ! {
+    let message = std::env::args().skip(1).collect::<Vec<_>>().join(" ");
+    if message.is_empty() {
+        eprintln!("argon intercept {label}");
+    } else {
+        eprintln!("argon intercept {label}: {message}");
+    }
+    std::process::exit(code);
+}
+
+fn run_intercept_exec_helper() -> Result<()> {
+    let socket_path = std::env::var_os(sandbox::INTERCEPT_SOCKET_ENV)
+        .map(PathBuf::from)
+        .context("missing ARGON_SANDBOX_INTERCEPT_SOCKET")?;
+    let token = std::env::var(sandbox::INTERCEPT_TOKEN_ENV)
+        .context("missing ARGON_SANDBOX_INTERCEPT_TOKEN")?;
+    let command_name = std::env::var(sandbox::INTERCEPT_COMMAND_ENV)
+        .context("missing ARGON_SANDBOX_INTERCEPT_COMMAND")?;
+    if command_name.contains('/') || command_name.is_empty() {
+        bail!("invalid intercepted command name: {command_name}");
+    }
+
+    let response = send_request(
+        &socket_path,
+        &BrokerRequest {
+            token,
+            command_name,
+            args: std::env::args().skip(1).collect(),
+        },
+    )?;
+    finish_broker_response(response)
+}
+
+fn run_legacy_intercept_runner() -> Result<()> {
     let socket_path = std::env::var_os(sandbox::INTERCEPT_SOCKET_ENV)
         .map(PathBuf::from)
         .context("missing ARGON_SANDBOX_INTERCEPT_SOCKET")?;
@@ -133,6 +180,10 @@ fn run_intercept_runner() -> Result<()> {
             args,
         },
     )?;
+    finish_broker_response(response)
+}
+
+fn finish_broker_response(response: BrokerResponse) -> Result<()> {
     std::io::stdout()
         .write_all(&response.stdout)
         .context("failed to write intercepted stdout")?;
@@ -277,6 +328,11 @@ fn execute_request(config: &BrokerConfig, request: BrokerRequest) -> Result<Brok
     environment.remove(sandbox::INTERCEPT_RUNNER_ENV);
     environment.remove(sandbox::INTERCEPT_SOCKET_ENV);
     environment.remove(sandbox::INTERCEPT_TOKEN_ENV);
+    environment.remove(sandbox::INTERCEPT_COMMAND_ENV);
+    environment.remove(sandbox::ARGON_INFO_ENV);
+    environment.remove(sandbox::ARGON_WARN_ENV);
+    environment.remove(sandbox::ARGON_ERROR_ENV);
+    environment.remove(sandbox::ARGON_EXEC_ENV);
     if let Some(path) = environment.get("ARGON_SANDBOX_ORIGINAL_PATH").cloned() {
         environment.insert("PATH".to_string(), path);
         environment.remove("ARGON_SANDBOX_ORIGINAL_PATH");

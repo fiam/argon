@@ -698,7 +698,7 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    if sandbox_intercept::maybe_run_intercept_runner()? {
+    if sandbox_intercept::maybe_run_intercept_helper()? {
         return Ok(());
     }
 
@@ -2158,7 +2158,11 @@ fn print_intercept_broker(broker: Option<&sandbox::InterceptBrokerPlan>) {
     };
 
     println!("- runtime: {}", broker.runtime_dir.display());
-    println!("- runner: {}", broker.runner_path.display());
+    println!("- helper dir: {}", broker.helper_dir.display());
+    println!("- info helper: {}", broker.info_helper_path.display());
+    println!("- warn helper: {}", broker.warn_helper_path.display());
+    println!("- error helper: {}", broker.error_helper_path.display());
+    println!("- exec helper: {}", broker.exec_helper_path.display());
     println!("- socket: {}", broker.socket_path.display());
 }
 
@@ -2286,12 +2290,30 @@ fn print_exec_policy(
     for intercept in intercepts {
         println!("- {}", intercept.command_name);
         println!("  handler: {}", intercept.handler_path.display());
+        println!(
+            "  handler kind: {}",
+            intercept_handler_kind_label(intercept.handler_kind)
+        );
+        println!(
+            "  handler write protected: {}",
+            intercept.handler_write_protected
+        );
         if let Some(path) = intercept.real_command_path.as_ref() {
             println!("  resolved: {}", path.display());
         }
         if let Some(path) = intercept.shim_path.as_ref() {
             println!("  shim: {}", path.display());
         }
+        if let Some(path) = intercept.exec_helper_path.as_ref() {
+            println!("  exec helper: {}", path.display());
+        }
+    }
+}
+
+fn intercept_handler_kind_label(kind: sandbox::InterceptHandlerKind) -> &'static str {
+    match kind {
+        sandbox::InterceptHandlerKind::File => "file",
+        sandbox::InterceptHandlerKind::InlineScript => "inline_script",
     }
 }
 
