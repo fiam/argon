@@ -15,9 +15,8 @@
           "jsonpath": "$.workspace.package.version"
         },
         {
-          "type": "yaml",
+          "type": "generic",
           "path": "apps/macos/project.yml",
-          "jsonpath": "$.targets.Argon.settings.base.MARKETING_VERSION"
         }
       ]
     }
