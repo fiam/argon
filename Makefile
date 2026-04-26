@@ -42,8 +42,7 @@ test-swift: build-swift
 		-project apps/macos/Argon.xcodeproj \
 		-scheme Argon \
 		-configuration Debug \
-		-destination "$(XCODE_DESTINATION)" \
-		-quiet
+		-destination "$(XCODE_DESTINATION)"
 
 # macOS UI smoke tests
 test-ui: build-swift
@@ -62,8 +61,7 @@ build-swift:
 		-project apps/macos/Argon.xcodeproj \
 		-scheme Argon \
 		-configuration Debug \
-		-destination "$(XCODE_DESTINATION)" \
-		-quiet
+		-destination "$(XCODE_DESTINATION)"
 
 # License audit
 deny:

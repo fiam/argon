@@ -225,7 +225,6 @@ xcodebuild_args=(
   ARGON_GHOSTTY_STATIC_LIB=libghostty.a
   ARGON_APPCAST_FEED_URL="${ARGON_APPCAST_FEED_URL:-}"
   SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
-  -quiet
 )
 
 if [[ "$SIGNED_RELEASE" == "true" ]]; then
@@ -258,8 +257,7 @@ EOF
   xcodebuild -exportArchive \
     -archivePath "$ARCHIVE_PATH" \
     -exportPath "$EXPORT_PATH" \
-    -exportOptionsPlist "$EXPORT_OPTIONS_PATH" \
-    -quiet
+    -exportOptionsPlist "$EXPORT_OPTIONS_PATH"
 
   APP_PATH="$EXPORT_PATH/Argon.app"
 else
