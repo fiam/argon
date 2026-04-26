@@ -141,9 +141,9 @@ targets:
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: true
-        "OTHER_LDFLAGS[arch=*]": "-lstdc++ -force_load $(TARGET_BUILD_DIR)/$(ARGON_GHOSTTY_STATIC_LIB)"
+        "OTHER_LDFLAGS[arch=*]": "-lstdc++ -force_load $(ARGON_GHOSTTY_STATIC_LIB)"
         # Embedded Ghostty runtime paths used by the terminal renderer.
-        ARGON_GHOSTTY_STATIC_LIB: "libghostty-fat.a"
+        ARGON_GHOSTTY_STATIC_LIB: "$(TARGET_BUILD_DIR)/libghostty-fat.a"
         ARGON_GHOSTTYKIT_PATH: "$(SRCROOT)/../../target/libghostty/native/macos/GhosttyKit.xcframework"
         ARGON_GHOSTTY_RESOURCES_PATH: "$(SRCROOT)/../../target/libghostty/native/share/ghostty"
         ARGON_APPCAST_FEED_URL: ""
