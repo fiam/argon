@@ -195,6 +195,8 @@ pub struct SandboxExplain {
     pub context: BTreeMap<String, String>,
     pub paths: ResolvedConfigPaths,
     pub sources: Vec<ExplainedSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protected_sandbox_files: Vec<PathBuf>,
     pub infos: Vec<String>,
     pub warnings: Vec<String>,
     pub policy: EffectiveSandboxPolicy,
@@ -222,6 +224,7 @@ pub struct SandboxExecutionPlan {
     pub context: BTreeMap<String, String>,
     pub paths: ResolvedConfigPaths,
     pub sources: Vec<ExplainedSource>,
+    pub protected_sandbox_files: Vec<PathBuf>,
     pub infos: Vec<String>,
     pub warnings: Vec<String>,
     pub policy: EffectiveSandboxPolicy,
@@ -358,6 +361,7 @@ struct EvaluationState {
     vars: BTreeMap<String, String>,
     policy: EffectiveSandboxPolicy,
     sources: Vec<ExplainedSource>,
+    protected_sandbox_files: Vec<PathBuf>,
     infos: Vec<String>,
     warnings: Vec<String>,
     pending_exec_commands: Vec<PendingExecCommand>,
@@ -454,6 +458,7 @@ impl SandboxExecutionPlan {
             context: self.context.clone(),
             paths: self.paths.clone(),
             sources: self.sources.clone(),
+            protected_sandbox_files: self.protected_sandbox_files.clone(),
             infos: self.infos.clone(),
             warnings: self.warnings.clone(),
             policy: self.policy.clone(),
@@ -486,6 +491,7 @@ pub fn builtin_preview(
         vars,
         policy: EffectiveSandboxPolicy::default(),
         sources: Vec::new(),
+        protected_sandbox_files: Vec::new(),
         infos: Vec::new(),
         warnings: Vec::new(),
         pending_exec_commands: Vec::new(),
@@ -594,6 +600,7 @@ pub fn build_execution_plan(
         vars: seed_variables(context)?,
         policy: EffectiveSandboxPolicy::default(),
         sources: Vec::new(),
+        protected_sandbox_files: Vec::new(),
         infos: Vec::new(),
         warnings: Vec::new(),
         pending_exec_commands: Vec::new(),
@@ -635,12 +642,14 @@ pub fn build_execution_plan(
         }
         state.environment_overrides.insert(key, value);
     }
+    protect_loaded_sandboxfiles(&mut state.policy, &state.protected_sandbox_files);
     validate_primary_command(&state.policy, &state.vars, context)?;
 
     Ok(SandboxExecutionPlan {
         context: state.vars,
         paths,
         sources: state.sources,
+        protected_sandbox_files: state.protected_sandbox_files,
         infos: state.infos,
         warnings: state.warnings,
         policy: state.policy,
@@ -1082,6 +1091,13 @@ fn evaluate_source(
     }
 
     let result = (|| {
+        if matches!(
+            source.kind,
+            SourceFileKind::Config | SourceFileKind::Include
+        ) && let Some(path) = source.path.as_ref()
+        {
+            push_unique_path(&mut state.protected_sandbox_files, path.clone());
+        }
         state.sources.push(ExplainedSource {
             kind: match source.kind {
                 SourceFileKind::Config => "config".to_string(),
@@ -2505,6 +2521,13 @@ fn add_fs_allowance(
                 push_unique_path(&mut policy.writable_roots, path.to_path_buf());
             }
         }
+    }
+}
+
+fn protect_loaded_sandboxfiles(policy: &mut EffectiveSandboxPolicy, paths: &[PathBuf]) {
+    for path in paths {
+        let aliases = path_aliases(path);
+        add_fs_denials(policy, FsAccess::Write, &aliases, PathKind::File);
     }
 }
 
@@ -4137,6 +4160,41 @@ END
     }
 
     #[test]
+    fn loaded_sandboxfiles_are_write_denied_after_allows() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        let home = repo_root.join("home");
+        fs::create_dir_all(&repo_root).expect("repo");
+        fs::create_dir_all(&home).expect("home");
+        fs::write(
+            repo_root.join(REPO_SANDBOXFILE),
+            "FS DEFAULT READWRITE\nFS ALLOW WRITE .\nUSE ./Sandboxfile.local\n",
+        )
+        .expect("sandbox");
+        fs::write(repo_root.join("Sandboxfile.local"), "FS ALLOW WRITE .\n")
+            .expect("local sandbox");
+
+        let mut context = context_for(&repo_root, &["/bin/zsh"]);
+        context.argv.clear();
+
+        let explain = explain(&context, &[]).expect("explain");
+        let repo_root = normalize_absolute_path(repo_root);
+        let sandboxfile = normalize_absolute_path(repo_root.join(REPO_SANDBOXFILE));
+        let local_sandboxfile = normalize_absolute_path(repo_root.join("Sandboxfile.local"));
+
+        assert!(explain.policy.writable_roots.contains(&repo_root));
+        assert!(explain.protected_sandbox_files.contains(&sandboxfile));
+        assert!(explain.protected_sandbox_files.contains(&local_sandboxfile));
+        assert!(explain.policy.denied_writable_paths.contains(&sandboxfile));
+        assert!(
+            explain
+                .policy
+                .denied_writable_paths
+                .contains(&local_sandboxfile)
+        );
+    }
+
+    #[test]
     fn recursive_relative_use_is_rejected() {
         let temp = tempdir().expect("tempdir");
         let repo_root = temp.path().join("repo");
@@ -4207,6 +4265,7 @@ END
                 existing_paths: Vec::new(),
             },
             sources: Vec::new(),
+            protected_sandbox_files: Vec::new(),
             infos: Vec::new(),
             warnings: Vec::new(),
             policy: EffectiveSandboxPolicy::default(),

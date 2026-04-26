@@ -2135,6 +2135,7 @@ fn run_sandbox_explain(args: SandboxExplainArgs) -> Result<()> {
         }
         print_config_search(&explain.paths);
         print_explained_sources(&explain.sources);
+        print_protected_sandbox_files(&explain.protected_sandbox_files);
         print_filesystem_policy(&explain.policy);
         print_exec_policy(&explain.policy, &explain.intercepts);
         print_intercept_broker(explain.intercept_broker.as_ref());
@@ -2225,6 +2226,18 @@ fn print_explained_sources(sources: &[sandbox::ExplainedSource]) {
             Some(path) => println!("- {}: {} ({})", source.kind, source.name, path.display()),
             None => println!("- {}: {}", source.kind, source.name),
         }
+    }
+}
+
+fn print_protected_sandbox_files(paths: &[PathBuf]) {
+    println!("Protected Sandboxfiles:");
+    if paths.is_empty() {
+        println!("- (none)");
+        return;
+    }
+
+    for path in paths {
+        println!("- {}", path.display());
     }
 }
 

@@ -362,6 +362,7 @@ ENV SET FOO sandboxed
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("\"environmentDefault\": \"none\""));
     assert!(stdout.contains("\"netDefault\": \"none\""));
+    assert!(stdout.contains("\"protectedSandboxFiles\""));
     assert!(stdout.contains("\"allowedEnvironmentPatterns\""));
     assert!(stdout.contains("\"FOO\": \"sandboxed\""));
     Ok(())
@@ -515,6 +516,7 @@ END
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Parsed Sandboxfiles:"));
     assert!(stdout.contains("Sources:"));
+    assert!(stdout.contains("Protected Sandboxfiles:"));
     assert!(stdout.contains("Filesystem:"));
     assert!(stdout.contains("Exec:"));
     assert!(stdout.contains("Network:"));
@@ -630,6 +632,65 @@ fn sandbox_exec_restricts_writes_to_repo_and_extra_roots() -> Result<()> {
     assert!(repo_file.exists());
     assert!(session_file.exists());
     assert!(!outside_file.exists());
+    Ok(())
+}
+
+#[test]
+fn sandbox_exec_denies_writing_loaded_sandboxfiles() -> Result<()> {
+    let temp = tempdir()?;
+    let root = temp.path().canonicalize()?;
+    let home = root.join("home");
+    let repo_root = root.join("repo");
+    std::fs::create_dir_all(&home)?;
+    std::fs::create_dir_all(&repo_root)?;
+    let sandboxfile = repo_root.join("Sandboxfile");
+    let local_sandboxfile = repo_root.join("Sandboxfile.local");
+    std::fs::write(
+        &sandboxfile,
+        r#"
+FS DEFAULT NONE
+EXEC DEFAULT ALLOW
+FS ALLOW WRITE .
+USE os
+USE ./Sandboxfile.local
+"#,
+    )?;
+    std::fs::write(&local_sandboxfile, "FS ALLOW WRITE .\n")?;
+    let sandboxfile_before = std::fs::read_to_string(&sandboxfile)?;
+    let local_sandboxfile_before = std::fs::read_to_string(&local_sandboxfile)?;
+
+    let output = run_argon(
+        Command::new(env!("CARGO_BIN_EXE_argon"))
+            .env("HOME", &home)
+            .env("SHELL", "/bin/zsh")
+            .current_dir(&repo_root)
+            .arg("sandbox")
+            .arg("exec")
+            .arg("--")
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg(
+                "if printf bad > Sandboxfile; then exit 9; fi; \
+                 if rm Sandboxfile; then exit 10; fi; \
+                 if printf bad > Sandboxfile.local; then exit 11; fi; \
+                 if mv Sandboxfile.local Sandboxfile.local.moved; then exit 12; fi",
+            ),
+    )?;
+
+    if !output.status.success() {
+        bail!(
+            "sandbox exec Sandboxfile protection failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+    assert_eq!(std::fs::read_to_string(&sandboxfile)?, sandboxfile_before);
+    assert_eq!(
+        std::fs::read_to_string(&local_sandboxfile)?,
+        local_sandboxfile_before
+    );
+    assert!(!repo_root.join("Sandboxfile.local.moved").exists());
     Ok(())
 }
 

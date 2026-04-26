@@ -83,6 +83,7 @@ Argon evaluates policy in this order:
 4. append explicit `--write-root` launch roots
 5. resolve bare `EXEC ALLOW <command>` entries against `PATH`
 6. resolve `EXEC INTERCEPT` handlers and prepare the broker runtime
+7. deny writes to every loaded file-backed sandbox source
 
 `USE` expands builtins inline at the point where it appears. That makes
 source order meaningful without turning the language into a general scripting
@@ -97,6 +98,13 @@ A common setup is:
 - `./Sandboxfile.local` for machine-local repo extensions
 - `$HOME/.Sandboxfile` for user-level policy applied after the repo-local
   sandbox files
+
+Every loaded file-backed sandbox source is write-protected in the final
+resolved policy. This includes discovered `Sandboxfile`, `.Sandboxfile`, and
+`.Sanboxfile` files plus any relative or absolute `USE ./path` include that is
+actually evaluated. There is no `Sandboxfile` escape hatch for this protection:
+even `FS ALLOW WRITE .`, `FS DEFAULT READWRITE`, or `--write-root` cannot make
+the loaded policy files writable from inside the sandbox.
 
 ## Language
 
@@ -157,8 +165,9 @@ Notes:
 - relative paths in the repo file resolve from the repo root
 - relative paths in the user file resolve from the home file location
 - relative paths in `USE ./path` resolve from the file that contains the `USE`
-- explain output shows normalized absolute paths and may display resolved
-  symlink targets where canonicalization succeeds
+- explain output shows normalized absolute paths, protected loaded sandbox
+  files, and may display resolved symlink targets where canonicalization
+  succeeds
 - bare `EXEC ALLOW git` searches `PATH` and allows every matching executable
 - path-like `EXEC ALLOW /abs/tool` or `EXEC ALLOW ./bin/tool` allow that
   specific file or directory only
@@ -493,8 +502,8 @@ If validation fails, Argon reports the originating file and line number.
 ## Explain
 
 Use `argon sandbox explain` to see the resolved launch context, loaded source
-files, config search order, warnings, effective filesystem and exec policy,
-intercept plan, and environment shaping:
+files, protected sandbox files, config search order, warnings, effective
+filesystem and exec policy, intercept plan, and environment shaping:
 
 ```bash
 argon --repo <repo> sandbox explain
@@ -506,6 +515,11 @@ This is the primary debugging tool for `Sandboxfile`.
 
 The plain-text formatter merges filesystem entries by path and shows effective
 access such as `[read]` or `[read, write]`.
+
+`protectedSandboxFiles` in JSON output lists the loaded policy files that are
+write-denied after normal policy evaluation. The same paths also appear in the
+denied write file list because the OS sandbox enforcement uses normal
+filesystem deny rules.
 
 ## `argon sandbox exec`
 
@@ -550,6 +564,7 @@ Today the macOS implementation enforces:
 - read restrictions
 - write restrictions
 - executable allow/deny policy
+- loaded Sandboxfile write protection
 - intercept handler symlinks, write protection, and broker-mediated execution
 
 ## Cross-Platform Structure
