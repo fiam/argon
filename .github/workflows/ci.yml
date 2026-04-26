@@ -18,6 +18,10 @@ defaults:
   run:
     shell: bash
 
+env:
+  RUSTFLAGS: -Dwarnings
+  RUSTDOCFLAGS: -Dwarnings
+
 jobs:
   workflow-lint:
     name: Workflow Lint

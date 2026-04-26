@@ -4,10 +4,16 @@ SWIFT_FORMAT ?= $(shell xcrun --find swift-format 2>/dev/null || command -v swif
 SDKROOT ?= $(shell xcrun --sdk macosx --show-sdk-path 2>/dev/null)
 CC ?= $(shell xcrun --find clang 2>/dev/null || command -v cc 2>/dev/null)
 CXX ?= $(shell xcrun --find clang++ 2>/dev/null || command -v c++ 2>/dev/null)
+RUSTFLAGS ?= -Dwarnings
+RUSTDOCFLAGS ?= -Dwarnings
+HOST_ARCH ?= $(shell uname -m)
+XCODE_DESTINATION ?= platform=macOS,arch=$(HOST_ARCH)
 
 export SDKROOT
 export CC
 export CXX
+export RUSTFLAGS
+export RUSTDOCFLAGS
 
 # Run all checks (formatting, linting, tests, license audit)
 check: fmt lint deny test
@@ -37,6 +43,7 @@ test-swift: build-swift
 			-project apps/macos/Argon.xcodeproj \
 			-scheme Argon \
 			-configuration Debug \
+			-destination "$(XCODE_DESTINATION)" \
 			-quiet \
 			2>&1 | tail -20'
 
@@ -46,6 +53,7 @@ test-ui: build-swift
 		-project apps/macos/Argon.xcodeproj \
 		-scheme ArgonUITests \
 		-configuration Debug \
+		-destination "$(XCODE_DESTINATION)" \
 		-only-testing:ArgonUITests/ArgonUITests/testGhosttyCustomReviewerLaunchDoesNotCrash
 
 # Build Swift app
@@ -56,6 +64,7 @@ build-swift:
 		-project apps/macos/Argon.xcodeproj \
 		-scheme Argon \
 		-configuration Debug \
+		-destination "$(XCODE_DESTINATION)" \
 		-quiet
 
 # License audit

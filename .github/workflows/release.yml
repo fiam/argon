@@ -38,6 +38,10 @@ defaults:
   run:
     shell: bash
 
+env:
+  RUSTFLAGS: -Dwarnings
+  RUSTDOCFLAGS: -Dwarnings
+
 jobs:
   release-please:
     name: Release Please

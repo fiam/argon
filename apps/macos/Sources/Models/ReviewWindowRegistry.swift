@@ -70,8 +70,10 @@ final class ReviewWindowRegistry {
       object: window,
       queue: .main
     ) { [weak self, weak window] _ in
-      guard let self, let window else { return }
-      self.unregister(window: window, repoRoot: normalized)
+      MainActor.assumeIsolated {
+        guard let self, let window else { return }
+        self.unregister(window: window, repoRoot: normalized)
+      }
     }
 
     registrationsByRepoRoot[normalized, default: []].append(

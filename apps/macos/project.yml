@@ -16,6 +16,10 @@ settings:
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     DEAD_CODE_STRIPPING: true
+    CLANG_WARN_INCOMPLETE_UMBRELLA: "NO"
+    GCC_TREAT_WARNINGS_AS_ERRORS: "YES"
+    OTHER_SWIFT_FLAGS: "$(inherited) -Xcc -Wno-incomplete-umbrella"
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: "YES"
 
 schemes:
   Argon:
@@ -73,6 +77,7 @@ targets:
             echo "error: cargo not found. Install Rust or set CARGO to an absolute cargo path." >&2
             exit 1
           fi
+          export RUSTFLAGS="${RUSTFLAGS:--Dwarnings}"
           "$CARGO_BIN" build --manifest-path "$REPO_ROOT/Cargo.toml" --bin argon --release
     postBuildScripts:
       - name: Bundle Ghostty resources

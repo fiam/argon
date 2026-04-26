@@ -81,6 +81,7 @@ final class WorkspaceState {
   private var stagedReviewLaunch: StagedReviewLaunch?
   private var preparedReviewTargetsByAgentTabID: [UUID: ReviewTarget] = [:]
   private var didApplyUITestWebsiteDemo = false
+  @ObservationIgnored
   nonisolated(unsafe) private var reviewSessionCloseObserver: NSObjectProtocol?
 
   init(

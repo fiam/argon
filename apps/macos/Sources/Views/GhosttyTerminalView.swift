@@ -889,14 +889,18 @@ final class GhosttyTerminalHostView: NSView {
       object: NSApp,
       queue: .main
     ) { [weak self] _ in
-      self?.syncEmbeddedFocusState()
+      MainActor.assumeIsolated {
+        self?.syncEmbeddedFocusState()
+      }
     }
     appDidResignActiveObserver = center.addObserver(
       forName: NSApplication.didResignActiveNotification,
       object: NSApp,
       queue: .main
     ) { [weak self] _ in
-      self?.syncEmbeddedFocusState()
+      MainActor.assumeIsolated {
+        self?.syncEmbeddedFocusState()
+      }
     }
   }
 
@@ -925,14 +929,18 @@ final class GhosttyTerminalHostView: NSView {
       object: window,
       queue: .main
     ) { [weak self] _ in
-      self?.syncEmbeddedFocusState()
+      MainActor.assumeIsolated {
+        self?.syncEmbeddedFocusState()
+      }
     }
     windowDidResignKeyObserver = center.addObserver(
       forName: NSWindow.didResignKeyNotification,
       object: window,
       queue: .main
     ) { [weak self] _ in
-      self?.syncEmbeddedFocusState()
+      MainActor.assumeIsolated {
+        self?.syncEmbeddedFocusState()
+      }
     }
   }
 
@@ -1088,7 +1096,9 @@ final class GhosttyTerminalHostView: NSView {
       withTimeInterval: 0.5,
       repeats: true
     ) { [weak self] _ in
-      self?.syncProcessState()
+      MainActor.assumeIsolated {
+        self?.syncProcessState()
+      }
     }
   }
 

@@ -2044,6 +2044,7 @@ final class ArgonUITests: XCTestCase {
     return String(decoding: data, as: UTF8.self)
   }
 
+  @MainActor
   private static func attachScreenshot(_ screenshot: XCUIScreenshot, named name: String) {
     let attachment = XCTAttachment(screenshot: screenshot)
     attachment.name = name

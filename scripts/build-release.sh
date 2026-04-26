@@ -17,6 +17,7 @@ echo "==> Building Argon $VERSION (release)"
 
 # 1. Build the Rust CLI
 echo "==> Building argon CLI..."
+export RUSTFLAGS="${RUSTFLAGS:--Dwarnings}"
 cargo build --manifest-path "$REPO_ROOT/Cargo.toml" --bin argon --release 2>&1
 
 # 2. Build vendored Ghostty in release mode

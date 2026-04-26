@@ -176,6 +176,8 @@ if command -v rustup >/dev/null 2>&1; then
   rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null
 fi
 
+export RUSTFLAGS="${RUSTFLAGS:--Dwarnings}"
+
 cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --bin argon --release --target aarch64-apple-darwin
 cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --bin argon --release --target x86_64-apple-darwin
 

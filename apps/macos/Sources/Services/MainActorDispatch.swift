@@ -1,24 +1,24 @@
 import Foundation
 
 enum MainActorDispatch {
-  static func sync<T: Sendable>(_ body: @escaping @Sendable () -> T) -> T {
+  static func sync<T: Sendable>(_ body: @MainActor @Sendable () -> T) -> T {
     if Thread.isMainThread {
-      return body()
+      return MainActor.assumeIsolated(body)
     }
 
     return DispatchQueue.main.sync {
-      body()
+      MainActor.assumeIsolated(body)
     }
   }
 
-  static func async(_ body: @escaping @Sendable () -> Void) {
+  static func async(_ body: @escaping @MainActor @Sendable () -> Void) {
     if Thread.isMainThread {
-      body()
+      MainActor.assumeIsolated(body)
       return
     }
 
     DispatchQueue.main.async {
-      body()
+      MainActor.assumeIsolated(body)
     }
   }
 }
