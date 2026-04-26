@@ -2,21 +2,18 @@ name: Argon
 options:
   bundleIdPrefix: dev.argonapp
   deploymentTarget:
-    macOS: "14.0"
-  xcodeVersion: "16.0"
-  minimumXcodeGenVersion: "2.40"
-
+    macOS: '14.0'
+  xcodeVersion: '16.0'
+  minimumXcodeGenVersion: '2.40'
 packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     from: 2.9.0
-
 settings:
   base:
-    SWIFT_VERSION: "6.0"
-    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    SWIFT_VERSION: '6.0'
+    MACOSX_DEPLOYMENT_TARGET: '14.0'
     DEAD_CODE_STRIPPING: true
-
 schemes:
   Argon:
     build:
@@ -25,14 +22,10 @@ schemes:
     test:
       targets:
         - ArgonTests
-
 targets:
   Argon:
     type: application
     platform: macOS
-    # Keep Xcode user script sandboxing disabled for this target. The app bundles
-    # the Rust CLI via run-script phases, and enabling the sandbox currently
-    # creates a build-graph cycle around the generated CLI artifact.
     preBuildScripts:
       - name: Build vendored libghostty
         basedOnDependencyAnalysis: false
@@ -53,12 +46,15 @@ targets:
           fi
       - name: Build bundled argon CLI
         basedOnDependencyAnalysis: false
-        script: |
+        script: >
           set -euo pipefail
+
           REPO_ROOT="$(cd "$SRCROOT/../.." && pwd)"
+
           if [ "${ARGON_SKIP_BUNDLED_CLI_BUILD:-0}" = "1" ]; then
             exit 0
           fi
+
           if [ -n "${CARGO:-}" ] && [ -x "${CARGO}" ]; then
             CARGO_BIN="${CARGO}"
           elif [ -x "$HOME/.cargo/bin/cargo" ]; then
@@ -73,19 +69,25 @@ targets:
             echo "error: cargo not found. Install Rust or set CARGO to an absolute cargo path." >&2
             exit 1
           fi
-          "$CARGO_BIN" build --manifest-path "$REPO_ROOT/Cargo.toml" --bin argon --release
+
+          "$CARGO_BIN" build --manifest-path "$REPO_ROOT/Cargo.toml" --bin argon
+          --release
     postBuildScripts:
       - name: Bundle Ghostty resources
         basedOnDependencyAnalysis: false
-        script: |
+        script: >
           set -euo pipefail
+
           REPO_ROOT="$(cd "$SRCROOT/../.." && pwd)"
+
           if [ -n "${ARGON_GHOSTTY_RESOURCES_PATH:-}" ]; then
             SRC_DIR="$ARGON_GHOSTTY_RESOURCES_PATH"
           else
             SRC_DIR="$REPO_ROOT/target/libghostty/native/share/ghostty"
           fi
+
           DEST_DIR="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/ghostty"
+
           if [ -d "$SRC_DIR" ]; then
             rm -rf "$DEST_DIR"
             cp -R "$SRC_DIR" "$DEST_DIR"
@@ -127,21 +129,19 @@ targets:
         INFOPLIST_FILE: Resources/Info.plist
         CODE_SIGN_ENTITLEMENTS: Resources/Argon.entitlements
         PRODUCT_NAME: Argon
-        MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: '1'
         COMBINE_HIDPI_IMAGES: true
         ENABLE_HARDENED_RUNTIME: true
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: true
-        "OTHER_LDFLAGS[arch=*]": "-lstdc++ -force_load $(TARGET_BUILD_DIR)/$(ARGON_GHOSTTY_STATIC_LIB)"
-        # Embedded Ghostty runtime paths used by the terminal renderer.
-        ARGON_GHOSTTY_STATIC_LIB: "libghostty-fat.a"
-        ARGON_GHOSTTYKIT_PATH: "$(SRCROOT)/../../target/libghostty/native/macos/GhosttyKit.xcframework"
-        ARGON_GHOSTTY_RESOURCES_PATH: "$(SRCROOT)/../../target/libghostty/native/share/ghostty"
-        ARGON_APPCAST_FEED_URL: ""
-        SPARKLE_PUBLIC_ED_KEY: "VOqf6oj0ku8jGXlujf5+bwHAMI10fnBppdY/+7MOaZE="
-
+        OTHER_LDFLAGS[arch=*]: '-lstdc++ -force_load $(TARGET_BUILD_DIR)/$(ARGON_GHOSTTY_STATIC_LIB)'
+        ARGON_GHOSTTY_STATIC_LIB: libghostty-fat.a
+        ARGON_GHOSTTYKIT_PATH: $(SRCROOT)/../../target/libghostty/native/macos/GhosttyKit.xcframework
+        ARGON_GHOSTTY_RESOURCES_PATH: $(SRCROOT)/../../target/libghostty/native/share/ghostty
+        ARGON_APPCAST_FEED_URL: ''
+        SPARKLE_PUBLIC_ED_KEY: VOqf6oj0ku8jGXlujf5+bwHAMI10fnBppdY/+7MOaZE=
   ArgonTests:
     type: bundle.unit-test
     platform: macOS
@@ -153,9 +153,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.argonapp.macos.tests
         GENERATE_INFOPLIST_FILE: true
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Argon.app/Contents/MacOS/Argon"
-        BUNDLE_LOADER: "$(TEST_HOST)"
-
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Argon.app/Contents/MacOS/Argon
+        BUNDLE_LOADER: $(TEST_HOST)
   ArgonUITests:
     type: bundle.ui-testing
     platform: macOS
