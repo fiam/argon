@@ -101,12 +101,14 @@ struct SettingsView: View {
     TabView {
       generalTab
         .tabItem { Label("General", systemImage: "gearshape") }
+      workspaceTab
+        .tabItem { Label("Workspace", systemImage: "folder") }
+      reviewTab
+        .tabItem { Label("Review", systemImage: "text.page") }
       agentsTab
         .tabItem { Label("Agents", systemImage: "person.2") }
       sandboxTab
         .tabItem { Label("Sandbox", systemImage: "shield") }
-      appearanceTab
-        .tabItem { Label("Appearance", systemImage: "textformat.size") }
       terminalTab
         .tabItem { Label("Terminal", systemImage: "terminal") }
     }
@@ -126,44 +128,6 @@ struct SettingsView: View {
 
   private var generalTab: some View {
     Form {
-      Section("Diff View") {
-        Picker("Default mode", selection: $defaultDiffViewMode) {
-          Text("Unified").tag("unified")
-          Text("Side by Side").tag("sideBySide")
-        }
-        .pickerStyle(.segmented)
-      }
-
-      Section("Workspace") {
-        Toggle("Close finished terminals automatically", isOn: autoCloseFinishedTerminalsBinding)
-          .help(selectedFinishedTerminalBehavior.helpText)
-
-        Toggle("Prevent sleep while agents are running", isOn: $preventSleepWhileAgentsRun)
-          .help("Keep this Mac awake while at least one agent tab is running.")
-      }
-
-      Section("Notifications") {
-        VStack(alignment: .leading, spacing: 6) {
-          Toggle("Agent notifications", isOn: agentNotificationsEnabledBinding)
-            .help(
-              "Notify when an agent needs your attention or finishes running."
-            )
-            .disabled(terminalAttentionNotifier.authorizationStatus == .denied)
-
-          Text(agentNotificationStatusText)
-            .font(.caption)
-            .foregroundStyle(agentNotificationStatusColor)
-            .fixedSize(horizontal: false, vertical: true)
-
-          if terminalAttentionNotifier.authorizationStatus == .denied {
-            Button("Open System Settings…") {
-              terminalAttentionNotifier.openSystemNotificationSettings()
-            }
-            .controlSize(.small)
-          }
-        }
-      }
-
       Section("Updates") {
         VStack(alignment: .leading, spacing: 8) {
           HStack(alignment: .center, spacing: 8) {
@@ -220,7 +184,16 @@ struct SettingsView: View {
           }
         }
       }
+    }
+    .formStyle(.grouped)
+    .settingsTabInsets()
+    .task {
+      refreshCLIInstallStatus()
+    }
+  }
 
+  private var workspaceTab: some View {
+    Form {
       Section("Worktrees") {
         HStack(spacing: 8) {
           DirectoryPathControl(
@@ -241,7 +214,7 @@ struct SettingsView: View {
         }
       }
 
-      Section("Finalize") {
+      Section("Merge Back") {
         Picker("Default merge style", selection: $defaultWorktreeMergeStrategy) {
           ForEach(WorktreeMergeStrategy.allCases) { strategy in
             Text(strategy.menuTitle)
@@ -250,13 +223,76 @@ struct SettingsView: View {
         }
         .pickerStyle(.menu)
       }
+
+      Section("Agents") {
+        Toggle("Prevent sleep while agents are running", isOn: $preventSleepWhileAgentsRun)
+          .help("Keep this Mac awake while at least one agent tab is running.")
+
+        VStack(alignment: .leading, spacing: 6) {
+          Toggle("Agent notifications", isOn: agentNotificationsEnabledBinding)
+            .help(
+              "Notify when an agent needs your attention or finishes running."
+            )
+            .disabled(terminalAttentionNotifier.authorizationStatus == .denied)
+
+          Text(agentNotificationStatusText)
+            .font(.caption)
+            .foregroundStyle(agentNotificationStatusColor)
+            .fixedSize(horizontal: false, vertical: true)
+
+          if terminalAttentionNotifier.authorizationStatus == .denied {
+            Button("Open System Settings…") {
+              terminalAttentionNotifier.openSystemNotificationSettings()
+            }
+            .controlSize(.small)
+          }
+        }
+      }
+
+      Section("Terminals") {
+        Toggle("Close finished terminals automatically", isOn: autoCloseFinishedTerminalsBinding)
+          .help(selectedFinishedTerminalBehavior.helpText)
+      }
     }
     .formStyle(.grouped)
     .settingsTabInsets()
     .task {
-      refreshCLIInstallStatus()
       await terminalAttentionNotifier.refreshAuthorizationStatus()
     }
+  }
+
+  private var reviewTab: some View {
+    Form {
+      Section("Diff") {
+        Toggle("Side-by-side diffs", isOn: sideBySideDiffsBinding)
+          .help("Show old content and new content in separate columns by default.")
+
+        HStack {
+          Text("Font size: \(Int(diffFontSize))pt")
+          Slider(value: $diffFontSize, in: 10...24, step: 1)
+        }
+        Text("The quick brown fox jumps over the lazy dog")
+          .font(.system(size: diffFontSize, design: .monospaced))
+          .foregroundStyle(.secondary)
+      }
+
+      Section("Comments") {
+        HStack {
+          Text("Font size: \(Int(effectiveCommentFontSize))pt")
+          Slider(value: $commentFontSize, in: CommentFontSettings.range, step: 1)
+        }
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Reviewer")
+            .font(.system(size: max(effectiveCommentFontSize - 2, 10), weight: .semibold))
+            .foregroundStyle(.secondary)
+          Text("This comment text uses your configured comment size.")
+            .font(.system(size: effectiveCommentFontSize))
+            .foregroundStyle(.secondary)
+        }
+      }
+    }
+    .formStyle(.grouped)
+    .settingsTabInsets()
   }
 
   // MARK: - Agents Tab
@@ -341,8 +377,6 @@ struct SettingsView: View {
     }
   }
 
-  // MARK: - Appearance Tab
-
   private var sandboxTab: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack(alignment: .center, spacing: 10) {
@@ -420,37 +454,6 @@ struct SettingsView: View {
     .onChange(of: selectedSandboxLayer) { _, _ in
       syncSandboxEditorState()
     }
-  }
-
-  private var appearanceTab: some View {
-    Form {
-      Section("Diff") {
-        HStack {
-          Text("Font size: \(Int(diffFontSize))pt")
-          Slider(value: $diffFontSize, in: 10...24, step: 1)
-        }
-        Text("The quick brown fox jumps over the lazy dog")
-          .font(.system(size: diffFontSize, design: .monospaced))
-          .foregroundStyle(.secondary)
-      }
-
-      Section("Comments") {
-        HStack {
-          Text("Font size: \(Int(effectiveCommentFontSize))pt")
-          Slider(value: $commentFontSize, in: CommentFontSettings.range, step: 1)
-        }
-        VStack(alignment: .leading, spacing: 4) {
-          Text("Reviewer")
-            .font(.system(size: max(effectiveCommentFontSize - 2, 10), weight: .semibold))
-            .foregroundStyle(.secondary)
-          Text("This comment text uses your configured comment size.")
-            .font(.system(size: effectiveCommentFontSize))
-            .foregroundStyle(.secondary)
-        }
-      }
-    }
-    .formStyle(.grouped)
-    .settingsTabInsets()
   }
 
   // MARK: - Terminal Tab
@@ -576,6 +579,15 @@ struct SettingsView: View {
         Task { @MainActor in
           await updateAgentNotificationsEnabled(isEnabled)
         }
+      }
+    )
+  }
+
+  private var sideBySideDiffsBinding: Binding<Bool> {
+    Binding(
+      get: { defaultDiffViewMode == "sideBySide" },
+      set: { isEnabled in
+        defaultDiffViewMode = isEnabled ? "sideBySide" : "unified"
       }
     )
   }
