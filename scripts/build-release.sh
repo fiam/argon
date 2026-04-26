@@ -33,6 +33,7 @@ xcodebuild \
     -project "$REPO_ROOT/apps/macos/Argon.xcodeproj" \
     -scheme Argon \
     -configuration Release \
+    ENABLE_HARDENED_RUNTIME=YES \
     build 2>&1 | tail -1
 
 # 5. Find the built app

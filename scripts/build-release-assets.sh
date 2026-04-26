@@ -111,6 +111,18 @@ function require_arches() {
   done
 }
 
+function require_hardened_runtime() {
+  local signed_path="$1"
+  local signature_details
+
+  signature_details="$(codesign --display --verbose=4 "$signed_path" 2>&1)"
+  if [[ "$signature_details" != *"Runtime Version="* && "$signature_details" != *"flags="*"runtime"* ]]; then
+    echo "hardened runtime is not enabled for $signed_path" >&2
+    echo "$signature_details" >&2
+    exit 1
+  fi
+}
+
 function restore_native_ghostty_layout() {
   if [[ -L "$GHOSTTY_NATIVE_ROOT" ]]; then
     rm -f "$GHOSTTY_NATIVE_ROOT"
@@ -207,6 +219,7 @@ xcodebuild_args=(
   ARCHS="arm64 x86_64"
   MARKETING_VERSION="$VERSION"
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
+  ENABLE_HARDENED_RUNTIME=YES
   ARGON_GHOSTTY_STATIC_LIB=libghostty.a
   ARGON_APPCAST_FEED_URL="${ARGON_APPCAST_FEED_URL:-}"
   SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
@@ -274,6 +287,7 @@ require_arches "$BUNDLED_CLI_PATH"
 
 if [[ "$SIGNED_RELEASE" == "true" ]]; then
   codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+  require_hardened_runtime "$APP_PATH"
 fi
 
 if [[ "$NOTARIZED_RELEASE" == "true" ]]; then
