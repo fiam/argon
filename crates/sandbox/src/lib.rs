@@ -960,6 +960,7 @@ pub fn apply_current_process(policy: &EffectiveSandboxPolicy) -> Result<(), Sand
     platform::apply_current_process(policy)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn macos_policy_summary(policy: &EffectiveSandboxPolicy) -> String {
     format!(
         "fs_default={:?}, exec_default={:?}, net_default={:?}, read_files={}, read_dirs={}, write_files={}, write_dirs={}, exec_files={}, exec_dirs={}, proxied_hosts={}, connect_rules={}, local_sockets={}",
@@ -978,6 +979,7 @@ fn macos_policy_summary(policy: &EffectiveSandboxPolicy) -> String {
     )
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn format_macos_api_error(
     policy: &EffectiveSandboxPolicy,
     api_message: &str,

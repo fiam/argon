@@ -62,11 +62,13 @@ add_zig_candidate() {
   [[ -n "${candidate}" ]] || return 0
   [[ -x "${candidate}" ]] || return 0
 
-  for existing in "${ZIG_CANDIDATES[@]}"; do
-    if [[ "${existing}" == "${candidate}" ]]; then
-      return 0
-    fi
-  done
+  if [[ ${#ZIG_CANDIDATES[@]} -gt 0 ]]; then
+    for existing in "${ZIG_CANDIDATES[@]}"; do
+      if [[ "${existing}" == "${candidate}" ]]; then
+        return 0
+      fi
+    done
+  fi
 
   ZIG_CANDIDATES+=("${candidate}")
 }
