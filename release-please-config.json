@@ -16,7 +16,7 @@
         },
         {
           "type": "generic",
-          "path": "apps/macos/project.yml",
+          "path": "apps/macos/project.yml"
         }
       ]
     }
