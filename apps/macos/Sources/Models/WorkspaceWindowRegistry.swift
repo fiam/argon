@@ -186,6 +186,19 @@ final class WorkspaceWindowRegistry {
     schedulePersistAfterUnregister()
   }
 
+  func notificationContext(for repoRoot: String) -> WorkspaceTerminalNotificationContext {
+    let normalizedRepoRoot = normalizedPath(repoRoot)
+    let openProjectCount = registrationsByRepoRoot.values
+      .filter { $0.window != nil }
+      .count
+    let worktreeCount = workspaceStatesByRepoRoot[normalizedRepoRoot]?.worktrees.count ?? 0
+
+    return WorkspaceTerminalNotificationContext(
+      showsProject: openProjectCount > 1,
+      showsWorkspace: worktreeCount > 1
+    )
+  }
+
   @discardableResult
   func focusTerminal(repoRoot: String, worktreePath: String, tabID: UUID) -> Bool {
     let normalizedRepoRoot = normalizedPath(repoRoot)

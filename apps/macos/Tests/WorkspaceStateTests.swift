@@ -62,9 +62,11 @@ struct WorkspaceStateTests {
     state.openShellTab()
 
     #expect(state.activeAgentCount(for: "/tmp/repo") == 1)
+    #expect(state.runningAgentCount == 1)
 
     state.selectedTerminalTabs.first?.isRunning = false
     #expect(state.activeAgentCount(for: "/tmp/repo") == 0)
+    #expect(state.runningAgentCount == 0)
   }
 
   @Test("agent title changes mark the tab thinking until the idle timeout")

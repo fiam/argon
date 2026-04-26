@@ -135,6 +135,7 @@ struct ArgonApp: App {
         .environment(commandContext)
         .environment(savedAgents)
         .environment(agentAvailability)
+        .environment(terminalAttentionNotifier)
         .environmentObject(appUpdateController)
         .task(id: savedAgents.profiles) {
           agentAvailability.refresh(for: savedAgents.profiles)

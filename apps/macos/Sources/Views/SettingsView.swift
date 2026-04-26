@@ -60,6 +60,7 @@ struct SettingsView: View {
   @Environment(\.colorScheme) private var colorScheme
   @Environment(SavedAgentProfiles.self) private var savedAgents
   @Environment(AgentAvailability.self) private var agentAvailability
+  @Environment(WorkspaceTerminalAttentionNotifier.self) private var terminalAttentionNotifier
   @EnvironmentObject private var appUpdateController: AppUpdateController
   @AppStorage("defaultDiffViewMode") private var defaultDiffViewMode = "unified"
   @AppStorage("diffFontSize") private var diffFontSize = 13.0
@@ -71,6 +72,10 @@ struct SettingsView: View {
   private var worktreeRootPath = WorktreeRootSettings.defaultRootPath()
   @AppStorage(WorkspaceFinishedTerminalBehavior.storageKey)
   private var finishedTerminalBehavior = WorkspaceFinishedTerminalBehavior.autoClose.rawValue
+  @AppStorage(AgentSleepPreventionSettings.enabledStorageKey)
+  private var preventSleepWhileAgentsRun = AgentSleepPreventionSettings.defaultEnabled
+  @AppStorage(AgentNotificationSettings.enabledStorageKey)
+  private var agentNotificationsEnabled = AgentNotificationSettings.defaultEnabled
   @AppStorage(WorktreeMergeStrategySettings.defaultStrategyStorageKey)
   private var defaultWorktreeMergeStrategy = WorktreeMergeStrategy.mergeCommit.rawValue
   @State private var selectedAgentId: String?
@@ -90,6 +95,7 @@ struct SettingsView: View {
   @State private var cliInstallStatus = ArgonCLIInstallLink.status()
   @State private var cliInstallBusy = false
   @State private var cliInstallErrorMessage: String?
+  @State private var notificationSettingsAlertMessage: String?
 
   var body: some View {
     TabView {
@@ -105,6 +111,17 @@ struct SettingsView: View {
         .tabItem { Label("Terminal", systemImage: "terminal") }
     }
     .frame(width: 550, height: 400)
+    .alert(
+      "Agent Notifications",
+      isPresented: notificationSettingsAlertIsPresented
+    ) {
+      Button("Open System Settings") {
+        terminalAttentionNotifier.openSystemNotificationSettings()
+      }
+      Button("OK", role: .cancel) {}
+    } message: {
+      Text(notificationSettingsAlertMessage ?? "")
+    }
   }
 
   private var generalTab: some View {
@@ -120,6 +137,31 @@ struct SettingsView: View {
       Section("Workspace") {
         Toggle("Close finished terminals automatically", isOn: autoCloseFinishedTerminalsBinding)
           .help(selectedFinishedTerminalBehavior.helpText)
+
+        Toggle("Prevent sleep while agents are running", isOn: $preventSleepWhileAgentsRun)
+          .help("Keep this Mac awake while at least one agent tab is running.")
+      }
+
+      Section("Notifications") {
+        VStack(alignment: .leading, spacing: 6) {
+          Toggle("Agent notifications", isOn: agentNotificationsEnabledBinding)
+            .help(
+              "Notify when an agent needs your attention or finishes running."
+            )
+            .disabled(terminalAttentionNotifier.authorizationStatus == .denied)
+
+          Text(agentNotificationStatusText)
+            .font(.caption)
+            .foregroundStyle(agentNotificationStatusColor)
+            .fixedSize(horizontal: false, vertical: true)
+
+          if terminalAttentionNotifier.authorizationStatus == .denied {
+            Button("Open System Settings…") {
+              terminalAttentionNotifier.openSystemNotificationSettings()
+            }
+            .controlSize(.small)
+          }
+        }
       }
 
       Section("Updates") {
@@ -213,6 +255,7 @@ struct SettingsView: View {
     .settingsTabInsets()
     .task {
       refreshCLIInstallStatus()
+      await terminalAttentionNotifier.refreshAuthorizationStatus()
     }
   }
 
@@ -515,8 +558,64 @@ struct SettingsView: View {
     WorkspaceFinishedTerminalBehavior(rawValue: finishedTerminalBehavior) ?? .autoClose
   }
 
+  private var notificationSettingsAlertIsPresented: Binding<Bool> {
+    Binding(
+      get: { notificationSettingsAlertMessage != nil },
+      set: { isPresented in
+        if !isPresented {
+          notificationSettingsAlertMessage = nil
+        }
+      }
+    )
+  }
+
+  private var agentNotificationsEnabledBinding: Binding<Bool> {
+    Binding(
+      get: { agentNotificationsEnabled },
+      set: { isEnabled in
+        Task { @MainActor in
+          await updateAgentNotificationsEnabled(isEnabled)
+        }
+      }
+    )
+  }
+
+  private var agentNotificationStatusText: String {
+    switch terminalAttentionNotifier.authorizationStatus {
+    case .authorized:
+      return agentNotificationsEnabled
+        ? "Argon will notify you when agents need attention or finish running."
+        : "Agent notifications are off."
+    case .denied:
+      return
+        "Without notifications, Argon cannot tell you when an agent is done or needs your attention. Enable Argon in System Settings > Notifications."
+    case .notDetermined:
+      return agentNotificationsEnabled
+        ? "Argon will ask for notification permission the next time you launch an agent."
+        : "Agent notifications are off."
+    case .unknown:
+      return "Notification permission status is unavailable."
+    }
+  }
+
+  private var agentNotificationStatusColor: Color {
+    terminalAttentionNotifier.authorizationStatus == .denied ? .orange : .secondary
+  }
+
   private func refreshCLIInstallStatus() {
     cliInstallStatus = ArgonCLIInstallLink.status()
+  }
+
+  @MainActor
+  private func updateAgentNotificationsEnabled(_ isEnabled: Bool) async {
+    let result = await terminalAttentionNotifier.setAgentNotificationsEnabledFromSettings(
+      isEnabled)
+    agentNotificationsEnabled = AgentNotificationSettings.isEnabled()
+
+    if result == .disabledBySystemPermission {
+      notificationSettingsAlertMessage =
+        "Without notifications, Argon cannot tell you when an agent is done or needs your attention. Open System Settings > Notifications and allow notifications for Argon."
+    }
   }
 
   @MainActor

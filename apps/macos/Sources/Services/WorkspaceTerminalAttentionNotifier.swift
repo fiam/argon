@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import UserNotifications
@@ -12,12 +13,27 @@ final class WorkspaceTerminalAttentionNotifier: NSObject, UNUserNotificationCent
   }
 
   @ObservationIgnored
-  private let notificationCenter: UNUserNotificationCenter
+  private let notificationCenter: any WorkspaceUserNotificationCenter
+  @ObservationIgnored
+  private let userDefaults: UserDefaults
+  @ObservationIgnored
+  private let permissionExplainer: any AgentNotificationPermissionExplaining
   @ObservationIgnored
   private weak var workspaceWindowRegistry: WorkspaceWindowRegistry?
+  @ObservationIgnored
+  private var isRequestingPermission = false
 
-  init(notificationCenter: UNUserNotificationCenter = .current()) {
+  private(set) var authorizationStatus: AgentNotificationAuthorizationStatus = .unknown
+
+  init(
+    notificationCenter: any WorkspaceUserNotificationCenter = UNUserNotificationCenter.current(),
+    userDefaults: UserDefaults = .standard,
+    permissionExplainer: any AgentNotificationPermissionExplaining =
+      AgentNotificationPermissionAlertPresenter()
+  ) {
     self.notificationCenter = notificationCenter
+    self.userDefaults = userDefaults
+    self.permissionExplainer = permissionExplainer
     super.init()
     self.notificationCenter.delegate = self
   }
@@ -27,6 +43,52 @@ final class WorkspaceTerminalAttentionNotifier: NSObject, UNUserNotificationCent
     if notificationCenter.delegate !== self {
       notificationCenter.delegate = self
     }
+  }
+
+  @discardableResult
+  func prepareForAgentTabLaunch() async -> AgentNotificationPreferenceUpdateResult {
+    guard AgentNotificationSettings.isEnabled(userDefaults: userDefaults) else {
+      let status = await refreshAuthorizationStatus()
+      return status == .denied ? .disabledBySystemPermission : .disabled
+    }
+
+    return await enableAgentNotifications(requestSource: .agentLaunch)
+  }
+
+  @discardableResult
+  func setAgentNotificationsEnabledFromSettings(_ isEnabled: Bool) async
+    -> AgentNotificationPreferenceUpdateResult
+  {
+    guard isEnabled else {
+      AgentNotificationSettings.setEnabled(false, userDefaults: userDefaults)
+      _ = await refreshAuthorizationStatus()
+      return .disabled
+    }
+
+    return await enableAgentNotifications(requestSource: .settings)
+  }
+
+  @discardableResult
+  func refreshAuthorizationStatus() async -> AgentNotificationAuthorizationStatus {
+    let status = AgentNotificationAuthorizationStatus(
+      await notificationCenter.authorizationStatus()
+    )
+    authorizationStatus = status
+    if status == .denied {
+      AgentNotificationSettings.setEnabled(true, userDefaults: userDefaults)
+    }
+    return status
+  }
+
+  func openSystemNotificationSettings() {
+    guard
+      let url = URL(
+        string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")
+    else {
+      return
+    }
+
+    NSWorkspace.shared.open(url)
   }
 
   func postAttentionNotification(
@@ -71,18 +133,9 @@ final class WorkspaceTerminalAttentionNotifier: NSObject, UNUserNotificationCent
   }
 
   private func deliver(content: UNMutableNotificationContent) async {
-    let settings = await notificationCenter.notificationSettings()
-    let authorized: Bool
-    switch settings.authorizationStatus {
-    case .authorized, .provisional, .ephemeral:
-      authorized = true
-    case .notDetermined:
-      authorized =
-        (try? await notificationCenter.requestAuthorization(options: [.alert, .sound])) == true
-    default:
-      authorized = false
-    }
-    guard authorized else { return }
+    guard AgentNotificationSettings.isEnabled(userDefaults: userDefaults) else { return }
+
+    guard await refreshAuthorizationStatus() == .authorized else { return }
 
     let request = UNNotificationRequest(
       identifier: "argon.workspace-terminal.\(UUID().uuidString)",
@@ -92,12 +145,73 @@ final class WorkspaceTerminalAttentionNotifier: NSObject, UNUserNotificationCent
     try? await notificationCenter.add(request)
   }
 
+  private func enableAgentNotifications(
+    requestSource: AgentNotificationPermissionRequestSource
+  ) async -> AgentNotificationPreferenceUpdateResult {
+    guard !isRequestingPermission else { return .requestInProgress }
+
+    switch await refreshAuthorizationStatus() {
+    case .authorized:
+      AgentNotificationSettings.setEnabled(true, userDefaults: userDefaults)
+      AgentNotificationSettings.setSuppressSystemDeniedLaunchWarning(
+        false,
+        userDefaults: userDefaults
+      )
+      return .enabled
+    case .denied:
+      AgentNotificationSettings.setEnabled(true, userDefaults: userDefaults)
+      return .disabledBySystemPermission
+    case .unknown:
+      return .disabledBySystemPermission
+    case .notDetermined:
+      break
+    }
+
+    guard permissionExplainer.shouldRequestAgentNotificationPermission(source: requestSource)
+    else {
+      AgentNotificationSettings.setEnabled(false, userDefaults: userDefaults)
+      return .requestDeclined
+    }
+
+    isRequestingPermission = true
+    defer { isRequestingPermission = false }
+
+    let didAuthorize =
+      (try? await notificationCenter.requestAuthorization(options: [.alert, .sound])) == true
+    let refreshedStatus = await refreshAuthorizationStatus()
+    guard didAuthorize, refreshedStatus == .authorized else {
+      AgentNotificationSettings.setEnabled(
+        refreshedStatus == .denied,
+        userDefaults: userDefaults
+      )
+      return refreshedStatus == .denied ? .disabledBySystemPermission : .requestDeclined
+    }
+
+    AgentNotificationSettings.setEnabled(true, userDefaults: userDefaults)
+    AgentNotificationSettings.setSuppressSystemDeniedLaunchWarning(
+      false,
+      userDefaults: userDefaults
+    )
+    return .enabled
+  }
+
   private func notificationContent(
     for event: TerminalAttentionEvent,
     repoRoot: String,
     tab: WorkspaceTerminalTab
   ) -> UNMutableNotificationContent? {
-    guard let display = Self.notificationDisplay(for: event, repoRoot: repoRoot, tab: tab) else {
+    let context =
+      workspaceWindowRegistry?.notificationContext(for: repoRoot)
+      ?? WorkspaceTerminalNotificationContext(showsProject: false, showsWorkspace: false)
+
+    guard
+      let display = Self.notificationDisplay(
+        for: event,
+        repoRoot: repoRoot,
+        tab: tab,
+        context: context
+      )
+    else {
       return nil
     }
 
@@ -136,36 +250,44 @@ final class WorkspaceTerminalAttentionNotifier: NSObject, UNUserNotificationCent
   static func notificationDisplay(
     for event: TerminalAttentionEvent,
     repoRoot: String,
-    tab: WorkspaceTerminalTab
+    tab: WorkspaceTerminalTab,
+    context: WorkspaceTerminalNotificationContext
   ) -> WorkspaceTerminalAttentionNotificationDisplay? {
     let workspaceName = URL(fileURLWithPath: repoRoot).lastPathComponent
-    let subtitle = "\(workspaceName) • \(tab.title)"
+    let subtitle = Self.notificationSubtitle(
+      projectName: workspaceName,
+      worktreeLabel: tab.worktreeLabel,
+      context: context
+    )
 
     let title: String
     let body: String
 
     switch event {
     case .bell:
-      title = "Terminal bell"
-      body = "Bell in \(tab.worktreeLabel)."
+      title = "Bell"
+      body = ""
     case .desktopNotification(let eventTitle, let eventBody):
-      title =
-        eventTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        ? "\(tab.title) notification"
-        : eventTitle
+      let trimmedTitle = eventTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+      let trimmedBody = eventBody.trimmingCharacters(in: .whitespacesAndNewlines)
+      title = "Argon"
       body =
-        eventBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        ? "Message from \(tab.worktreeLabel)."
-        : eventBody
+        if !trimmedBody.isEmpty {
+          trimmedBody
+        } else if !trimmedTitle.isEmpty {
+          trimmedTitle
+        } else {
+          "Terminal notification"
+        }
     case .commandFinished(let exitCode, let durationNanoseconds):
       if let exitCode {
         if exitCode == 0 {
-          title = "\(tab.title) finished command"
+          title = "Command finished"
         } else {
-          title = "\(tab.title) command failed"
+          title = "Command failed"
         }
       } else {
-        title = "\(tab.title) finished command"
+        title = "Command finished"
       }
 
       let duration = Duration.nanoseconds(
@@ -178,9 +300,9 @@ final class WorkspaceTerminalAttentionNotifier: NSObject, UNUserNotificationCent
           fractionalPart: .hide
         ))
       if let exitCode {
-        body = "Command exited with code \(exitCode) after \(formattedDuration)."
+        body = "Exited with code \(exitCode) after \(formattedDuration)."
       } else {
-        body = "Command finished after \(formattedDuration)."
+        body = "Finished after \(formattedDuration)."
       }
     }
 
@@ -189,6 +311,92 @@ final class WorkspaceTerminalAttentionNotifier: NSObject, UNUserNotificationCent
       subtitle: subtitle,
       body: body
     )
+  }
+
+  private static func notificationSubtitle(
+    projectName: String,
+    worktreeLabel: String,
+    context: WorkspaceTerminalNotificationContext
+  ) -> String {
+    var components: [String] = []
+    if context.showsProject {
+      components.append(projectName)
+    }
+    if context.showsWorkspace {
+      components.append(worktreeLabel)
+    }
+    return components.joined(separator: " • ")
+  }
+}
+
+@MainActor
+protocol WorkspaceUserNotificationCenter: AnyObject {
+  var delegate: UNUserNotificationCenterDelegate? { get set }
+
+  func authorizationStatus() async -> UNAuthorizationStatus
+  func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool
+  func add(_ request: UNNotificationRequest) async throws
+}
+
+extension UNUserNotificationCenter: WorkspaceUserNotificationCenter {
+  func authorizationStatus() async -> UNAuthorizationStatus {
+    await notificationSettings().authorizationStatus
+  }
+}
+
+enum AgentNotificationAuthorizationStatus: Equatable {
+  case unknown
+  case notDetermined
+  case authorized
+  case denied
+
+  init(_ status: UNAuthorizationStatus) {
+    switch status {
+    case .authorized, .provisional, .ephemeral:
+      self = .authorized
+    case .denied:
+      self = .denied
+    case .notDetermined:
+      self = .notDetermined
+    @unknown default:
+      self = .unknown
+    }
+  }
+}
+
+enum AgentNotificationPreferenceUpdateResult: Equatable {
+  case enabled
+  case disabled
+  case requestDeclined
+  case requestInProgress
+  case disabledBySystemPermission
+}
+
+enum AgentNotificationPermissionRequestSource {
+  case agentLaunch
+  case settings
+}
+
+@MainActor
+protocol AgentNotificationPermissionExplaining: AnyObject {
+  func shouldRequestAgentNotificationPermission(
+    source: AgentNotificationPermissionRequestSource
+  ) -> Bool
+}
+
+@MainActor
+final class AgentNotificationPermissionAlertPresenter: AgentNotificationPermissionExplaining {
+  func shouldRequestAgentNotificationPermission(
+    source: AgentNotificationPermissionRequestSource
+  ) -> Bool {
+    let alert = NSAlert()
+    alert.messageText = "Enable Agent Notifications?"
+    alert.informativeText =
+      "Without notifications, Argon cannot tell you when an agent is done or needs your attention. macOS will ask for permission next."
+    alert.alertStyle = .informational
+    alert.addButton(withTitle: "Enable Notifications")
+    alert.addButton(withTitle: "Not Now")
+    return alert.runModal() == .alertFirstButtonReturn
   }
 }
 
@@ -202,4 +410,9 @@ struct WorkspaceTerminalAttentionNotificationDisplay: Equatable {
   let title: String
   let subtitle: String
   let body: String
+}
+
+struct WorkspaceTerminalNotificationContext: Equatable {
+  let showsProject: Bool
+  let showsWorkspace: Bool
 }

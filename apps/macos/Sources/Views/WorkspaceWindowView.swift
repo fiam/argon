@@ -13,6 +13,9 @@ private func workspaceSidebarAccessibilityIdentifier(for path: String) -> String
 struct WorkspaceWindowView: View {
   @Environment(CommandContext.self) private var commandContext
   @Environment(WorkspaceWindowRegistry.self) private var workspaceWindowRegistry
+  @AppStorage(AgentSleepPreventionSettings.enabledStorageKey)
+  private var preventSleepWhileAgentsRun = AgentSleepPreventionSettings.defaultEnabled
+  @State private var sleepPreventer = AgentSleepPreventer()
   let target: WorkspaceTarget
   let workspaceState: WorkspaceState
 
@@ -52,6 +55,12 @@ struct WorkspaceWindowView: View {
         )
       }
       .navigationTitle(workspaceState.windowTitle)
+      .onChange(of: shouldPreventSleepForRunningAgents, initial: true) { _, shouldPrevent in
+        sleepPreventer.setActive(shouldPrevent)
+      }
+      .onDisappear {
+        sleepPreventer.setActive(false)
+      }
       .onAppear {
         if workspaceState.worktrees.isEmpty && !workspaceState.isLoading {
           workspaceState.load()
@@ -60,6 +69,10 @@ struct WorkspaceWindowView: View {
       .task(id: workspaceState.worktrees.count) {
         workspaceState.applyUITestWebsiteDemoIfNeeded()
       }
+  }
+
+  private var shouldPreventSleepForRunningAgents: Bool {
+    preventSleepWhileAgentsRun && workspaceState.runningAgentCount > 0
   }
 }
 
@@ -1024,6 +1037,7 @@ private struct WorkspaceChangedFilesPane: View {
 private struct WorkspaceTerminalDeck: View {
   @Environment(WorkspaceState.self) private var workspaceState
   @Environment(ReviewWindowRegistry.self) private var reviewWindowRegistry
+  @Environment(WorkspaceTerminalAttentionNotifier.self) private var terminalAttentionNotifier
   @Environment(\.openWindow) private var openWindow
 
   var body: some View {
@@ -1108,10 +1122,36 @@ private struct WorkspaceTerminalDeck: View {
   private func launchWorkspaceAgent(_ options: WorkspaceAgentLaunchOptions) async -> Bool {
     do {
       try await workspaceState.launchAgent(using: options)
+      let notificationResult = await terminalAttentionNotifier.prepareForAgentTabLaunch()
+      if notificationResult == .disabledBySystemPermission
+        && AgentNotificationSettings.shouldShowSystemDeniedLaunchWarning()
+      {
+        presentSystemDeniedNotificationAlert()
+      }
       return true
     } catch {
       workspaceState.errorMessage = error.localizedDescription
       return false
+    }
+  }
+
+  private func presentSystemDeniedNotificationAlert() {
+    let alert = NSAlert()
+    alert.messageText = "Agent Notifications Disabled"
+    alert.informativeText =
+      "Without notifications, Argon cannot tell you when an agent is done or needs your attention. Enable Argon in System Settings > Notifications."
+    alert.alertStyle = .informational
+    alert.addButton(withTitle: "Open System Settings")
+    alert.addButton(withTitle: "OK")
+    alert.showsSuppressionButton = true
+    alert.suppressionButton?.title = "Don't ask again"
+
+    let response = alert.runModal()
+    if alert.suppressionButton?.state == .on {
+      AgentNotificationSettings.setSuppressSystemDeniedLaunchWarning(true)
+    }
+    if response == .alertFirstButtonReturn {
+      terminalAttentionNotifier.openSystemNotificationSettings()
     }
   }
 

@@ -567,6 +567,14 @@ final class WorkspaceState {
     conflictStatesByWorktreePath[normalizedPath(worktreePath)] ?? false
   }
 
+  var runningAgentCount: Int {
+    allTerminalTabs.reduce(into: 0) { count, tab in
+      if case .agent = tab.kind, tab.isRunning {
+        count += 1
+      }
+    }
+  }
+
   func activeAgentCount(for worktreePath: String) -> Int {
     let tabs = terminalTabsByWorktreePath[normalizedPath(worktreePath)] ?? []
     return tabs.reduce(into: 0) { count, tab in

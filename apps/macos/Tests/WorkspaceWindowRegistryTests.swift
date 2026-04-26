@@ -153,6 +153,57 @@ struct WorkspaceWindowRegistryTests {
     #expect(featureTab.hasAttention == false)
   }
 
+  @Test("notification context shows project and workspace only when ambiguous")
+  @MainActor
+  func notificationContextShowsProjectAndWorkspaceOnlyWhenAmbiguous() {
+    let registry = WorkspaceWindowRegistry()
+    let target = makeTarget(selectedWorktreePath: "/tmp/repo")
+    let state = registry.workspaceState(for: target)
+    state.worktrees = [
+      makeWorktree(path: "/tmp/repo", branchName: "main", isBaseWorktree: true)
+    ]
+
+    registry.register(window: NSWindow(), workspaceState: state, repoRoot: target.repoRoot)
+
+    #expect(
+      registry.notificationContext(for: target.repoRoot)
+        == WorkspaceTerminalNotificationContext(showsProject: false, showsWorkspace: false)
+    )
+
+    state.worktrees.append(
+      makeWorktree(path: "/tmp/repo-worktrees/feature-b", branchName: "feature/b")
+    )
+
+    #expect(
+      registry.notificationContext(for: target.repoRoot)
+        == WorkspaceTerminalNotificationContext(showsProject: false, showsWorkspace: true)
+    )
+
+    let secondTarget = WorkspaceTarget(
+      repoRoot: "/tmp/other-repo",
+      repoCommonDir: "/tmp/other-repo/.git",
+      selectedWorktreePath: "/tmp/other-repo"
+    )
+    let secondState = registry.workspaceState(for: secondTarget)
+    secondState.worktrees = [
+      makeWorktree(path: "/tmp/other-repo", branchName: "main", isBaseWorktree: true)
+    ]
+    registry.register(
+      window: NSWindow(),
+      workspaceState: secondState,
+      repoRoot: secondTarget.repoRoot
+    )
+
+    #expect(
+      registry.notificationContext(for: target.repoRoot)
+        == WorkspaceTerminalNotificationContext(showsProject: true, showsWorkspace: true)
+    )
+    #expect(
+      registry.notificationContext(for: secondTarget.repoRoot)
+        == WorkspaceTerminalNotificationContext(showsProject: true, showsWorkspace: false)
+    )
+  }
+
   @Test("cold restore reopens the selected worktree and restores its tabs lazily")
   @MainActor
   func coldRestoreReopensTheSelectedWorktreeAndRestorableTerminalTabs() async {
@@ -578,6 +629,20 @@ struct WorkspaceWindowRegistryTests {
       repoRoot: "/tmp/repo",
       repoCommonDir: "/tmp/repo/.git",
       selectedWorktreePath: selectedWorktreePath
+    )
+  }
+
+  private func makeWorktree(
+    path: String,
+    branchName: String,
+    isBaseWorktree: Bool = false
+  ) -> DiscoveredWorktree {
+    DiscoveredWorktree(
+      path: path,
+      branchName: branchName,
+      headSHA: "abc123",
+      isBaseWorktree: isBaseWorktree,
+      isDetached: false
     )
   }
 
