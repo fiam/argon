@@ -27,7 +27,7 @@ xcodebuild \
     -project "$REPO_ROOT/apps/macos/Argon.xcodeproj" \
     -scheme Argon \
     -configuration Debug \
-    build 2>&1 | tail -1
+    build 2>&1
 
 # Find the built app
 APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData/Argon-*/Build/Products/Debug -name "Argon.app" -type d 2>/dev/null | head -1)

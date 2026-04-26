@@ -35,7 +35,7 @@ xcodebuild \
     -scheme Argon \
     -configuration Release \
     ENABLE_HARDENED_RUNTIME=YES \
-    build 2>&1 | tail -1
+    build 2>&1
 
 # 5. Find the built app
 APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData/Argon-*/Build/Products/Release -name "Argon.app" -type d 2>/dev/null | head -1)

@@ -3212,22 +3212,36 @@ mod tests {
     use tempfile::tempdir;
 
     fn context_for(repo_root: &Path, argv: &[&str]) -> SandboxContext {
+        let shell_path = repo_root.join("bin/zsh");
+        fs::create_dir_all(shell_path.parent().expect("test shell parent"))
+            .expect("test shell parent");
+        fs::write(&shell_path, "#!/bin/sh\n").expect("test shell");
+
         SandboxContext {
             repo_root: Some(repo_root.to_path_buf()),
             current_dir: repo_root.to_path_buf(),
             launch: LaunchKind::Shell,
             interactive: true,
             shell: Some("zsh".to_string()),
-            shell_path: Some(PathBuf::from("/bin/zsh")),
+            shell_path: Some(shell_path.clone()),
             agent: None,
             session_dir: Some(repo_root.join(".argon/sessions")),
-            argv: argv.iter().map(|value| value.to_string()).collect(),
+            argv: argv
+                .iter()
+                .map(|value| {
+                    if *value == "/bin/zsh" {
+                        shell_path.display().to_string()
+                    } else {
+                        value.to_string()
+                    }
+                })
+                .collect(),
             env: BTreeMap::from([
                 (
                     "HOME".to_string(),
                     repo_root.join("home").display().to_string(),
                 ),
-                ("SHELL".to_string(), "/bin/zsh".to_string()),
+                ("SHELL".to_string(), shell_path.display().to_string()),
                 ("PATH".to_string(), "/bin:/usr/bin".to_string()),
             ]),
         }
@@ -3326,6 +3340,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn builtin_preview_loads_os_dispatch_module() {
         let temp = tempdir().expect("tempdir");
@@ -3336,6 +3351,7 @@ mod tests {
         assert!(preview.warnings.is_empty());
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn use_os_dispatches_to_platform_module() {
         let temp = tempdir().expect("tempdir");

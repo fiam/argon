@@ -38,14 +38,12 @@ test-rust:
 
 # Swift tests (builds app + runs test bundle)
 test-swift: build-swift
-	bash -o pipefail -c '\
-		xcodebuild test \
-			-project apps/macos/Argon.xcodeproj \
-			-scheme Argon \
-			-configuration Debug \
-			-destination "$(XCODE_DESTINATION)" \
-			-quiet \
-			2>&1 | tail -20'
+	xcodebuild test \
+		-project apps/macos/Argon.xcodeproj \
+		-scheme Argon \
+		-configuration Debug \
+		-destination "$(XCODE_DESTINATION)" \
+		-quiet
 
 # macOS UI smoke tests
 test-ui: build-swift
@@ -59,7 +57,7 @@ test-ui: build-swift
 # Build Swift app
 build-swift:
 	test -d target/libghostty/native/macos/GhosttyKit.xcframework && test -d target/libghostty/native/share/ghostty || bash scripts/build-libghostty.sh
-	cd apps/macos && xcodegen generate 2>&1 | tail -1
+	cd apps/macos && xcodegen generate
 	xcodebuild build \
 		-project apps/macos/Argon.xcodeproj \
 		-scheme Argon \
