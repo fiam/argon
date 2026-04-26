@@ -745,10 +745,7 @@ private struct WorkspaceSidebarAgentActivityIndicator: View {
     Group {
       switch kind {
       case .thinking:
-        TimelineView(.animation) { context in
-          Image(systemName: kind.symbolName)
-            .rotationEffect(rotation(at: context.date))
-        }
+        WorkspaceSidebarThinkingActivityIndicator(tint: kind.tint)
       case .needsInput:
         Image(systemName: kind.symbolName)
           .scaleEffect(isPulsing ? 1.12 : 0.96)
@@ -772,14 +769,6 @@ private struct WorkspaceSidebarAgentActivityIndicator: View {
     .animation(pulseAnimation, value: isPulsing)
   }
 
-  private func rotation(at date: Date) -> Angle {
-    let period = 2.0
-    let progress =
-      date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period)
-      / period
-    return .degrees(progress * 360)
-  }
-
   private var pulseAnimation: Animation? {
     if case .needsInput = kind {
       return .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
@@ -797,6 +786,47 @@ private struct WorkspaceSidebarAgentActivityIndicator: View {
     DispatchQueue.main.async {
       isPulsing = true
     }
+  }
+}
+
+private struct WorkspaceSidebarThinkingActivityIndicator: View {
+  let tint: Color
+
+  private let dotPositions = [
+    CGPoint(x: 3.5, y: 9.5),
+    CGPoint(x: 5.5, y: 4.0),
+    CGPoint(x: 10.5, y: 4.8),
+    CGPoint(x: 10.0, y: 10.0),
+  ]
+
+  var body: some View {
+    TimelineView(.animation) { context in
+      ZStack {
+        ForEach(dotPositions.indices, id: \.self) { index in
+          let intensity = dotIntensity(index: index, at: context.date)
+          Circle()
+            .fill(tint)
+            .frame(width: dotSize(intensity), height: dotSize(intensity))
+            .opacity(0.36 + (0.64 * intensity))
+            .position(dotPositions[index])
+        }
+      }
+      .frame(width: 14, height: 14)
+    }
+  }
+
+  private func dotIntensity(index: Int, at date: Date) -> Double {
+    let period = 1.6
+    let phase =
+      date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period)
+      / period
+    let offset = Double(index) / Double(dotPositions.count)
+    let wave = cos((phase - offset) * 2 * .pi)
+    return max(0, (wave + 1) / 2)
+  }
+
+  private func dotSize(_ intensity: Double) -> CGFloat {
+    CGFloat(2.0 + (2.0 * intensity))
   }
 }
 
