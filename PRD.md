@@ -27,6 +27,9 @@ The new daily-driver experience is:
 4. Inspect diff and status from the right-side inspector.
 5. Launch review when ready.
 6. Merge back or fix conflicts through the active coder agent.
+7. Let agents use centrally managed service connectors and create
+   coordinated subagents without making the user configure every agent
+   independently.
 
 ## 2. Problem Statement
 
@@ -79,6 +82,10 @@ screen anymore. The workspace window is.
 - Route merge-back and conflict-fix actions through the active coder
   agent instead of hiding Git operations behind silent automation.
 - Surface GitHub and PR actions when the repository supports them.
+- Expose Argon workspace actions, connector access, and subagent creation
+  through an internal MCP server for agents launched inside the workspace.
+- Let Argon manage common service connectors so users do not need to create
+  their own provider app for every agent or every integration.
 
 ## 5. Non-Goals
 
@@ -86,6 +93,10 @@ screen anymore. The workspace window is.
 - Hiding all Git concepts from the user.
 - Multi-repo workspaces in a single window.
 - Cloud-hosted agent orchestration or remote sessions in this phase.
+- Bypassing provider, workspace, or enterprise admin approval for third-party
+  service integrations.
+- Shipping provider client secrets or long-lived service tokens in the open
+  source repository or bundled desktop app.
 - Full GitHub sync parity in the first PR integration milestone.
 - Rewriting the existing review UI before the workspace shell is in place.
 
@@ -97,6 +108,10 @@ screen anymore. The workspace window is.
 - Coding agent
   Runs inside a worktree terminal, writes code, summarizes changes for
   review, resolves conflicts, and performs merge-back work when asked.
+- Subagent
+  A delegated agent launched by Argon at the request of a parent agent or
+  human. It may run in the same worktree, another worktree, or a scoped
+  subtree, and reports status back through Argon's coordination surface.
 - Reviewer agent
   Participates only in the review loop. Can comment and request changes,
   but cannot approve or merge.
@@ -116,6 +131,15 @@ screen anymore. The workspace window is.
   thinking, waiting, idle, or finished at the tab and workspace levels.
 - Machine-readable first: CLI and internal contracts should stay stable
   for agent workflows.
+- MCP-first for live tools: when an agent needs ongoing workspace,
+  connector, or subagent capabilities, Argon should prefer typed MCP tools
+  over prompt-only conventions.
+- Secrets stay out of prompts: provider tokens, refresh tokens, client
+  secrets, and long-lived grants must not be written into prompts,
+  terminal transcripts, repo files, or skill files.
+- Human and admin consent are product boundaries: connector access should
+  reflect explicit user authorization, enterprise approval requirements,
+  and local per-agent grants.
 - Human-convenient launch: the same CLI should be ergonomic for users who
   want to open the right window from the terminal without extra flags.
 - Prompt-driven interoperability: agent workflows should be expressible
@@ -164,14 +188,16 @@ Human-launch expectations:
 
 ### 8.4 Agent Interaction Expectations
 
-Argon should support agent interaction in three forms:
+Argon should support agent interaction in four forms:
 
 - direct prompt-driven handoff from the UI
 - explicit CLI commands copied into an agent session
+- an internal MCP server that exposes typed Argon tools to embedded agents
 - optional installed skills that wrap the same underlying commands
 
 No core review or workspace workflow should require a skill installation if
-the same interaction can be expressed with prompt text and CLI commands.
+the same interaction can be expressed with prompt text, CLI commands, or MCP
+tools.
 
 ## 9. UX Overview
 
@@ -505,6 +531,143 @@ The repository-level config must support:
 - default agent selection
 - prevent sleep while agents are thinking, default enabled
 - GitHub remote preference if multiple remotes exist
+- connector defaults and per-worktree connector availability
+- default subagent harness selection and inheritance behavior
+
+#### FR-18 Managed Service Connectors
+
+Argon should provide a native connector catalog for services that are useful
+to coding agents, without requiring every user to create their own provider
+app before agents can use those services.
+
+Initial connector candidates:
+
+- Linear
+- Slack
+- Sentry
+- Notion
+- GitHub / GitLab
+- Jira / Confluence
+- Google Workspace
+- Microsoft 365
+- Figma
+- Datadog / PostHog
+
+Connector requirements:
+
+- Argon should own the default production provider apps or OAuth
+  registrations when the provider allows a suitable native / public-client
+  flow.
+- Provider client secrets and private keys must not ship in the app bundle,
+  CLI, skills, repo, or prompts.
+- When a provider requires a confidential client secret, Argon must use
+  either a minimal hosted OAuth broker or a user/company-provided app
+  registration.
+- The hosted broker, if used, should only perform OAuth code exchange,
+  refresh, and provider-secret custody. It must not become the execution
+  path for agent tool calls or arbitrary user data.
+- Users and companies must be able to configure bring-your-own provider apps
+  for enterprise review, self-hosted providers, private app policies, or
+  offline development.
+- Tokens must be stored in the macOS Keychain or an equivalent OS credential
+  store and should be scoped to provider account, workspace, and connector.
+- Agents must not receive provider refresh tokens. They should receive only
+  short-lived local Argon grants that authorize specific MCP tools.
+- Connector tools must be classified at least as:
+  `read`, `draft_write`, `public_write`, or `destructive`.
+- `read` tools may be auto-allowed by a connector grant when the user has
+  opted in. `public_write` and `destructive` tools must require explicit
+  user approval unless a narrow pre-approval exists.
+- Argon must show connector activity in the workspace UI with provider,
+  agent tab, tool name, target object, outcome, and timestamp.
+
+Enterprise approval requirements:
+
+- Argon must classify connectors by likely approval model:
+  `self_connect`, `may_require_admin_approval`, or `requires_admin_install`.
+- Slack, Google Workspace, Microsoft 365, GitHub organization access, and
+  Atlassian should be treated as likely admin-reviewed in company
+  environments.
+- Notion and Linear should be treated as enterprise-plan dependent, because
+  workspace owners/admins can restrict connections or third-party apps on
+  those plans.
+- Sentry, Figma, Datadog, and PostHog should be treated as
+  permission-dependent unless their org settings require app approval.
+- The UI must expose enough information for a company admin to review the
+  connector: provider app name, client ID, requested scopes, data touched,
+  write actions, token storage, audit behavior, and revocation steps.
+
+#### FR-19 Internal MCP Server
+
+Argon should host a local MCP server inside the macOS app for agents running
+in workspace terminals.
+
+The MCP server should expose:
+
+- workspace tools: list worktrees, create worktrees, inspect selected
+  worktree state, request review, request merge-back, and request conflict
+  fixing
+- connector tools: call enabled service connectors through Argon's local
+  grant and audit system
+- subagent tools: create subagents, send messages, wait for status, collect
+  summaries, and close subagent sessions
+- resource views: repository/worktree metadata, review summaries, pending
+  review feedback, connector availability, and subagent status
+
+Transport requirements:
+
+- The primary transport should be local-only and authenticated with
+  short-lived per-tab grants.
+- Argon should support a stdio shim, for example
+  `argon mcp stdio`, for agent harnesses that prefer subprocess MCP
+  servers.
+- Embedded agents launched by Argon should receive MCP connection details
+  automatically through the launch environment or harness-specific config.
+- Shell-launched agents should be able to discover the local MCP server
+  after Argon identifies the launched agent harness.
+- MCP tools must not bypass existing UI, sandbox, review, connector, or
+  approval boundaries.
+- All tool inputs and outputs that are stable enough for agents must have
+  versioned, machine-readable schemas.
+
+#### FR-20 Subagent Orchestration
+
+Agents should be able to ask Argon to create subagents through the internal
+MCP server.
+
+Subagent creation requirements:
+
+- The parent agent can request a subagent for the same worktree, another
+  worktree, or a scoped subtree.
+- Argon should use the same agent harness as the parent when possible.
+- For an agent tab, harness detection should start from the saved agent
+  profile and launch command.
+- For a shell tab, Argon should detect the harness from the command the user
+  or parent agent launched inside the shell when possible.
+- If harness detection is ambiguous, Argon should require an explicit
+  profile or ask the human rather than guessing.
+- The parent may provide an initial prompt, desired worktree/subtree,
+  requested connector grants, and expected output contract.
+- Argon should launch the subagent with a generated initial prompt that
+  includes the task, parent identity, workspace context, communication
+  contract, and any allowed MCP tools.
+- Subagents must inherit sandbox and connector access narrowly. A child
+  should receive no more filesystem, network, or connector authority than
+  the parent unless the human explicitly expands it.
+- Subagents should appear in the UI as child agent tabs or nested agent
+  sessions with visible parent/child lineage and status.
+
+Parent-child communication requirements:
+
+- Parent and subagent should communicate through Argon MCP tools, not by
+  sharing provider tokens or editing hidden files.
+- Minimum MCP tools should include:
+  `subagent.send_message`, `subagent.wait`, `subagent.status`,
+  `subagent.read_summary`, and `subagent.close`.
+- A subagent completion summary must be stored with the subagent session and
+  made available to the parent agent and human.
+- Argon should preserve subagent transcripts or summaries enough for review
+  and debugging, subject to local retention settings.
 
 ### 10.2 Non-Functional Requirements
 
@@ -533,6 +696,21 @@ The repository-level config must support:
 - all agent-facing CLI outputs must remain JSON-capable
 - any new action contract used to talk to coder agents should have a
   structured representation even if the first UI transport is terminal-based
+- MCP tool schemas and connector audit events must be versioned and stable
+  enough for agents to consume safely
+
+#### NFR-5 Security and Privacy
+
+- Provider secrets must never be committed to the repository or shipped in
+  the app bundle.
+- Provider access tokens must be stored in an OS credential store and
+  released to agents only as scoped local Argon grants.
+- Connector and subagent grants must be revocable, short-lived by default,
+  and tied to a workspace, worktree, tab, or subagent session.
+- Every connector call and privileged subagent action must have an audit
+  record visible to the human.
+- Connector scopes and admin-approval requirements must be understandable
+  before a user starts OAuth.
 
 ## 11. SPEC
 
@@ -545,6 +723,8 @@ The repository-level config must support:
 - `base_branch`
 - `worktrees`
 - `github_repo`
+- `connector_accounts`
+- `mcp_server`
 - `selected_worktree_id`
 - `last_scan_at`
 
@@ -562,6 +742,8 @@ The repository-level config must support:
 - `merge_state`
 - `aggregate_activity_state`
 - `agent_tabs`
+- `subagent_sessions`
+- `connector_grants`
 - `latest_summary`
 - `pull_request`
 
@@ -574,6 +756,10 @@ The repository-level config must support:
 - `cwd`
 - `launch_command`
 - `agent_capabilities`
+- `agent_harness`
+- `mcp_grants`
+- `parent_agent_id`
+- `child_agent_ids`
 - `status`
 - `activity_state`
 - `activity_confidence`
@@ -589,6 +775,83 @@ The repository-level config must support:
 - `url`
 - `head_branch`
 - `base_branch`
+
+#### ConnectorProvider
+
+- `id`
+- `display_name`
+- `default_auth_mode`
+  `public_client` | `device_flow` | `brokered_confidential_client` |
+  `bring_your_own_app`
+- `approval_model`
+  `self_connect` | `may_require_admin_approval` |
+  `requires_admin_install`
+- `available_tools`
+- `required_scopes`
+- `admin_review_metadata`
+
+#### ConnectorAccount
+
+- `id`
+- `provider_id`
+- `display_name`
+- `external_workspace_id`
+- `external_user_id`
+- `auth_mode`
+- `credential_ref`
+- `approval_state`
+- `created_at`
+- `last_validated_at`
+
+#### ConnectorGrant
+
+- `id`
+- `provider_id`
+- `account_id`
+- `workspace_id`
+- `worktree_id`
+- `terminal_tab_id`
+- `subagent_session_id`
+- `allowed_tools`
+- `allowed_risk_classes`
+- `expires_at`
+- `revoked_at`
+
+#### ConnectorAuditEvent
+
+- `id`
+- `provider_id`
+- `tool_name`
+- `agent_tab_id`
+- `subagent_session_id`
+- `target`
+- `risk_class`
+- `outcome`
+- `occurred_at`
+
+#### MCPServer
+
+- `id`
+- `workspace_id`
+- `transport`
+- `endpoint`
+- `status`
+- `active_grants`
+
+#### SubagentSession
+
+- `id`
+- `parent_agent_tab_id`
+- `child_agent_tab_id`
+- `harness`
+- `worktree_id`
+- `subtree_path`
+- `initial_prompt`
+- `communication_state`
+- `status`
+- `summary`
+- `created_at`
+- `completed_at`
 
 ### 11.2 State Separation
 
@@ -637,6 +900,9 @@ terminal activity.
 - added / removed / file counts
 - full `git diff --stat` block
 - latest coder summary preview
+- selected tab's connector and MCP grant status
+- subagent lineage / status when the selected tab has parent or child
+  agents
 - `Review` button
 - `Merge Back` button
 - `Fix Conflicts` button when needed
@@ -775,6 +1041,125 @@ Future extension:
 - direct PR creation from Argon
 - PR status and review status sync
 
+### 11.10 Connector Spec
+
+Argon connectors should be implemented as local brokered capabilities rather
+than agent-specific secrets.
+
+Connector setup flow:
+
+1. user opens Settings -> Connectors
+2. Argon shows provider, expected approval model, scopes, and data touched
+3. user signs in through provider OAuth, device flow, hosted broker, or
+   bring-your-own app configuration
+4. Argon stores resulting credentials in Keychain
+5. user enables the connector for a repository, worktree, tab, or session
+6. Argon issues a short-lived local grant to the relevant MCP client
+
+Default connector app strategy:
+
+- Use public-client OAuth or device flows when a provider supports them for
+  native apps.
+- Use a minimal hosted OAuth broker for providers that require a confidential
+  client secret for the shared Argon app.
+- Support bring-your-own apps for companies that need to review or own the
+  provider registration.
+- Keep connector manifests, scopes, and admin-review metadata in source
+  control, but keep secrets only in deployment secrets or user-owned
+  credential stores.
+
+Approval model:
+
+- `self_connect`
+  The user can usually authorize the connector with their own account.
+- `may_require_admin_approval`
+  The provider or plan may let admins require approval before members can
+  authorize the app.
+- `requires_admin_install`
+  The useful connector path typically requires an owner/admin install or
+  company-owned app registration.
+
+Initial provider classification:
+
+| Provider | Default classification | Notes |
+|---|---|---|
+| Linear | `may_require_admin_approval` | Enterprise workspaces can require third-party app approval. |
+| Slack | `may_require_admin_approval` | Workspaces and enterprises can require approved apps. Bot-style access may require stronger admin review. |
+| Sentry | `may_require_admin_approval` | User OAuth is role-limited; org integrations and broader scopes depend on org permissions. |
+| Notion | `may_require_admin_approval` | Enterprise workspaces can restrict connections to an approved list. Pages/databases still need explicit sharing. |
+| GitHub | `may_require_admin_approval` | Organization resources may require owner approval or app installation. |
+| GitLab | `may_require_admin_approval` | Group/project policies may restrict app or token use. |
+| Jira / Confluence | `may_require_admin_approval` | Admin settings and app model determine whether users can authorize directly. |
+| Google Workspace | `may_require_admin_approval` | Admins can control OAuth access to Workspace data. |
+| Microsoft 365 | `may_require_admin_approval` | Tenants can require admin consent for app permissions. |
+| Figma | `may_require_admin_approval` | User OAuth is role-limited; private/org app use may need admin review. |
+| Datadog / PostHog | `may_require_admin_approval` | Useful automation often depends on org roles or admin-created tokens. |
+
+Connector tools should be conservative by default. Examples:
+
+- `linear.search_issues`
+- `linear.update_issue_status`
+- `slack.search_messages`
+- `slack.draft_status_update`
+- `slack.post_message`
+- `sentry.get_issue`
+- `notion.search_pages`
+- `notion.update_page`
+- `figma.get_file_context`
+
+### 11.11 Internal MCP and Subagent Spec
+
+The internal MCP server should become Argon's typed live-control plane for
+embedded agents.
+
+MCP tool groups:
+
+- `workspace.*`
+  Repository, worktree, diff, review, merge-back, and conflict tools.
+- `connector.*`
+  Provider-backed tools mediated by connector grants.
+- `subagent.*`
+  Subagent creation, messaging, status, waiting, summary, and closure.
+- `review.*`
+  Review-session status, pending feedback, acknowledge, reply, and wait
+  helpers that mirror the CLI contract.
+
+Subagent lifecycle:
+
+1. parent calls `subagent.create` with task, target worktree/subtree,
+   desired harness, connectors, and expected result contract
+2. Argon resolves the harness from the parent tab's saved profile or launch
+   command, or from the shell-launched command if the parent is a shell tab
+3. if detection is ambiguous, Argon asks for an explicit harness or human
+   confirmation
+4. Argon launches the child as a visible agent tab/session with sandbox and
+   connector grants narrowed from the parent
+5. Argon injects an initial prompt that names the parent, task, communication
+   contract, available MCP tools, and completion expectations
+6. parent and child exchange messages through `subagent.send_message` and
+   observe state through `subagent.status` / `subagent.wait`
+7. child writes a completion summary through MCP, Argon stores it, and the
+   parent can read it with `subagent.read_summary`
+
+Harness detection inputs:
+
+- saved agent profile id
+- original agent launch command
+- executable name and arguments
+- terminal tab environment
+- known shell command currently running inside the terminal, when available
+- explicit parent-provided override
+
+Subagent safety rules:
+
+- child agents must be visible in the workspace UI
+- child agents must not silently receive broader filesystem, network, or
+  connector access than the parent
+- child connector writes follow the same approval rules as parent writes
+- parent-child lineage must survive workspace restore when practical
+- a parent agent may close a child session through MCP, but Argon should
+  preserve the final summary / transcript metadata needed for review
+
 ## 12. Architecture Impact
 
 ### 12.1 Rust Core
@@ -786,6 +1171,9 @@ Future extension:
 - conflict monitor
 - GitHub remote parsing
 - agent control request types
+- MCP tool / resource schemas
+- connector provider, account, grant, and audit models
+- subagent session and parent-child message models
 - diff summary / stat generation for worktree inspector
 
 The existing review types remain, but they should become one subsystem of a
@@ -811,6 +1199,10 @@ The CLI must be updated to:
 - route `argon <dir>` to workspace launch
 - accept `argon review <dir>`
 - preserve review-loop commands unchanged
+- expose an `argon mcp stdio` style shim for agent harnesses that consume
+  MCP servers as subprocesses
+- expose connector diagnostic commands for listing providers, auth status,
+  grant state, and audit events
 - add workspace-oriented machine-readable commands later if needed
 
 Future v2 direction:
@@ -822,6 +1214,8 @@ Future v2 direction:
 - add centrally managed connector support so agents can be connected to
   shared services from one place, with MCP as the primary surface and
   optional skills as wrappers
+- add subagent orchestration tools so a parent agent can launch visible
+  child agents using the same detected harness
 - keep saved agent profiles as the authority for which reviewer agents can
   be launched through that MCP surface
 
@@ -833,6 +1227,9 @@ The macOS app should be split into:
 - review window
 - shared terminal components
 - shared Git / diff inspector models
+- connector settings, OAuth / device-flow UX, and admin-review metadata
+- local MCP server lifecycle and per-tab grant management
+- subagent lineage and status UI
 
 The current review UI should be reused instead of rewritten.
 
@@ -948,14 +1345,36 @@ Exit criteria:
 - expose worktree creation / listing tools to embedded agents
 - expose reviewer-agent request tools so one agent can ask another saved
   agent profile for review
-- add connector management so shared service integrations can be configured
-  once and exposed consistently to embedded agents
+- expose subagent creation, messaging, status, wait, summary, and close
+  tools
+- infer child-agent harnesses from saved agent profiles, agent launch
+  commands, and shell-launched commands where possible
 - keep approval / visibility boundaries explicit for privileged actions
 
 Exit criteria:
 
-- embedded agents can create worktrees and request reviewer agents through
-  typed Argon tools instead of prompt conventions alone
+- embedded agents can create worktrees, request reviewer agents, and launch
+  visible subagents through typed Argon tools instead of prompt conventions
+  alone
+
+### Phase 10 - Managed Connectors
+
+- add the connector catalog and Settings UI
+- implement Keychain-backed connector accounts
+- implement per-tab MCP connector grants and connector audit events
+- ship a fake connector for end-to-end test coverage
+- add the first real connectors, starting with Linear, Slack, Sentry, and
+  Notion
+- add admin-review metadata for each connector, including scopes, data
+  touched, approval model, write actions, and revocation steps
+- support bring-your-own provider app configuration for enterprise users
+- add a minimal OAuth broker only for providers that require confidential
+  client secrets for the shared Argon app
+
+Exit criteria:
+
+- agents can use at least one real managed connector through MCP without
+  receiving provider tokens, and the human can inspect and revoke access
 
 ## 14. Milestones
 
@@ -972,7 +1391,8 @@ Exit criteria:
 | M8 | Conflict handling | Continuous conflict detection and `Fix Conflicts` action ship. |
 | M9 | GitHub / PR flow | GitHub detection and PR button ship for supported repos. |
 | M10 | Stabilization | Persistence, UX polish, and reliability hardening complete the transition. |
-| M11 | MCP workspace actions | Embedded agents can create worktrees, request reviewer agents, and use centrally managed service connectors through an in-app MCP server. |
+| M11 | MCP workspace actions | Embedded agents can create worktrees, request reviewer agents, and launch visible subagents through an in-app MCP server. |
+| M12 | Managed connectors | Agents can use centrally managed service connectors through scoped MCP grants and audited tool calls. |
 
 ## 15. Testing and Validation Requirements
 
@@ -981,15 +1401,21 @@ Exit criteria:
   launch, merge-back, conflict handling, PR actions, and post-commit UI
   reset.
 - Add Rust tests for worktree discovery, conflict detection, GitHub remote
-  parsing, and any new CLI routing behavior.
+  parsing, MCP schema stability, connector grant evaluation, subagent
+  session modeling, and any new CLI routing behavior.
 - Add Swift tests for workspace state restoration, worktree selection, and
   inspector action availability.
+- Add Swift tests for connector settings state, grant display, audit-event
+  rendering, MCP server lifecycle, and subagent lineage display.
 - Keep existing review-session tests passing unchanged.
 - Add end-to-end coverage for:
   - launching workspace from a directory
   - opening review from workspace
   - agent-selection prompts for merge-back and conflict fix
   - conflict status updates after base branch movement
+  - MCP tool discovery from an embedded agent
+  - subagent creation from a parent agent and parent-child summary handoff
+  - connector authorization, grant issuance, tool call audit, and revocation
 - Validate performance on repositories with multiple open worktrees and
   moderately large diffs.
 
@@ -1002,6 +1428,10 @@ Exit criteria:
 | Merge-back through agents feels unreliable | Define explicit agent control request/result types and visible status. |
 | Conflict detection becomes noisy or slow | Trigger checks from explicit Git events and cache results per worktree. |
 | GitHub integration creates premature API surface | Start with remote detection and browser deep links before full API sync. |
+| Connector secrets leak into OSS artifacts or prompts | Keep secrets out of source and app bundles; store user tokens in Keychain; expose only short-lived local grants to agents. |
+| Enterprise users cannot authorize provider apps | Support admin-review metadata, approval classification, and bring-your-own provider app registrations. |
+| MCP tools become an unreviewed privilege escalation path | Gate tools with local grants, sandbox state, connector approval rules, and visible audit events. |
+| Subagents create hidden or confusing work | Show parent-child lineage in the UI and require explicit harness/access decisions when detection is ambiguous. |
 
 ## 17. Open Questions
 
@@ -1015,3 +1445,11 @@ Exit criteria:
   another policy controlled by config?
 - Should PR detection support GitHub Enterprise in phase 1 or only
   `github.com` remotes?
+- Which connector should ship first after the fake connector: Linear,
+  Slack, Sentry, or Notion?
+- Which providers require an Argon-hosted OAuth broker for the shared app,
+  and which should be public-client / device-flow only?
+- What is the right default expiry for connector and MCP grants?
+- Should subagent sessions always appear as terminal tabs, or can some be
+  headless background sessions if their transcript and status are visible?
+- How much parent-child transcript should Argon retain by default?
