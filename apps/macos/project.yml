@@ -122,6 +122,7 @@ targets:
           - Info.plist
           - Argon.entitlements
     dependencies:
+      - sdk: AppIntents.framework
       - sdk: Carbon.framework
       - sdk: GameController.framework
       - package: Sparkle

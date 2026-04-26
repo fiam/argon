@@ -7,6 +7,7 @@ final class WorkspaceState {
   nonisolated(unsafe) static var terminalBellFlashDuration: Duration = .seconds(1)
   nonisolated(unsafe) static var agentThinkingIdleTimeout: Duration = .seconds(1)
   nonisolated(unsafe) static var sessionRecordsProvider: (@Sendable () -> [AgentSessionRecord])?
+  nonisolated(unsafe) static var commandStatusProvider: (@Sendable ([String]) -> [String: Bool])?
   nonisolated(unsafe) static var sandboxfilePromptLoader:
     (@Sendable (String, SandboxfileLaunchKind) async throws -> SandboxfilePromptRequest?) = {
       repoRoot,
@@ -1349,14 +1350,15 @@ final class WorkspaceState {
   ) -> RestoredPersistedTabs {
     let hydratedTabs = hydratedPersistedAgentResumeMetadata(for: persistedTabs)
 
-    let commandStatuses = UserShell.loginCommandStatuses(
-      hydratedTabs.compactMap { persistedTab in
-        guard case .agent = persistedTab.kind else { return nil }
-        return commandExecutableToken(
-          from: persistedTab.resumeCommandDescription ?? persistedTab.commandDescription
-        )
-      }
-    )
+    let agentCommands: [String] = hydratedTabs.compactMap { persistedTab in
+      guard case .agent = persistedTab.kind else { return nil }
+      return commandExecutableToken(
+        from: persistedTab.resumeCommandDescription ?? persistedTab.commandDescription
+      )
+    }
+    let commandStatuses =
+      Self.commandStatusProvider?(agentCommands)
+      ?? UserShell.loginCommandStatuses(agentCommands)
 
     var restorableTabs: [PersistedWorkspaceTerminalTab] = []
     var missingAgentCount = 0

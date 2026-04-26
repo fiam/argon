@@ -3,7 +3,7 @@ import Testing
 
 @testable import Argon
 
-@Suite("WorkspaceState")
+@Suite("WorkspaceState", .serialized)
 struct WorkspaceStateTests {
 
   @Test("shell tabs stay scoped to their worktree")
@@ -1550,7 +1550,13 @@ struct WorkspaceStateTests {
         ),
       ]
     }
-    defer { WorkspaceState.sessionRecordsProvider = nil }
+    WorkspaceState.commandStatusProvider = { commands in
+      Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
+    }
+    defer {
+      WorkspaceState.commandStatusProvider = nil
+      WorkspaceState.sessionRecordsProvider = nil
+    }
 
     let snapshot = PersistedWorkspaceWindowSnapshot(
       target: WorkspaceTarget(
@@ -1618,7 +1624,13 @@ struct WorkspaceStateTests {
   @MainActor
   func lazyRestoreFallsBackToOriginalCommandWhenNoResumeSessionIsAvailable() async {
     WorkspaceState.sessionRecordsProvider = { [] }
-    defer { WorkspaceState.sessionRecordsProvider = nil }
+    WorkspaceState.commandStatusProvider = { commands in
+      Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
+    }
+    defer {
+      WorkspaceState.commandStatusProvider = nil
+      WorkspaceState.sessionRecordsProvider = nil
+    }
 
     let snapshot = PersistedWorkspaceWindowSnapshot(
       target: WorkspaceTarget(
