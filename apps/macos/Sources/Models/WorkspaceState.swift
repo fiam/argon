@@ -1178,6 +1178,13 @@ final class WorkspaceState {
     }
   }
 
+  @discardableResult
+  func closeSelectedTerminalTab() -> Bool {
+    guard let tabID = selectedTerminalTab?.id else { return false }
+    closeTerminalTab(tabID)
+    return true
+  }
+
   func handleTerminalExit(_ tabID: UUID, exitBehavior: WorkspaceFinishedTerminalBehavior) {
     guard let tab = terminalTab(for: tabID) else { return }
     agentActivityIdleTasksByTabID.removeValue(forKey: tabID)?.cancel()

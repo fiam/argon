@@ -35,6 +35,12 @@ struct GhosttyAppShortcutPassthroughTests {
     )
     newPrivilegedShell.keyEquivalentModifierMask = [.command, .shift, .option]
     fileMenu.addItem(newPrivilegedShell)
+    let closeTab = NSMenuItem(title: "Close Tab", action: nil, keyEquivalent: "w")
+    closeTab.keyEquivalentModifierMask = [.command]
+    fileMenu.addItem(closeTab)
+    let closeWindow = NSMenuItem(title: "Close Window", action: nil, keyEquivalent: "w")
+    closeWindow.keyEquivalentModifierMask = [.command, .shift]
+    fileMenu.addItem(closeWindow)
     fileMenuItem.submenu = fileMenu
     mainMenu.addItem(fileMenuItem)
 
@@ -91,6 +97,25 @@ struct GhosttyAppShortcutPassthroughTests {
     )
   }
 
+  @Test("passes through close tab and close window shortcuts")
+  func passesThroughCloseShortcuts() {
+    let menu = makeMenu()
+    #expect(
+      GhosttyAppShortcutPassthrough.shouldPassThrough(
+        charactersIgnoringModifiers: "w",
+        modifierFlags: [.command],
+        menu: menu
+      )
+    )
+    #expect(
+      GhosttyAppShortcutPassthrough.shouldPassThrough(
+        charactersIgnoringModifiers: "w",
+        modifierFlags: [.command, .shift],
+        menu: menu
+      )
+    )
+  }
+
   @Test("does not pass through unsupported shortcuts")
   func doesNotPassThroughUnsupportedShortcuts() {
     let menu = makeMenu()
@@ -119,6 +144,13 @@ struct GhosttyAppShortcutPassthroughTests {
       !GhosttyAppShortcutPassthrough.shouldPassThrough(
         charactersIgnoringModifiers: "q",
         modifierFlags: [.command, .shift],
+        menu: menu
+      )
+    )
+    #expect(
+      !GhosttyAppShortcutPassthrough.shouldPassThrough(
+        charactersIgnoringModifiers: "w",
+        modifierFlags: [.control],
         menu: menu
       )
     )

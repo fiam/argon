@@ -41,6 +41,9 @@ struct ArgonApp: App {
           terminalAttentionNotifier.bind(workspaceWindowRegistry: workspaceWindowRegistry)
         }
         .task {
+          WindowCloseShortcutRetargeter.install()
+        }
+        .task {
           await cliInstallStartupPrompt.presentIfNeeded()
         }
     }
@@ -167,6 +170,9 @@ struct ArgonApp: App {
       terminalAttentionNotifier.bind(workspaceWindowRegistry: workspaceWindowRegistry)
     }
     .task {
+      WindowCloseShortcutRetargeter.install()
+    }
+    .task {
       await cliInstallStartupPrompt.presentIfNeeded()
     }
   }
@@ -182,6 +188,9 @@ struct ArgonApp: App {
       .preferredColorScheme(Self.launchAppearance.colorScheme)
       .task(id: savedAgents.profiles) {
         agentAvailability.refresh(for: savedAgents.profiles)
+      }
+      .task {
+        WindowCloseShortcutRetargeter.install()
       }
       .task {
         await cliInstallStartupPrompt.presentIfNeeded()
@@ -303,6 +312,16 @@ private struct WorkspaceFileCommands: Commands {
       }
       .keyboardShortcut("t", modifiers: [.command, .shift, .option])
       .disabled(commandContext.activeWorkspaceState?.selectedWorktree == nil)
+
+      Divider()
+
+      Button {
+        commandContext.activeWorkspaceState?.closeSelectedTerminalTab()
+      } label: {
+        Label("Close Tab", systemImage: "xmark.square")
+      }
+      .keyboardShortcut("w", modifiers: .command)
+      .disabled(commandContext.activeWorkspaceState?.selectedTerminalTab == nil)
     }
   }
 

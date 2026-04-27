@@ -47,6 +47,25 @@ struct WorkspaceStateTests {
     #expect(state.selectedTerminalFocusRequestID != focusRequestBeforeClose)
   }
 
+  @Test("closing the selected terminal tab uses the active selection")
+  @MainActor
+  func closingSelectedTerminalTabUsesActiveSelection() {
+    let state = makeState()
+
+    #expect(state.closeSelectedTerminalTab() == false)
+
+    state.openShellTab()
+    state.openShellTab()
+
+    let firstID = state.selectedTerminalTabs[0].id
+    let secondID = state.selectedTerminalTabs[1].id
+    state.selectTerminalTab(secondID)
+
+    #expect(state.closeSelectedTerminalTab() == true)
+    #expect(state.selectedTerminalTabs.map(\.id) == [firstID])
+    #expect(state.selectedTerminalTab?.id == firstID)
+  }
+
   @Test("active agent count only includes running agent tabs")
   @MainActor
   func activeAgentCountOnlyIncludesRunningAgentTabs() {
