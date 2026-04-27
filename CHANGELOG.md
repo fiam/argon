@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/fiam/argon/compare/v0.1.0...v0.2.0) (2026-04-27)
+
+
+### Features
+
+* detect worktree merge conflicts ([25cf3ba](https://github.com/fiam/argon/commit/25cf3ba8472a0f393ede4a853c11f4fbcce4c614))
+
 ## 0.1.0 (2026-04-26)
 
 
