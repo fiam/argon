@@ -1851,6 +1851,7 @@ final class WorkspaceState {
         discoveredWorktrees: discoveredWorktrees
       )
     else {
+      scheduleAllWorktreeRefreshes()
       return
     }
 
@@ -2337,6 +2338,14 @@ final class WorkspaceState {
     }
   }
 
+  private func scheduleAllWorktreeRefreshes() {
+    let paths = worktrees.map { normalizedPath($0.path) }
+    for path in paths {
+      refreshReviewSnapshot(for: path)
+      scheduleWorktreeRefresh(for: path)
+    }
+  }
+
   private func refreshWorktree(path: String) async {
     let result = await Task.detached {
       Self.loadRefreshedWorktree(for: path)
@@ -2652,8 +2661,7 @@ final class WorkspaceState {
         launchWarningMessage = displayMessage
       }
       Task { @MainActor [weak self] in
-        await self?.refreshWorktree(path: pendingRequest.worktreePath)
-        self?.refreshReviewSnapshot(for: pendingRequest.worktreePath)
+        self?.scheduleAllWorktreeRefreshes()
       }
     case .failed:
       errorMessage = message

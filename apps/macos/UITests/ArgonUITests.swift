@@ -198,13 +198,97 @@ final class ArgonUITests: XCTestCase {
     app.launchArguments = [
       Self.disableStateRestorationArguments[0],
       Self.disableStateRestorationArguments[1],
+      "--workspace-repo-root", target.repoRoot,
+      "--workspace-common-dir", target.repoCommonDir,
+      "--selected-worktree-path", target.selectedWorktreePath,
     ]
     app.launchEnvironment["ARGON_HOME"] = target.argonHome
     app.launch()
 
     XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
     XCTAssertTrue(
-      app.descendants(matching: .any)["workspace-sidebar-conflicts"].waitForExistence(timeout: 15)
+      waitForSidebarConflictMarker(
+        in: app,
+        worktreePath: target.selectedWorktreePath,
+        expected: true,
+        timeout: 15
+      )
+    )
+  }
+
+  @MainActor
+  func testWorkspaceSidebarPredictsConflictBeforeMerge() throws {
+    let target = try Self.createPredictiveConflictWorkspace()
+    let app = XCUIApplication()
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.fixtureRoot)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--workspace-repo-root", target.repoRoot,
+      "--workspace-common-dir", target.repoCommonDir,
+      "--selected-worktree-path", target.selectedWorktreePath,
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+    XCTAssertTrue(
+      waitForSidebarConflictMarker(
+        in: app,
+        worktreePath: target.selectedWorktreePath,
+        expected: true,
+        timeout: 15
+      )
+    )
+  }
+
+  @MainActor
+  func testWorkspaceRefreshesConflictMarkerWhenBaseBranchMoves() throws {
+    let target = try Self.createWorkspaceThatWillConflictAfterBaseMove()
+    let app = XCUIApplication()
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.fixtureRoot)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--workspace-repo-root", target.repoRoot,
+      "--workspace-common-dir", target.repoCommonDir,
+      "--selected-worktree-path", target.selectedWorktreePath,
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+    XCTAssertTrue(
+      waitForSidebarConflictMarker(
+        in: app,
+        worktreePath: target.selectedWorktreePath,
+        expected: false,
+        timeout: 15
+      )
+    )
+
+    try "main branch change\n".write(
+      to: URL(fileURLWithPath: target.repoRoot).appendingPathComponent("conflict.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try Self.git(URL(fileURLWithPath: target.repoRoot), ["commit", "-am", "Main branch change"])
+
+    XCTAssertTrue(
+      waitForSidebarConflictMarker(
+        in: app,
+        worktreePath: target.selectedWorktreePath,
+        expected: true,
+        timeout: 15
+      )
     )
   }
 
@@ -955,6 +1039,77 @@ final class ArgonUITests: XCTestCase {
     )
     try git(worktreeRoot, ["commit", "-am", "Feature branch change"])
     _ = try git(worktreeRoot, ["merge", "main"], allowFailure: true)
+
+    return WorkspaceLaunchTarget(
+      fixtureRoot: fixtureRoot.path,
+      repoRoot: repoRoot.path,
+      repoCommonDir: repoRoot.appendingPathComponent(".git", isDirectory: true).path,
+      selectedWorktreePath: worktreeRoot.path,
+      argonHome: argonHome.path
+    )
+  }
+
+  private static func createPredictiveConflictWorkspace() throws -> WorkspaceLaunchTarget {
+    try createPredictiveConflictFixture(moveBaseAfterLaunch: false)
+  }
+
+  private static func createWorkspaceThatWillConflictAfterBaseMove() throws -> WorkspaceLaunchTarget
+  {
+    try createPredictiveConflictFixture(moveBaseAfterLaunch: true)
+  }
+
+  private static func createPredictiveConflictFixture(moveBaseAfterLaunch: Bool) throws
+    -> WorkspaceLaunchTarget
+  {
+    let fixtureRoot = FileManager.default.temporaryDirectory
+      .appendingPathComponent("argon-ui-tests", isDirectory: true)
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let repoRoot = fixtureRoot.appendingPathComponent("repo", isDirectory: true)
+    let worktreeRoot =
+      fixtureRoot
+      .appendingPathComponent("worktrees", isDirectory: true)
+      .appendingPathComponent("feature-predictive-conflict", isDirectory: true)
+    let argonHome = fixtureRoot.appendingPathComponent("argon-home", isDirectory: true)
+
+    try FileManager.default.createDirectory(at: repoRoot, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+      at: worktreeRoot.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(at: argonHome, withIntermediateDirectories: true)
+
+    try git(repoRoot, ["init"])
+    try git(repoRoot, ["config", "user.name", "Argon UI Test"])
+    try git(repoRoot, ["config", "user.email", "argon-ui-test@example.com"])
+
+    try "shared line\n".write(
+      to: repoRoot.appendingPathComponent("conflict.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repoRoot, ["add", "conflict.txt"])
+    try git(repoRoot, ["commit", "-m", "Initial commit"])
+    try git(repoRoot, ["branch", "-M", "main"])
+    try git(
+      repoRoot,
+      ["worktree", "add", "-b", "feature/predictive-conflict", worktreeRoot.path, "HEAD"]
+    )
+
+    try "feature branch change\n".write(
+      to: worktreeRoot.appendingPathComponent("conflict.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(worktreeRoot, ["commit", "-am", "Feature branch change"])
+
+    if !moveBaseAfterLaunch {
+      try "main branch change\n".write(
+        to: repoRoot.appendingPathComponent("conflict.txt"),
+        atomically: true,
+        encoding: .utf8
+      )
+      try git(repoRoot, ["commit", "-am", "Main branch change"])
+    }
 
     return WorkspaceLaunchTarget(
       fixtureRoot: fixtureRoot.path,
@@ -2152,6 +2307,33 @@ final class ArgonUITests: XCTestCase {
     let predicate = NSPredicate(format: "exists == false")
     let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
     return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+  }
+
+  @MainActor
+  private func waitForSidebarConflictMarker(
+    in app: XCUIApplication,
+    worktreePath: String,
+    expected: Bool,
+    timeout: TimeInterval
+  ) -> Bool {
+    let row = app.descendants(matching: .any)[
+      Self.workspaceSidebarAccessibilityIdentifier(for: worktreePath)
+    ]
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+      if row.exists {
+        let hasConflictMarker =
+          row.label.range(
+            of: "Conflicts",
+            options: [.caseInsensitive, .diacriticInsensitive]
+          ) != nil
+        if hasConflictMarker == expected {
+          return true
+        }
+      }
+      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    return false
   }
 
   @discardableResult

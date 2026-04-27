@@ -16,9 +16,9 @@ use anyhow::{Context, Result, bail};
 use argon_core::{
     AgentEvent, AgentEventKind, CliCommand, CliResponse, CommentAnchor, CommentAuthor, CommentKind,
     PendingFeedback, ResolvedReviewTarget, ReviewComment, ReviewMode, ReviewOutcome, ReviewSession,
-    SessionPayload, SessionStatus, SessionStore, StyledSpan, ThreadState,
-    auto_detect_review_target, resolve_branch_target, resolve_commit_target,
-    resolve_uncommitted_target,
+    SCHEMA_VERSION, SessionPayload, SessionStatus, SessionStore, StyledSpan, ThreadState,
+    auto_detect_review_target, inspect_worktree_mergeability, resolve_branch_target,
+    resolve_commit_target, resolve_uncommitted_target,
 };
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -72,6 +72,8 @@ enum Commands {
     Sandbox(SandboxCommands),
     #[command(subcommand)]
     Reviewer(ReviewerCommands),
+    #[command(subcommand)]
+    Workspace(WorkspaceCommands),
     Diff(DiffArgs),
     #[command(hide = true)]
     Highlight(HighlightArgs),
@@ -104,6 +106,12 @@ struct HighlightArgs {
 #[derive(serde::Serialize)]
 struct HighlightResponse {
     lines: Vec<Vec<StyledSpan>>,
+}
+
+#[derive(serde::Serialize)]
+struct WorkspaceMergeabilityResponse {
+    schema_version: String,
+    mergeability: argon_core::WorktreeMergeability,
 }
 
 #[derive(Subcommand, Debug)]
@@ -166,6 +174,23 @@ enum ReviewerCommands {
     Wait(ReviewerWaitArgs),
     Comment(ReviewerCommentArgs),
     Decide(ReviewerDecideArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum WorkspaceCommands {
+    /// Inspect whether a worktree branch can merge into its base without conflicts.
+    Mergeability(WorkspaceMergeabilityArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct WorkspaceMergeabilityArgs {
+    path: Option<PathBuf>,
+    #[arg(long)]
+    base: Option<String>,
+    #[arg(long)]
+    head: Option<String>,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -747,6 +772,7 @@ fn run() -> Result<()> {
         Commands::Agent(command) => run_agent(command, &runtime),
         Commands::Sandbox(command) => run_sandbox(command, &runtime),
         Commands::Reviewer(command) => run_reviewer(command, &runtime),
+        Commands::Workspace(command) => run_workspace(command, &runtime),
         Commands::Diff(args) => run_diff(args, &runtime),
         Commands::Highlight(args) => run_highlight(args),
         Commands::Draft(command) => run_draft(command, &runtime),
@@ -832,7 +858,15 @@ fn maybe_direct_path_invocation(raw_args: &[String]) -> Option<(PathBuf, LaunchO
 fn is_command_token(token: &str) -> bool {
     matches!(
         token,
-        "review" | "agent" | "sandbox" | "reviewer" | "diff" | "draft" | "skill" | "help"
+        "review"
+            | "agent"
+            | "sandbox"
+            | "reviewer"
+            | "workspace"
+            | "diff"
+            | "draft"
+            | "skill"
+            | "help"
     )
 }
 
@@ -895,6 +929,50 @@ fn run_reviewer(command: ReviewerCommands, runtime: &RuntimeOptions) -> Result<(
         ReviewerCommands::Comment(args) => run_reviewer_comment(args, runtime),
         ReviewerCommands::Decide(args) => run_reviewer_decide(args, runtime),
     }
+}
+
+fn run_workspace(command: WorkspaceCommands, runtime: &RuntimeOptions) -> Result<()> {
+    match command {
+        WorkspaceCommands::Mergeability(args) => run_workspace_mergeability(args, runtime),
+    }
+}
+
+fn run_workspace_mergeability(
+    args: WorkspaceMergeabilityArgs,
+    runtime: &RuntimeOptions,
+) -> Result<()> {
+    let worktree_path = resolved_workspace_command_path(args.path.as_deref(), runtime)?;
+    let mergeability =
+        inspect_worktree_mergeability(&worktree_path, args.base.as_deref(), args.head.as_deref());
+
+    if args.json {
+        let response = WorkspaceMergeabilityResponse {
+            schema_version: SCHEMA_VERSION.to_string(),
+            mergeability,
+        };
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+
+    println!("worktree: {}", worktree_path.display());
+    println!("status: {:?}", mergeability.status);
+    if let Some(base_ref) = mergeability.base_ref.as_deref() {
+        println!("base-ref: {base_ref}");
+    }
+    if let Some(head_ref) = mergeability.head_ref.as_deref() {
+        println!("head-ref: {head_ref}");
+    }
+    if let Some(merge_base_sha) = mergeability.merge_base_sha.as_deref() {
+        println!("merge-base-sha: {merge_base_sha}");
+    }
+    if let Some(topology) = mergeability.topology.as_ref() {
+        println!("ahead: {}", topology.ahead_count);
+        println!("behind: {}", topology.behind_count);
+    }
+    if let Some(detail) = mergeability.detail.as_deref() {
+        println!("detail: {detail}");
+    }
+    Ok(())
 }
 
 fn run_diff(args: DiffArgs, runtime: &RuntimeOptions) -> Result<()> {
@@ -3505,6 +3583,20 @@ fn resolved_repo_root(runtime: &RuntimeOptions) -> Result<PathBuf> {
     }
 
     git_repo_root()
+}
+
+fn resolved_workspace_command_path(
+    path: Option<&Path>,
+    runtime: &RuntimeOptions,
+) -> Result<PathBuf> {
+    if let Some(path) = path {
+        if runtime.repo_root_override.is_some() {
+            bail!("`argon workspace <command> <dir>` cannot be combined with --repo");
+        }
+        return git_repo_root_from(path);
+    }
+
+    resolved_repo_root(runtime)
 }
 
 fn resolve_workspace_launch_target(path: &Path) -> Result<WorkspaceLaunchTarget> {

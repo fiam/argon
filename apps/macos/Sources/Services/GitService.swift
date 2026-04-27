@@ -278,6 +278,16 @@ enum GitService {
   }
 
   static func hasConflicts(repoRoot: String) -> Bool {
+    if let mergeability = try? ArgonCLI.workspaceMergeability(repoRoot: repoRoot) {
+      return mergeability.status == .conflicted
+    }
+
+    // Fallback for development/test environments where the bundled CLI is not
+    // available yet. Production conflict prediction comes from argon-core.
+    return hasUnmergedFiles(repoRoot: repoRoot)
+  }
+
+  private static func hasUnmergedFiles(repoRoot: String) -> Bool {
     let output = runGit([
       "-C", repoRoot, "diff", "--name-only", "--diff-filter=U",
     ]).trimmingCharacters(in: .whitespacesAndNewlines)

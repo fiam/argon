@@ -24,6 +24,31 @@ enum ArgonCLI {
     let lines: [[StyledSpan]]
   }
 
+  struct WorkspaceMergeabilityResponse: Decodable, Sendable {
+    let schemaVersion: String
+    let mergeability: WorkspaceMergeability
+  }
+
+  struct WorkspaceMergeability: Decodable, Sendable {
+    let status: WorkspaceMergeabilityStatus
+    let baseRef: String?
+    let headRef: String?
+    let mergeBaseSha: String?
+    let topology: WorkspaceBranchTopology?
+    let detail: String?
+  }
+
+  enum WorkspaceMergeabilityStatus: String, Decodable, Sendable {
+    case unknown
+    case clean
+    case conflicted
+  }
+
+  struct WorkspaceBranchTopology: Decodable, Equatable, Sendable {
+    let aheadCount: Int
+    let behindCount: Int
+  }
+
   struct SandboxExplainResponse: Decodable, Sendable {
     let policy: SandboxExplainPolicy
   }
@@ -155,6 +180,22 @@ enum ArgonCLI {
       stdin: text
     )
     return try decode(HighlightedTextResponse.self, from: output)
+  }
+
+  static func workspaceMergeability(
+    repoRoot: String,
+    baseRef: String? = nil,
+    headRef: String? = nil
+  ) throws -> WorkspaceMergeability {
+    var args = ["workspace", "mergeability", "--json"]
+    if let baseRef, !baseRef.isEmpty {
+      args.append(contentsOf: ["--base", baseRef])
+    }
+    if let headRef, !headRef.isEmpty {
+      args.append(contentsOf: ["--head", headRef])
+    }
+    let output = try run(repoRoot: repoRoot, args: args)
+    return try decode(WorkspaceMergeabilityResponse.self, from: output).mergeability
   }
 
   // MARK: - Draft Comments
