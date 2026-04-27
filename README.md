@@ -1,7 +1,5 @@
-# Argon
-
 <p align="center">
-  <img src="website/assets/argon-icon.png" alt="Argon icon" width="128" height="128">
+  <img src="website/assets/readme-header.png" alt="Argon - local workspace for coding agents">
 </p>
 
 Argon is a local workspace for coding agents. It gives agent-assisted
