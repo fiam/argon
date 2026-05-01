@@ -9,26 +9,42 @@ final class AgentAvailability {
     case unavailable
   }
 
+  struct Details: Equatable {
+    let status: Status
+    let resolvedPath: String?
+    let version: String?
+
+    static let checking = Details(status: .checking, resolvedPath: nil, version: nil)
+    static let unavailable = Details(status: .unavailable, resolvedPath: nil, version: nil)
+  }
+
   private(set) var revision = 0
-  private var statuses: [String: Status] = [:]
+  private var detailsByCommand: [String: Details] = [:]
+  private var familiesByCommand: [String: AgentFamilyID?] = [:]
   private var pendingCommands: Set<String> = []
   private var probeTask: Task<Void, Never>?
 
   var hasPendingCommands: Bool {
-    statuses.values.contains(.checking)
+    detailsByCommand.values.contains { $0.status == .checking }
   }
 
   func refresh(for profiles: [SavedAgentProfile]) {
-    let commands = Set(
+    let commandsByFamily = Dictionary(
       profiles
-        .map(\.baseCommand)
-        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        .filter { !$0.isEmpty }
+        .map { profile in
+          (
+            profile.availabilityCommand.trimmingCharacters(in: .whitespacesAndNewlines),
+            profile.familyID
+          )
+        }
+        .filter { !$0.0.isEmpty },
+      uniquingKeysWith: { existing, replacement in existing ?? replacement }
     )
 
     var added = false
-    for command in commands where statuses[command] == nil {
-      statuses[command] = .checking
+    for (command, familyID) in commandsByFamily where detailsByCommand[command] == nil {
+      detailsByCommand[command] = .checking
+      familiesByCommand[command] = familyID
       pendingCommands.insert(command)
       added = true
     }
@@ -40,9 +56,13 @@ final class AgentAvailability {
   }
 
   func status(for profile: SavedAgentProfile) -> Status {
-    let command = profile.baseCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+    details(for: profile).status
+  }
+
+  func details(for profile: SavedAgentProfile) -> Details {
+    let command = profile.availabilityCommand.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !command.isEmpty else { return .unavailable }
-    return statuses[command] ?? .checking
+    return detailsByCommand[command] ?? .checking
   }
 
   private func startProbeLoopIfNeeded() {
@@ -61,12 +81,27 @@ final class AgentAvailability {
         return
       }
 
+      let batchFamilies = Dictionary(
+        uniqueKeysWithValues: batch.map { command in
+          (command, familiesByCommand[command] ?? nil)
+        })
       let results = await Task.detached(priority: .utility) {
-        UserShell.commandStatuses(batch)
+        UserShell.commandDetails(batchFamilies)
       }.value
 
       for command in batch {
-        statuses[command] = results[command] == true ? .available : .unavailable
+        guard let result = results[command], result.exists else {
+          detailsByCommand[command] = .unavailable
+          continue
+        }
+        let version = (familiesByCommand[command] ?? nil).flatMap { familyID in
+          AgentHarnesses.displayVersion(for: familyID, rawOutput: result.version)
+        }
+        detailsByCommand[command] = Details(
+          status: .available,
+          resolvedPath: result.resolvedPath,
+          version: version
+        )
       }
       revision += 1
     }

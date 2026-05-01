@@ -1299,6 +1299,30 @@ final class WorkspaceState {
       != discoveredWorktrees.map { normalizedPath($0.path) }
   }
 
+  nonisolated static func shouldRefreshWorktreeDetails(
+    currentWorktrees: [DiscoveredWorktree],
+    discoveredWorktrees: [DiscoveredWorktree]
+  ) -> Bool {
+    let currentByPath = Dictionary(
+      uniqueKeysWithValues: currentWorktrees.map { (normalizedPath($0.path), $0) })
+
+    for discoveredWorktree in discoveredWorktrees {
+      let normalized = normalizedPath(discoveredWorktree.path)
+      guard let currentWorktree = currentByPath[normalized] else {
+        return true
+      }
+      if currentWorktree.branchName != discoveredWorktree.branchName
+        || currentWorktree.headSHA != discoveredWorktree.headSHA
+        || currentWorktree.isBaseWorktree != discoveredWorktree.isBaseWorktree
+        || currentWorktree.isDetached != discoveredWorktree.isDetached
+      {
+        return true
+      }
+    }
+
+    return false
+  }
+
   nonisolated private static func loadSelectionDetails(
     for path: String,
     summary: WorktreeDiffSummary? = nil
@@ -1858,6 +1882,14 @@ final class WorkspaceState {
         discoveredWorktrees: discoveredWorktrees
       )
     else {
+      guard
+        Self.shouldRefreshWorktreeDetails(
+          currentWorktrees: worktrees,
+          discoveredWorktrees: discoveredWorktrees
+        )
+      else { return }
+
+      worktrees = discoveredWorktrees
       scheduleAllWorktreeRefreshes()
       return
     }

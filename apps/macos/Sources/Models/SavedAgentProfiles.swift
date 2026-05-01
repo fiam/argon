@@ -1,10 +1,101 @@
 import Foundation
 
+enum AgentFamilyID: String, Codable, CaseIterable, Sendable {
+  case claudeCode = "claude-code"
+  case codex
+  case gemini
+
+  var defaultProfileID: String {
+    rawValue
+  }
+}
+
+struct AgentHarnessDefinition: Sendable {
+  let familyID: AgentFamilyID
+  let name: String
+  let command: String
+  let icon: String
+  let yoloFlag: String
+  let promptArgumentTemplate: String
+  let resumeArgumentTemplate: String
+  let versionArguments: [String]
+
+  var defaultProfile: SavedAgentProfile {
+    SavedAgentProfile(
+      id: familyID.defaultProfileID,
+      familyID: familyID,
+      name: name,
+      command: command,
+      icon: icon,
+      yoloFlag: yoloFlag,
+      promptArgumentTemplate: promptArgumentTemplate,
+      resumeArgumentTemplate: resumeArgumentTemplate
+    )
+  }
+}
+
+enum AgentHarnesses {
+  private static let definitionsByFamily: [AgentFamilyID: AgentHarnessDefinition] = [
+    .claudeCode: AgentHarnessDefinition(
+      familyID: .claudeCode,
+      name: "Claude Code",
+      command: "claude",
+      icon: "claude",
+      yoloFlag: "--dangerously-skip-permissions",
+      promptArgumentTemplate: "",
+      resumeArgumentTemplate: "-c",
+      versionArguments: ["--version"]
+    ),
+    .codex: AgentHarnessDefinition(
+      familyID: .codex,
+      name: "Codex",
+      command: "codex",
+      icon: "codex",
+      yoloFlag: "--full-auto",
+      promptArgumentTemplate: "",
+      resumeArgumentTemplate: "resume {{session_id}}",
+      versionArguments: ["--version"]
+    ),
+    .gemini: AgentHarnessDefinition(
+      familyID: .gemini,
+      name: "Gemini CLI",
+      command: "gemini",
+      icon: "gemini",
+      yoloFlag: "-y",
+      promptArgumentTemplate: "",
+      resumeArgumentTemplate: "--resume latest",
+      versionArguments: ["--version"]
+    ),
+  ]
+
+  static func definition(for familyID: AgentFamilyID) -> AgentHarnessDefinition {
+    definitionsByFamily[familyID]!
+  }
+
+  static func displayVersion(for familyID: AgentFamilyID, rawOutput: String?) -> String? {
+    guard let rawOutput else { return nil }
+    let firstLine = rawOutput.split(whereSeparator: \.isNewline).first.map(String.init) ?? rawOutput
+    let trimmed = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+
+    switch familyID {
+    case .claudeCode:
+      return trimmed.replacingOccurrences(of: " (Claude Code)", with: "")
+    case .codex:
+      return trimmed.replacingOccurrences(of: "codex-cli ", with: "")
+    case .gemini:
+      return trimmed
+    }
+  }
+}
+
 struct SavedAgentProfile: Codable, Identifiable, Hashable, Sendable {
   var id: String
+  var familyID: AgentFamilyID?
   var name: String
   var command: String
   var icon: String
+  var isEnabled: Bool
   /// Flags appended to the command to enable auto-approve mode.
   /// Empty string means the agent doesn't support a yolo mode.
   var yoloFlag: String
@@ -19,20 +110,78 @@ struct SavedAgentProfile: Codable, Identifiable, Hashable, Sendable {
 
   init(
     id: String,
+    familyID: AgentFamilyID? = nil,
     name: String,
     command: String,
     icon: String,
+    isEnabled: Bool = true,
     yoloFlag: String,
     promptArgumentTemplate: String = "",
     resumeArgumentTemplate: String = ""
   ) {
     self.id = id
+    self.familyID = familyID
     self.name = name
     self.command = command
     self.icon = icon
+    self.isEnabled = isEnabled
     self.yoloFlag = yoloFlag
     self.promptArgumentTemplate = promptArgumentTemplate
     self.resumeArgumentTemplate = resumeArgumentTemplate
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case id
+    case familyID
+    case name
+    case command
+    case icon
+    case isEnabled
+    case yoloFlag
+    case promptArgumentTemplate
+    case resumeArgumentTemplate
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.id = try container.decode(String.self, forKey: .id)
+    self.familyID = try container.decodeIfPresent(AgentFamilyID.self, forKey: .familyID)
+    self.name = try container.decode(String.self, forKey: .name)
+    self.command = try container.decode(String.self, forKey: .command)
+    self.icon = try container.decode(String.self, forKey: .icon)
+    self.isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+    self.yoloFlag = try container.decode(String.self, forKey: .yoloFlag)
+    self.promptArgumentTemplate = try container.decode(
+      String.self,
+      forKey: .promptArgumentTemplate
+    )
+    self.resumeArgumentTemplate = try container.decode(
+      String.self,
+      forKey: .resumeArgumentTemplate
+    )
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(id, forKey: .id)
+    try container.encodeIfPresent(familyID, forKey: .familyID)
+    try container.encode(name, forKey: .name)
+    try container.encode(command, forKey: .command)
+    try container.encode(icon, forKey: .icon)
+    try container.encode(isEnabled, forKey: .isEnabled)
+    try container.encode(yoloFlag, forKey: .yoloFlag)
+    try container.encode(promptArgumentTemplate, forKey: .promptArgumentTemplate)
+    try container.encode(resumeArgumentTemplate, forKey: .resumeArgumentTemplate)
+  }
+
+  var isBuiltIn: Bool {
+    familyID != nil
+  }
+
+  var availabilityCommand: String {
+    let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedCommand.isEmpty else { return "" }
+    return commandExecutableToken(from: trimmedCommand)
   }
 
   /// Build the full command, optionally with yolo flags.
@@ -73,35 +222,47 @@ struct SavedAgentProfile: Codable, Identifiable, Hashable, Sendable {
   }
 }
 
+extension AgentFamilyID {
+  var defaultProfile: SavedAgentProfile {
+    AgentHarnesses.definition(for: self).defaultProfile
+  }
+
+  var harness: AgentHarnessDefinition {
+    AgentHarnesses.definition(for: self)
+  }
+
+  static func inferred(from profile: SavedAgentProfile) -> AgentFamilyID? {
+    allCases.first { family in
+      family.defaultProfileID == profile.id
+    }
+  }
+}
+
 @MainActor
 @Observable
 final class SavedAgentProfiles {
   private static let key = "savedAgentProfiles"
+  private let userDefaults: UserDefaults
+  private let storageKey: String
 
   var profiles: [SavedAgentProfile] = []
 
-  /// Well-known defaults shipped with the app.
-  static let builtinDefaults: [SavedAgentProfile] = [
-    SavedAgentProfile(
-      id: "claude-code", name: "Claude Code",
-      command: "claude", icon: "claude",
-      yoloFlag: "--dangerously-skip-permissions",
-      resumeArgumentTemplate: "-c"),
-    SavedAgentProfile(
-      id: "codex", name: "Codex",
-      command: "codex", icon: "codex",
-      yoloFlag: "--yolo",
-      resumeArgumentTemplate: "resume {{session_id}}"),
-    SavedAgentProfile(
-      id: "gemini", name: "Gemini CLI",
-      command: "gemini", icon: "gemini",
-      yoloFlag: "-y",
-      resumeArgumentTemplate: "--resume latest"),
-  ]
+  var enabledProfiles: [SavedAgentProfile] {
+    profiles.filter(\.isEnabled)
+  }
 
-  init() {
-    load()
-    if profiles.isEmpty {
+  /// Well-known defaults shipped with the app.
+  static let builtinDefaults: [SavedAgentProfile] = AgentFamilyID.allCases.map(\.defaultProfile)
+
+  init(userDefaults: UserDefaults = .standard, storageKey: String = SavedAgentProfiles.key) {
+    self.userDefaults = userDefaults
+    self.storageKey = storageKey
+    if let loadedProfiles = loadProfiles() {
+      profiles = Self.reconciledProfiles(from: loadedProfiles)
+      if profiles != loadedProfiles {
+        save()
+      }
+    } else {
       profiles = Self.builtinDefaults
       save()
     }
@@ -114,18 +275,27 @@ final class SavedAgentProfiles {
 
   func update(_ profile: SavedAgentProfile) {
     if let idx = profiles.firstIndex(where: { $0.id == profile.id }) {
-      profiles[idx] = profile
+      profiles[idx] = Self.migratedProfile(profile)
       save()
     }
   }
 
   func remove(at offsets: IndexSet) {
-    profiles.remove(atOffsets: offsets)
+    for offset in offsets.sorted(by: >) where profiles.indices.contains(offset) {
+      disableOrRemoveProfile(at: offset)
+    }
     save()
   }
 
   func remove(id: String) {
-    profiles.removeAll { $0.id == id }
+    guard let index = profiles.firstIndex(where: { $0.id == id }) else { return }
+    disableOrRemoveProfile(at: index)
+    save()
+  }
+
+  func setEnabled(_ isEnabled: Bool, for id: String) {
+    guard let index = profiles.firstIndex(where: { $0.id == id }) else { return }
+    profiles[index].isEnabled = isEnabled
     save()
   }
 
@@ -138,17 +308,51 @@ final class SavedAgentProfiles {
     profiles = Self.builtinDefaults
     save()
   }
-  private func load() {
-    guard let data = UserDefaults.standard.data(forKey: Self.key),
+
+  private func loadProfiles() -> [SavedAgentProfile]? {
+    guard let data = userDefaults.data(forKey: storageKey),
       let decoded = try? JSONDecoder().decode([SavedAgentProfile].self, from: data)
-    else { return }
-    profiles = decoded
+    else { return nil }
+    return decoded
   }
 
   private func save() {
     if let data = try? JSONEncoder().encode(profiles) {
-      UserDefaults.standard.set(data, forKey: Self.key)
+      userDefaults.set(data, forKey: storageKey)
     }
+  }
+
+  private func disableOrRemoveProfile(at index: Int) {
+    if profiles[index].isBuiltIn {
+      profiles[index].isEnabled = false
+    } else {
+      profiles.remove(at: index)
+    }
+  }
+
+  private static func reconciledProfiles(from decoded: [SavedAgentProfile]) -> [SavedAgentProfile] {
+    var profiles = decoded.map(Self.migratedProfile)
+    for family in AgentFamilyID.allCases
+    where !profiles.contains(where: { $0.familyID == family }) {
+      var missingProfile = family.defaultProfile
+      missingProfile.isEnabled = false
+      profiles.append(missingProfile)
+    }
+    return profiles
+  }
+
+  private static func migratedProfile(_ profile: SavedAgentProfile) -> SavedAgentProfile {
+    var migrated = profile
+    if migrated.familyID == nil {
+      migrated.familyID = AgentFamilyID.inferred(from: migrated)
+    }
+    if migrated.familyID == .codex,
+      migrated.command == "codex",
+      migrated.yoloFlag == "--yolo"
+    {
+      migrated.yoloFlag = "--full-auto"
+    }
+    return migrated
   }
 }
 

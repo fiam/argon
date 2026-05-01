@@ -2045,9 +2045,13 @@ private struct WorkspaceAgentTabSheet: View {
   @State private var pendingSandboxfilePrompt: SandboxfilePromptRequest?
   @State private var pendingSandboxedLaunchOptions: WorkspaceAgentLaunchOptions?
 
+  private var selectableSavedAgents: [SavedAgentProfile] {
+    savedAgents.enabledProfiles
+  }
+
   private var selectedSavedAgent: SavedAgentProfile? {
     guard let selectedAgentId else { return nil }
-    return savedAgents.profiles.first { $0.id == selectedAgentId }
+    return selectableSavedAgents.first { $0.id == selectedAgentId }
   }
 
   var body: some View {
@@ -2079,7 +2083,7 @@ private struct WorkspaceAgentTabSheet: View {
         LazyVGrid(
           columns: [GridItem(.adaptive(minimum: AgentPickerLayout.gridMinimumWidth))], spacing: 8
         ) {
-          ForEach(savedAgents.profiles) { profile in
+          ForEach(selectableSavedAgents) { profile in
             savedAgentCard(for: profile)
           }
 
@@ -2103,7 +2107,7 @@ private struct WorkspaceAgentTabSheet: View {
 
       if taskContext.allowsCustomCommand && useCustom {
         VStack(alignment: .leading, spacing: 8) {
-          TextField("Command", text: $customCommand, prompt: Text("e.g. codex --yolo"))
+          TextField("Command", text: $customCommand, prompt: Text("e.g. codex --full-auto"))
             .textFieldStyle(.roundedBorder)
             .font(.system(.body, design: .monospaced))
         }
@@ -2162,11 +2166,11 @@ private struct WorkspaceAgentTabSheet: View {
     .padding(24)
     .frame(width: 520)
     .onAppear {
-      agentAvailability.refresh(for: savedAgents.profiles)
+      agentAvailability.refresh(for: selectableSavedAgents)
       syncSelectedAgent()
     }
     .onChange(of: savedAgents.profiles) { _, _ in
-      agentAvailability.refresh(for: savedAgents.profiles)
+      agentAvailability.refresh(for: selectableSavedAgents)
       syncSelectedAgent()
     }
     .onChange(of: agentAvailability.revision) { _, _ in
@@ -2273,6 +2277,9 @@ private struct WorkspaceAgentTabSheet: View {
     let didLaunch = await onLaunch(launchOptions)
     isLaunching = false
     guard didLaunch else { return }
+    if case .savedProfile(let profile, _) = launchOptions.source {
+      AgentSelectionSettings.recordLastSelectedAgentID(profile.id)
+    }
     isPresented = false
     DispatchQueue.main.async {
       onDidLaunch()
@@ -2315,15 +2322,24 @@ private struct WorkspaceAgentTabSheet: View {
   private func syncSelectedAgent() {
     guard !useCustom else { return }
     if let selectedAgentId,
-      let selected = savedAgents.profiles.first(where: { $0.id == selectedAgentId }),
+      let selected = selectableSavedAgents.first(where: { $0.id == selectedAgentId }),
       agentAvailability.status(for: selected) != .unavailable
     {
       return
     }
+
+    if let preferredID = AgentSelectionSettings.preferredProfileID(
+      in: selectableSavedAgents,
+      isSelectable: { agentAvailability.status(for: $0) != .unavailable }
+    ) {
+      selectedAgentId = preferredID
+      return
+    }
+
     selectedAgentId =
-      savedAgents.profiles.first(where: {
+      selectableSavedAgents.first(where: {
         agentAvailability.status(for: $0) == .available
-      })?.id ?? savedAgents.profiles.first?.id
+      })?.id ?? selectableSavedAgents.first?.id
   }
 
   private func presentSandboxHelp() {
@@ -2365,12 +2381,17 @@ private struct WorkspaceAgentTabSheet: View {
       status: status,
       isSelected: !useCustom && selectedAgentId == profile.id
     ) {
-      selectedAgentId = profile.id
-      useCustom = false
+      selectSavedAgent(profile)
       if profile.yoloFlag.isEmpty {
         yoloMode = false
       }
     }
+  }
+
+  private func selectSavedAgent(_ profile: SavedAgentProfile) {
+    selectedAgentId = profile.id
+    useCustom = false
+    AgentSelectionSettings.recordLastSelectedAgentID(profile.id)
   }
 
   private func yoloSubtitle(for flag: String) -> String {

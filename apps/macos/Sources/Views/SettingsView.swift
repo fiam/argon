@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Displays an agent icon from the asset catalog, falling back to an SF Symbol.
 struct AgentIconView: View {
@@ -76,9 +77,13 @@ struct SettingsView: View {
   private var preventSleepWhileAgentsRun = AgentSleepPreventionSettings.defaultEnabled
   @AppStorage(AgentNotificationSettings.enabledStorageKey)
   private var agentNotificationsEnabled = AgentNotificationSettings.defaultEnabled
+  @AppStorage(AgentSelectionSettings.rememberLastSelectionStorageKey)
+  private var rememberLastAgentSelection = AgentSelectionSettings.defaultRememberLastSelection
   @AppStorage(WorktreeMergeStrategySettings.defaultStrategyStorageKey)
   private var defaultWorktreeMergeStrategy = WorktreeMergeStrategy.mergeCommit.rawValue
   @State private var selectedAgentId: String?
+  @State private var draggingAgentId: String?
+  @State private var dropInsertion: AgentDropInsertion?
   @State private var editingNewAgent = false
   @State private var ghosttyConfigurationDraft = ""
   @State private var appliedGhosttyConfigurationText = ""
@@ -299,12 +304,51 @@ struct SettingsView: View {
 
   private var agentsTab: some View {
     VStack(spacing: 0) {
+      HStack {
+        Toggle("Remember last selected agent", isOn: $rememberLastAgentSelection)
+          .toggleStyle(.checkbox)
+          .help("Preselect the most recently selected saved agent when opening agent pickers.")
+          .accessibilityIdentifier("agent-settings-remember-last-selection-toggle")
+        Spacer()
+      }
+      .padding(.horizontal, 8)
+      .padding(.vertical, 6)
+
       List(selection: $selectedAgentId) {
         ForEach(savedAgents.profiles) { profile in
-          AgentProfileRow(profile: profile, status: agentAvailability.status(for: profile)) {
-            updated in
-            savedAgents.update(updated)
-          }
+          AgentProfileRow(
+            profile: profile,
+            availability: agentAvailability.details(for: profile),
+            dropPlacement: dropInsertion?.profileID == profile.id ? dropInsertion?.placement : nil,
+            onSetEnabled: { isEnabled in
+              savedAgents.setEnabled(isEnabled, for: profile.id)
+            },
+            onDisableOrRemove: {
+              savedAgents.remove(id: profile.id)
+              if !savedAgents.profiles.contains(where: { $0.id == profile.id }) {
+                selectedAgentId = nil
+              }
+            },
+            onDrag: {
+              draggingAgentId = profile.id
+              return NSItemProvider(object: profile.id as NSString)
+            },
+            onUpdate: { updated in
+              savedAgents.update(updated)
+            }
+          )
+          .opacity(draggingAgentId == profile.id ? 0.55 : 1)
+          .onDrop(
+            of: [.text],
+            delegate: AgentProfileDropDelegate(
+              destinationProfileID: profile.id,
+              profiles: savedAgents.profiles,
+              draggingAgentId: $draggingAgentId,
+              dropInsertion: $dropInsertion
+            ) { source, destination in
+              savedAgents.move(from: source, to: destination)
+            }
+          )
         }
         .onDelete { offsets in
           savedAgents.remove(at: offsets)
@@ -313,9 +357,10 @@ struct SettingsView: View {
           savedAgents.move(from: source, to: destination)
         }
       }
+      .environment(\.defaultMinListRowHeight, 48)
       .listStyle(.bordered(alternatesRowBackgrounds: true))
 
-      // HIG-style segmented +/- button bar
+      // HIG-style segmented action bar
       HStack(spacing: 0) {
         HStack(spacing: 0) {
           Button {
@@ -330,16 +375,14 @@ struct SettingsView: View {
             .frame(height: 16)
 
           Button {
-            if let id = selectedAgentId {
-              savedAgents.remove(id: id)
-              selectedAgentId = nil
-            }
+            disableOrRemoveSelectedAgent()
           } label: {
             Image(systemName: "minus")
               .frame(width: 28, height: 22)
               .contentShape(Rectangle())
           }
-          .disabled(selectedAgentId == nil)
+          .disabled(!canDisableOrRemoveSelectedAgent)
+          .help(disableOrRemoveSelectedAgentHelpText)
         }
         .buttonStyle(.borderless)
         .background(Color(nsColor: .controlBackgroundColor))
@@ -374,6 +417,34 @@ struct SettingsView: View {
       ) { newProfile in
         savedAgents.add(newProfile)
       }
+    }
+  }
+
+  private var selectedAgentProfile: SavedAgentProfile? {
+    guard let selectedAgentId else { return nil }
+    return savedAgents.profiles.first { $0.id == selectedAgentId }
+  }
+
+  private var canDisableOrRemoveSelectedAgent: Bool {
+    guard let selectedAgentProfile else { return false }
+    return !selectedAgentProfile.isBuiltIn || selectedAgentProfile.isEnabled
+  }
+
+  private var disableOrRemoveSelectedAgentHelpText: String {
+    guard let selectedAgentProfile else { return "Select an agent first." }
+    if selectedAgentProfile.isBuiltIn {
+      return selectedAgentProfile.isEnabled
+        ? "Disable this built-in agent in launch pickers."
+        : "This built-in agent is already disabled."
+    }
+    return "Delete this custom agent."
+  }
+
+  private func disableOrRemoveSelectedAgent() {
+    guard let selectedAgentProfile else { return }
+    savedAgents.remove(id: selectedAgentProfile.id)
+    if !savedAgents.profiles.contains(where: { $0.id == selectedAgentProfile.id }) {
+      selectedAgentId = nil
     }
   }
 
@@ -1037,80 +1108,291 @@ private struct TerminalPreview: View {
 
 private struct AgentProfileRow: View {
   let profile: SavedAgentProfile
-  let status: AgentAvailability.Status
+  let availability: AgentAvailability.Details
+  let dropPlacement: AgentDropPlacement?
+  let onSetEnabled: (Bool) -> Void
+  let onDisableOrRemove: () -> Void
+  let onDrag: () -> NSItemProvider
   let onUpdate: (SavedAgentProfile) -> Void
   @State private var showEditor = false
 
   var body: some View {
-    HStack {
-      AgentIconView(icon: profile.icon)
-        .foregroundStyle(.secondary)
-      VStack(alignment: .leading, spacing: 1) {
-        Text(profile.name)
-          .fontWeight(.medium)
-        HStack(spacing: 4) {
-          Text(profile.command)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          if !profile.yoloFlag.isEmpty {
-            Text(profile.yoloFlag)
-              .font(.caption2)
-              .foregroundStyle(.orange)
+    HStack(spacing: 10) {
+      Toggle(
+        "",
+        isOn: Binding(
+          get: { effectiveIsEnabled },
+          set: { isEnabled in
+            guard !isUnavailable else { return }
+            onSetEnabled(isEnabled)
           }
-        }
-        .lineLimit(1)
-        if !profile.promptArgumentTemplate.isEmpty {
-          Text(profile.promptArgumentTemplate)
-            .font(.caption2.monospaced())
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-        }
-        if !profile.resumeArgumentTemplate.isEmpty {
-          Text(profile.resumeArgumentTemplate)
-            .font(.caption2.monospaced())
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-        }
+        )
+      )
+      .labelsHidden()
+      .toggleStyle(.checkbox)
+      .controlSize(.small)
+      .frame(width: 16)
+      .disabled(isEnableToggleDisabled)
+      .help(
+        isEnableToggleDisabled
+          ? "Install \(profile.baseCommand) before enabling this agent."
+          : profile.isEnabled
+            ? "Disable agent in launch pickers." : "Enable agent in launch pickers."
+      )
+
+      rowInteractionContent
+    }
+    .frame(height: 48)
+    .overlay(alignment: .top) {
+      if dropPlacement == .before {
+        insertionLine
       }
-      Spacer()
-      Text(statusLabel)
-        .font(.caption2)
-        .foregroundStyle(statusColor)
-      Button {
-        showEditor = true
-      } label: {
-        Image(systemName: "pencil")
-          .font(.caption)
+    }
+    .overlay(alignment: .bottom) {
+      if dropPlacement == .after {
+        insertionLine
       }
-      .buttonStyle(.plain)
-      .foregroundStyle(.secondary)
     }
     .sheet(isPresented: $showEditor) {
-      AgentEditorSheet(profile: profile) { updated in
+      AgentEditorSheet(profile: profile, availability: availability) { updated in
         onUpdate(updated)
       }
     }
   }
 
-  private var statusLabel: String {
-    switch status {
-    case .checking:
-      "checking"
-    case .available:
-      "available"
-    case .unavailable:
-      "missing"
+  private var rowInteractionContent: some View {
+    HStack(spacing: 10) {
+      AgentIconView(icon: profile.icon)
+        .foregroundStyle(.secondary)
+        .frame(width: 20, height: 20)
+        .opacity(contentOpacity)
+
+      VStack(alignment: .leading, spacing: 2) {
+        Text(profile.name)
+          .fontWeight(.medium)
+
+        Text(rowDetailText)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+      .opacity(contentOpacity)
+
+      Spacer(minLength: 12)
+      availabilityIndicator
+    }
+    .contentShape(Rectangle())
+    .onDrag(onDrag) {
+      Color.clear
+        .frame(width: 1, height: 1)
+    }
+    .onTapGesture(count: 2) {
+      showEditor = true
+    }
+    .contextMenu {
+      Button {
+        showEditor = true
+      } label: {
+        Label("Edit Agent...", systemImage: "pencil")
+      }
+
+      Divider()
+
+      Button {
+        onSetEnabled(!profile.isEnabled)
+      } label: {
+        Label(
+          profile.isEnabled ? "Disable Agent" : "Enable Agent",
+          systemImage: profile.isEnabled ? "slash.circle" : "checkmark.circle"
+        )
+      }
+      .disabled(isEnableToggleDisabled)
+
+      if !profile.isBuiltIn {
+        Divider()
+
+        Button(role: .destructive) {
+          onDisableOrRemove()
+        } label: {
+          Label("Delete Agent", systemImage: "trash")
+        }
+      }
+    }
+    .accessibilityAction(named: Text("Edit Agent")) {
+      showEditor = true
     }
   }
 
-  private var statusColor: Color {
-    switch status {
+  private var contentOpacity: Double {
+    isUnavailable ? 0.55 : 1
+  }
+
+  private var rowDetailText: String {
+    switch availability.status {
     case .checking:
-      .secondary
+      if !profile.isEnabled {
+        return "Disabled"
+      }
+      return "Checking for \(profile.baseCommand)..."
     case .available:
-      .green
+      if !profile.isEnabled {
+        return "Disabled"
+      }
+      return "Installed"
     case .unavailable:
-      .orange
+      return "\(profile.baseCommand) not found"
+    }
+  }
+
+  @ViewBuilder
+  private var availabilityIndicator: some View {
+    switch availability.status {
+    case .checking:
+      if profile.isEnabled {
+        ProgressView()
+          .controlSize(.small)
+          .frame(width: 20, height: 20)
+          .help("Checking whether \(profile.baseCommand) is installed.")
+      } else {
+        EmptyView()
+      }
+    case .available:
+      if profile.isEnabled {
+        if let version = availability.version {
+          Text(version)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .help(availableHelpText)
+        } else {
+          EmptyView()
+        }
+      } else {
+        EmptyView()
+      }
+    case .unavailable:
+      Image(systemName: "exclamationmark.triangle.fill")
+        .foregroundStyle(.orange)
+        .imageScale(.medium)
+        .frame(width: 20, height: 20)
+        .help("\(profile.baseCommand) was not found in your shell PATH.")
+        .accessibilityLabel("Agent command not found")
+        .accessibilityValue(profile.baseCommand)
+    }
+  }
+
+  private var isEnableToggleDisabled: Bool {
+    isUnavailable
+  }
+
+  private var effectiveIsEnabled: Bool {
+    profile.isEnabled && !isUnavailable
+  }
+
+  private var isUnavailable: Bool {
+    availability.status == .unavailable
+  }
+
+  private var insertionLine: some View {
+    Rectangle()
+      .fill(Color.accentColor)
+      .frame(height: 2)
+      .allowsHitTesting(false)
+  }
+
+  private var availableHelpText: String {
+    if let resolvedPath = availability.resolvedPath {
+      return "\(profile.baseCommand) found at \(resolvedPath)."
+    }
+    return "\(profile.baseCommand) is installed."
+  }
+}
+
+private enum AgentDropPlacement: Equatable {
+  case before
+  case after
+}
+
+private struct AgentDropInsertion: Equatable {
+  var profileID: String
+  var placement: AgentDropPlacement
+}
+
+private struct AgentProfileDropDelegate: DropDelegate {
+  let destinationProfileID: String
+  let profiles: [SavedAgentProfile]
+  @Binding var draggingAgentId: String?
+  @Binding var dropInsertion: AgentDropInsertion?
+  let move: (IndexSet, Int) -> Void
+
+  func dropEntered(info: DropInfo) {
+    updateInsertion(for: info)
+  }
+
+  func dropUpdated(info: DropInfo) -> DropProposal? {
+    updateInsertion(for: info)
+    return DropProposal(operation: .move)
+  }
+
+  func dropExited(info: DropInfo) {
+    guard dropInsertion?.profileID == destinationProfileID else { return }
+    dropInsertion = nil
+  }
+
+  func performDrop(info: DropInfo) -> Bool {
+    defer {
+      draggingAgentId = nil
+      dropInsertion = nil
+    }
+
+    guard let draggingAgentId,
+      draggingAgentId != destinationProfileID,
+      let sourceIndex = profiles.firstIndex(where: { $0.id == draggingAgentId }),
+      let destinationIndex = profiles.firstIndex(where: { $0.id == destinationProfileID })
+    else { return false }
+
+    let destination = moveDestination(
+      sourceIndex: sourceIndex,
+      destinationIndex: destinationIndex,
+      placement: placement(for: info)
+    )
+
+    guard destination != sourceIndex, destination != sourceIndex + 1 else {
+      return true
+    }
+
+    move(IndexSet(integer: sourceIndex), destination)
+    return true
+  }
+
+  private func updateInsertion(for info: DropInfo) {
+    guard let draggingAgentId,
+      draggingAgentId != destinationProfileID
+    else {
+      dropInsertion = nil
+      return
+    }
+
+    dropInsertion = AgentDropInsertion(
+      profileID: destinationProfileID,
+      placement: placement(for: info)
+    )
+  }
+
+  private func placement(for info: DropInfo) -> AgentDropPlacement {
+    info.location.y < 24 ? .before : .after
+  }
+
+  private func moveDestination(
+    sourceIndex: Int,
+    destinationIndex: Int,
+    placement: AgentDropPlacement
+  ) -> Int {
+    switch placement {
+    case .before:
+      destinationIndex
+    case .after:
+      destinationIndex + 1
     }
   }
 }
@@ -1119,86 +1401,281 @@ private struct AgentProfileRow: View {
 
 private struct AgentEditorSheet: View {
   let profile: SavedAgentProfile
+  let availability: AgentAvailability.Details
   let onSave: (SavedAgentProfile) -> Void
   @Environment(\.dismiss) private var dismiss
   @State private var editName: String
   @State private var editCommand: String
+  @State private var editIsEnabled: Bool
   @State private var editYoloFlag: String
-  @State private var editPromptArgumentTemplate: String
-  @State private var editResumeArgumentTemplate: String
+  @State private var attemptedSave = false
 
-  init(profile: SavedAgentProfile, onSave: @escaping (SavedAgentProfile) -> Void) {
+  private let labelWidth: CGFloat = 132
+  private let fieldWidth: CGFloat = 340
+
+  init(
+    profile: SavedAgentProfile,
+    availability: AgentAvailability.Details = .checking,
+    onSave: @escaping (SavedAgentProfile) -> Void
+  ) {
     self.profile = profile
+    self.availability = availability
     self.onSave = onSave
     self._editName = State(initialValue: profile.name)
     self._editCommand = State(initialValue: profile.command)
+    self._editIsEnabled = State(initialValue: profile.isEnabled)
     self._editYoloFlag = State(initialValue: profile.yoloFlag)
-    self._editPromptArgumentTemplate = State(initialValue: profile.promptArgumentTemplate)
-    self._editResumeArgumentTemplate = State(initialValue: profile.resumeArgumentTemplate)
   }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text("Edit Agent")
+      Text(editorTitle)
         .font(.headline)
 
-      Form {
-        TextField("Name", text: $editName)
-        TextField("Command", text: $editCommand)
-          .font(.system(.body, design: .monospaced))
-        TextField("Auto-approve flag", text: $editYoloFlag)
-          .font(.system(.body, design: .monospaced))
-        Text("Leave empty if the agent doesn't support an auto-approve mode.")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        TextField("Prompt argument template", text: $editPromptArgumentTemplate)
-          .font(.system(.body, design: .monospaced))
-        Text(
-          "Use {{prompt}} where the quoted prompt should be inserted. Leave empty to append the prompt as the final argument."
-        )
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        TextField("Resume argument template", text: $editResumeArgumentTemplate)
-          .font(.system(.body, design: .monospaced))
-        Text(
-          "Use {{session_id}} where the quoted session ID should be inserted. Leave empty to disable resume-on-restore for this agent."
-        )
-        .font(.caption)
-        .foregroundStyle(.secondary)
+      if profile.isBuiltIn {
+        builtInConfigurationFields
+      } else {
+        customAgentFields
       }
-      .formStyle(.grouped)
 
-      HStack {
-        Spacer()
+      actionButtons
+    }
+    .padding(24)
+    .frame(width: 550)
+  }
+
+  private var editorTitle: String {
+    if profile.isBuiltIn {
+      return "Configure Agent"
+    }
+    return profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      ? "New Agent" : "Edit Agent"
+  }
+
+  private var trimmedName: String {
+    editName.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var trimmedCommand: String {
+    editCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var trimmedYoloFlag: String {
+    editYoloFlag.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var canSave: Bool {
+    (profile.isBuiltIn || !trimmedName.isEmpty) && !trimmedCommand.isEmpty
+  }
+
+  private func save() {
+    guard canSave else { return }
+    var updated = profile
+    if let familyID = profile.familyID {
+      let defaultProfile = familyID.defaultProfile
+      updated.familyID = familyID
+      updated.name = defaultProfile.name
+      updated.command = defaultProfile.command
+      updated.icon = defaultProfile.icon
+      updated.yoloFlag = defaultProfile.yoloFlag
+      updated.promptArgumentTemplate = defaultProfile.promptArgumentTemplate
+      updated.resumeArgumentTemplate = defaultProfile.resumeArgumentTemplate
+    } else {
+      updated.name = trimmedName
+      updated.familyID = nil
+      updated.icon = "agent"
+      updated.yoloFlag = trimmedYoloFlag
+      updated.promptArgumentTemplate = ""
+      updated.resumeArgumentTemplate = ""
+    }
+    if !profile.isBuiltIn {
+      updated.command = trimmedCommand
+    }
+    updated.isEnabled = editIsEnabled
+    onSave(updated)
+    dismiss()
+  }
+
+  @ViewBuilder
+  private var actionButtons: some View {
+    HStack {
+      Spacer()
+
+      if profile.isBuiltIn {
+        Button("Done") {
+          dismiss()
+        }
+        .keyboardShortcut(.defaultAction)
+      } else {
         Button("Cancel") {
           dismiss()
         }
         .keyboardShortcut(.cancelAction)
 
         Button("Save") {
-          var updated = profile
-          updated.name = editName.trimmingCharacters(in: .whitespacesAndNewlines)
-          updated.command = editCommand.trimmingCharacters(in: .whitespacesAndNewlines)
-          updated.yoloFlag = editYoloFlag.trimmingCharacters(in: .whitespacesAndNewlines)
-          updated.promptArgumentTemplate = editPromptArgumentTemplate.trimmingCharacters(
-            in: .whitespacesAndNewlines
-          )
-          updated.resumeArgumentTemplate = editResumeArgumentTemplate.trimmingCharacters(
-            in: .whitespacesAndNewlines
-          )
-          if !updated.name.isEmpty && !updated.command.isEmpty {
-            onSave(updated)
-          }
-          dismiss()
+          attemptedSave = true
+          save()
         }
         .keyboardShortcut(.defaultAction)
-        .disabled(
-          editName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || editCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        )
       }
     }
-    .padding(20)
-    .frame(width: 400)
+  }
+
+  private var builtInConfigurationFields: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      toggleField("Enabled", isOn: immediateEnabledBinding)
+      staticField("Command", value: familyDefaultCommand, isMonospaced: true)
+      staticField("Status", value: availabilityLabel)
+      if let version = availability.version {
+        staticField("Version", value: version)
+      }
+    }
+  }
+
+  private var customAgentFields: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      editorField(
+        "Name",
+        text: $editName,
+        prompt: "Codex",
+        validationMessage: attemptedSave && trimmedName.isEmpty ? "Name is required." : nil
+      )
+      toggleField("Enabled", isOn: $editIsEnabled)
+      editorField(
+        "Command",
+        text: $editCommand,
+        prompt: "codex",
+        isMonospaced: true,
+        validationMessage: attemptedSave && trimmedCommand.isEmpty ? "Command is required." : nil
+      )
+      editorField(
+        "Auto-approve",
+        text: $editYoloFlag,
+        prompt: "--full-auto",
+        isMonospaced: true,
+        help: "Optional flag appended when auto-approve mode is enabled."
+      )
+    }
+  }
+
+  private var familyDefaultCommand: String {
+    profile.familyID?.defaultProfile.command ?? "codex"
+  }
+
+  private var immediateEnabledBinding: Binding<Bool> {
+    Binding(
+      get: { editIsEnabled },
+      set: { isEnabled in
+        editIsEnabled = isEnabled
+        saveBuiltInEnabled(isEnabled)
+      }
+    )
+  }
+
+  private func saveBuiltInEnabled(_ isEnabled: Bool) {
+    guard let familyID = profile.familyID else { return }
+    let defaultProfile = familyID.defaultProfile
+    var updated = profile
+    updated.familyID = familyID
+    updated.name = defaultProfile.name
+    updated.command = defaultProfile.command
+    updated.icon = defaultProfile.icon
+    updated.yoloFlag = defaultProfile.yoloFlag
+    updated.promptArgumentTemplate = defaultProfile.promptArgumentTemplate
+    updated.resumeArgumentTemplate = defaultProfile.resumeArgumentTemplate
+    updated.isEnabled = isEnabled
+    onSave(updated)
+  }
+
+  private var availabilityLabel: String {
+    switch availability.status {
+    case .checking:
+      "Checking for \(familyDefaultCommand)..."
+    case .available:
+      if let resolvedPath = availability.resolvedPath {
+        "Installed at \(resolvedPath)"
+      } else {
+        "Installed"
+      }
+    case .unavailable:
+      "\(familyDefaultCommand) not found"
+    }
+  }
+
+  @ViewBuilder
+  private func staticField(
+    _ label: String,
+    value: String,
+    isMonospaced: Bool = false
+  ) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 12) {
+      Text(label)
+        .frame(width: labelWidth, alignment: .trailing)
+        .foregroundStyle(.secondary)
+
+      Text(value)
+        .font(fieldFont(isMonospaced: isMonospaced))
+        .foregroundStyle(.primary)
+        .frame(width: fieldWidth, alignment: .leading)
+        .textSelection(.enabled)
+    }
+  }
+
+  @ViewBuilder
+  private func toggleField(_ label: String, isOn: Binding<Bool>) -> some View {
+    HStack(alignment: .center, spacing: 12) {
+      Text(label)
+        .frame(width: labelWidth, alignment: .trailing)
+        .foregroundStyle(.secondary)
+
+      Toggle("", isOn: isOn)
+        .labelsHidden()
+        .toggleStyle(.checkbox)
+        .accessibilityLabel(label)
+        .help("Show this agent in launch pickers.")
+        .frame(width: fieldWidth, alignment: .leading)
+    }
+  }
+
+  @ViewBuilder
+  private func editorField(
+    _ label: String,
+    text: Binding<String>,
+    prompt: String,
+    isMonospaced: Bool = false,
+    help: String? = nil,
+    validationMessage: String? = nil
+  ) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 12) {
+      Text(label)
+        .frame(width: labelWidth, alignment: .trailing)
+        .foregroundStyle(.secondary)
+
+      VStack(alignment: .leading, spacing: 5) {
+        TextField("", text: text, prompt: Text(prompt))
+          .textFieldStyle(.roundedBorder)
+          .font(fieldFont(isMonospaced: isMonospaced))
+          .frame(width: fieldWidth)
+          .accessibilityLabel(label)
+          .help(help ?? "")
+
+        if let validationMessage {
+          Text(validationMessage)
+            .font(.caption)
+            .foregroundStyle(.red)
+            .frame(width: fieldWidth, alignment: .leading)
+        } else if let help {
+          Text(help)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(width: fieldWidth, alignment: .leading)
+        }
+      }
+    }
+  }
+
+  private func fieldFont(isMonospaced: Bool) -> Font {
+    isMonospaced ? .system(.body, design: .monospaced) : .body
   }
 }

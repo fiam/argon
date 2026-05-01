@@ -56,9 +56,13 @@ struct AgentLaunchSheet: View {
   @State private var pendingLaunchProfile: AgentProfile?
   @State private var pendingLaunchFocusPrompt: String?
 
+  private var selectableSavedAgents: [SavedAgentProfile] {
+    savedAgents.enabledProfiles
+  }
+
   private var selectedSavedAgent: SavedAgentProfile? {
     guard let id = selectedAgentId else { return nil }
-    return savedAgents.profiles.first { $0.id == id }
+    return selectableSavedAgents.first { $0.id == id }
   }
 
   var body: some View {
@@ -97,7 +101,7 @@ struct AgentLaunchSheet: View {
         LazyVGrid(
           columns: [GridItem(.adaptive(minimum: AgentPickerLayout.gridMinimumWidth))], spacing: 6
         ) {
-          ForEach(savedAgents.profiles) { profile in
+          ForEach(selectableSavedAgents) { profile in
             savedAgentCard(for: profile)
           }
 
@@ -189,11 +193,11 @@ struct AgentLaunchSheet: View {
     .frame(width: 500)
     .accessibilityIdentifier("agent-launch-sheet")
     .onAppear {
-      agentAvailability.refresh(for: savedAgents.profiles)
+      agentAvailability.refresh(for: selectableSavedAgents)
       syncSelectedAgent()
     }
     .onChange(of: savedAgents.profiles) { _, _ in
-      agentAvailability.refresh(for: savedAgents.profiles)
+      agentAvailability.refresh(for: selectableSavedAgents)
       syncSelectedAgent()
     }
     .onChange(of: agentAvailability.revision) { _, _ in
@@ -253,6 +257,7 @@ struct AgentLaunchSheet: View {
         promptArgumentTemplate: ""
       )
     } else if let saved = selectedSavedAgent {
+      AgentSelectionSettings.recordLastSelectedAgentID(saved.id)
       let cmd = saved.fullCommand(yolo: yoloMode, sandboxed: sandboxEnabled)
       profile = AgentProfile(
         id: saved.id,
@@ -358,20 +363,28 @@ struct AgentLaunchSheet: View {
     guard !useCustom else { return }
 
     if let selectedAgentId,
-      let selected = savedAgents.profiles.first(where: { $0.id == selectedAgentId }),
+      let selected = selectableSavedAgents.first(where: { $0.id == selectedAgentId }),
       agentAvailability.status(for: selected) != .unavailable
     {
       return
     }
 
-    if let available = savedAgents.profiles.first(where: {
+    if let preferredID = AgentSelectionSettings.preferredProfileID(
+      in: selectableSavedAgents,
+      isSelectable: { agentAvailability.status(for: $0) != .unavailable }
+    ) {
+      selectedAgentId = preferredID
+      return
+    }
+
+    if let available = selectableSavedAgents.first(where: {
       agentAvailability.status(for: $0) == .available
     }) {
       selectedAgentId = available.id
       return
     }
 
-    selectedAgentId = savedAgents.profiles.first?.id
+    selectedAgentId = selectableSavedAgents.first?.id
   }
 
   @ViewBuilder
@@ -382,12 +395,17 @@ struct AgentLaunchSheet: View {
       status: status,
       isSelected: !useCustom && selectedAgentId == profile.id
     ) {
-      selectedAgentId = profile.id
-      useCustom = false
+      selectSavedAgent(profile)
       if profile.yoloFlag.isEmpty {
         yoloMode = false
       }
     }
+  }
+
+  private func selectSavedAgent(_ profile: SavedAgentProfile) {
+    selectedAgentId = profile.id
+    useCustom = false
+    AgentSelectionSettings.recordLastSelectedAgentID(profile.id)
   }
 
   private func yoloSubtitle(for flag: String) -> String {

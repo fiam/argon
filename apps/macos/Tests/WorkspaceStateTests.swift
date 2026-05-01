@@ -1192,6 +1192,64 @@ struct WorkspaceStateTests {
     )
   }
 
+  @Test("unchanged worktree metadata does not refresh details")
+  func unchangedWorktreeMetadataDoesNotRefreshDetails() {
+    let currentWorktrees = [
+      DiscoveredWorktree(
+        path: "/tmp/repo",
+        branchName: "main",
+        headSHA: "abc123",
+        isBaseWorktree: true,
+        isDetached: false
+      )
+    ]
+    let discoveredWorktrees = [
+      DiscoveredWorktree(
+        path: "/private/tmp/repo",
+        branchName: "main",
+        headSHA: "abc123",
+        isBaseWorktree: true,
+        isDetached: false
+      )
+    ]
+
+    #expect(
+      WorkspaceState.shouldRefreshWorktreeDetails(
+        currentWorktrees: currentWorktrees,
+        discoveredWorktrees: discoveredWorktrees
+      ) == false
+    )
+  }
+
+  @Test("changed worktree metadata refreshes details")
+  func changedWorktreeMetadataRefreshesDetails() {
+    let currentWorktrees = [
+      DiscoveredWorktree(
+        path: "/tmp/repo",
+        branchName: "main",
+        headSHA: "abc123",
+        isBaseWorktree: true,
+        isDetached: false
+      )
+    ]
+    let discoveredWorktrees = [
+      DiscoveredWorktree(
+        path: "/tmp/repo",
+        branchName: "main",
+        headSHA: "def456",
+        isBaseWorktree: true,
+        isDetached: false
+      )
+    ]
+
+    #expect(
+      WorkspaceState.shouldRefreshWorktreeDetails(
+        currentWorktrees: currentWorktrees,
+        discoveredWorktrees: discoveredWorktrees
+      )
+    )
+  }
+
   @Test("inventory updates keep the selected worktree when its path still exists")
   @MainActor
   func inventoryUpdatesKeepTheSelectedWorktreeWhenItsPathStillExists() throws {

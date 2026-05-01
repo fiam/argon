@@ -91,4 +91,35 @@ struct UserShellTests {
     #expect(statuses["codex"] == false)
     #expect(try String(contentsOf: countPath, encoding: .utf8) == "1")
   }
+
+  @Test("command details include resolved path and version")
+  func commandDetailsIncludeResolvedPathAndVersion() throws {
+    let tempDir = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+
+    let shellPath = tempDir.appendingPathComponent("fake-shell.sh")
+    let script = """
+      #!/bin/sh
+      printf 'codex\\t1\\t/usr/local/bin/codex\\tcodex-cli 0.125.0\\n'
+      printf 'missing\\t0\\t\\t\\n'
+      exit 0
+      """
+    try script.write(to: shellPath, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o755],
+      ofItemAtPath: shellPath.path
+    )
+
+    let details = UserShell.commandDetails(
+      ["codex": .codex, "missing": nil],
+      environment: ["SHELL": shellPath.path]
+    )
+
+    #expect(details["codex"]?.exists == true)
+    #expect(details["codex"]?.resolvedPath == "/usr/local/bin/codex")
+    #expect(details["codex"]?.version == "codex-cli 0.125.0")
+    #expect(details["missing"]?.exists == false)
+  }
 }
