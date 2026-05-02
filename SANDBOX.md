@@ -400,8 +400,10 @@ than that, add explicit rules in `Sandboxfile` or `Sandboxfile.local`.
 
 `USE git` allows `git` and the standard git configuration locations:
 `$HOME/.gitconfig`, `$XDG_CONFIG_HOME/git/`, and `/etc/gitconfig` when they
-exist. It also preserves `GIT_*` environment variables. It does not enable
-commit signing helpers by default.
+exist. It also preserves `GIT_*` and `DEVELOPER_DIR` environment variables.
+On macOS it allows the Xcode and Command Line Tools developer roots used by
+Apple's `/usr/bin/git` launcher when they exist. It does not install developer
+tools or enable commit signing helpers by default.
 
 `USE ssh` enables SSH-based signing support by allowing `ssh-keygen`,
 `SSH_AUTH_SOCK`, `$HOME/.ssh/config`, and `$HOME/.ssh/allowed_signers`. It
@@ -418,6 +420,9 @@ and the standard GnuPG agent sockets. It does not allow the full
 `USE agent` dispatches from `$AGENT` when the launcher provides an explicit
 agent family. If `$AGENT` is unset, it falls back to `$ARGV0_BASENAME` for
 direct launches such as `codex` or `/opt/homebrew/bin/codex`.
+For Codex, `USE agent` allows `codex`, preserves `OPENAI_*` and `CODEX_*`,
+and allows read, write, and exec access under `$HOME/.codex/` when it exists
+so Codex state and helper shims continue to work under `EXEC DEFAULT DENY`.
 
 Inspect builtins with:
 

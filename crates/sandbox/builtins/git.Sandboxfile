@@ -1,6 +1,32 @@
 ENV ALLOW GIT_*
+ENV ALLOW DEVELOPER_DIR
 
 EXEC ALLOW git
+
+SWITCH "$OS"
+CASE "macos"
+IF TEST -d /Library/Developer/CommandLineTools
+FS ALLOW READ /Library/Developer/CommandLineTools/
+EXEC ALLOW /Library/Developer/CommandLineTools/
+END
+IF TEST -d /Applications/Xcode.app
+FS ALLOW READ /Applications/Xcode.app/
+EXEC ALLOW /Applications/Xcode.app/Contents/Developer/
+IF TEST -d /Applications/Xcode.app/Contents/Frameworks
+EXEC ALLOW /Applications/Xcode.app/Contents/Frameworks/
+END
+IF TEST -d /Applications/Xcode.app/Contents/SharedFrameworks
+EXEC ALLOW /Applications/Xcode.app/Contents/SharedFrameworks/
+END
+END
+IF TEST -n "$DEVELOPER_DIR"
+IF TEST -d "$DEVELOPER_DIR"
+FS ALLOW READ $DEVELOPER_DIR/
+EXEC ALLOW $DEVELOPER_DIR/
+END
+END
+END
+
 IF TEST -f "$HOME/.gitconfig"
 FS ALLOW READ $HOME/.gitconfig
 END

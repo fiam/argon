@@ -3618,6 +3618,96 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn use_git_allows_macos_developer_tool_roots() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        let home = repo_root.join("home");
+        let bin_root = temp.path().join("bin");
+        let developer_dir = temp.path().join("Developer");
+        fs::create_dir_all(&repo_root).expect("repo");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&bin_root).expect("bin");
+        fs::create_dir_all(&developer_dir).expect("developer dir");
+        fs::write(bin_root.join("git"), "#!/bin/sh\nexit 0\n").expect("fake git");
+        fs::write(repo_root.join(REPO_SANDBOXFILE), "USE git\n").expect("sandbox");
+
+        let mut context = context_for(&repo_root, &["git", "--version"]);
+        context.env.insert(
+            "PATH".to_string(),
+            format!("{}:/bin:/usr/bin", bin_root.display()),
+        );
+        context.env.insert(
+            "DEVELOPER_DIR".to_string(),
+            developer_dir.display().to_string(),
+        );
+
+        let explain = explain(&context, &[]).expect("explain");
+        let developer_dir = normalize_absolute_input_path(developer_dir);
+        assert!(explain.policy.readable_roots.contains(&developer_dir));
+        assert!(explain.policy.executable_roots.contains(&developer_dir));
+        assert!(
+            explain
+                .allowed_environment_patterns
+                .iter()
+                .any(|pattern| pattern == "DEVELOPER_DIR")
+        );
+
+        let command_line_tools = Path::new("/Library/Developer/CommandLineTools");
+        if command_line_tools.is_dir() {
+            assert!(
+                explain
+                    .policy
+                    .readable_roots
+                    .contains(&command_line_tools.to_path_buf())
+            );
+            assert!(
+                explain
+                    .policy
+                    .executable_roots
+                    .contains(&command_line_tools.to_path_buf())
+            );
+        }
+
+        let xcode_app = Path::new("/Applications/Xcode.app");
+        if xcode_app.is_dir() {
+            assert!(
+                explain
+                    .policy
+                    .readable_roots
+                    .contains(&xcode_app.to_path_buf())
+            );
+            assert!(
+                explain
+                    .policy
+                    .executable_roots
+                    .contains(&xcode_app.join("Contents/Developer"))
+            );
+        }
+
+        let xcode_frameworks = Path::new("/Applications/Xcode.app/Contents/Frameworks");
+        if xcode_frameworks.is_dir() {
+            assert!(
+                explain
+                    .policy
+                    .executable_roots
+                    .contains(&xcode_frameworks.to_path_buf())
+            );
+        }
+
+        let xcode_shared_frameworks =
+            Path::new("/Applications/Xcode.app/Contents/SharedFrameworks");
+        if xcode_shared_frameworks.is_dir() {
+            assert!(
+                explain
+                    .policy
+                    .executable_roots
+                    .contains(&xcode_shared_frameworks.to_path_buf())
+            );
+        }
+    }
+
     #[test]
     fn use_git_signing_allows_signing_tools_and_agent_paths() {
         let temp = tempdir().expect("tempdir");
@@ -3878,6 +3968,20 @@ NET ALLOW CONNECT udp *:53
             explain
                 .policy
                 .writable_roots
+                .iter()
+                .any(|path| path.ends_with(".codex"))
+        );
+        assert!(
+            explain
+                .policy
+                .readable_roots
+                .iter()
+                .any(|path| path.ends_with(".codex"))
+        );
+        assert!(
+            explain
+                .policy
+                .executable_roots
                 .iter()
                 .any(|path| path.ends_with(".codex"))
         );
