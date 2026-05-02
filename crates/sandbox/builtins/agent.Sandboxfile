@@ -9,6 +9,10 @@ SET AGENT gemini
 END
 END
 
+IF TEST "$LAUNCH" = "agent"
+EXEC ALLOW OPTIONAL rg
+END
+
 SWITCH "$AGENT"
 CASE "claude"
 USE agent/claude

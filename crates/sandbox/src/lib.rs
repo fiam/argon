@@ -364,6 +364,7 @@ struct PendingExecCommand {
     command_name: String,
     source_name: String,
     line_number: usize,
+    optional: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1355,7 +1356,7 @@ fn evaluate_source(
                 StatementKind::ExecDefault { value } => {
                     state.policy.exec_default = *value;
                 }
-                StatementKind::ExecAllow { value } => {
+                StatementKind::ExecAllow { value, optional } => {
                     let expanded = expand_variables(
                         value,
                         &state.vars,
@@ -1363,8 +1364,16 @@ fn evaluate_source(
                         statement.line_number,
                     )?;
                     if is_path_like(&expanded) {
-                        let resolved =
-                            resolve_path_value(value, &state.vars, source, statement.line_number)?;
+                        let Some(resolved) = resolve_exec_path_value(
+                            value,
+                            &state.vars,
+                            source,
+                            statement.line_number,
+                            *optional,
+                        )?
+                        else {
+                            continue;
+                        };
                         validate_exec_allowance(
                             &resolved.path,
                             resolved.kind,
@@ -1377,6 +1386,7 @@ fn evaluate_source(
                             command_name: expanded,
                             source_name: source_label(source),
                             line_number: statement.line_number,
+                            optional: *optional,
                         });
                     }
                 }
@@ -1573,6 +1583,9 @@ fn resolve_pending_exec_commands(
     for command in std::mem::take(&mut state.pending_exec_commands) {
         let paths = resolve_command_paths_from_path(&command.command_name, &path_value);
         if paths.is_empty() {
+            if command.optional {
+                continue;
+            }
             return Err(SandboxError::CommandNotFound {
                 command: command.command_name,
                 origin: command.source_name,
@@ -2280,6 +2293,27 @@ fn resolve_path_value(
     source: &SourceFile,
     line_number: usize,
 ) -> Result<ResolvedPathValue, SandboxError> {
+    resolve_path_value_optional(raw, vars, source, line_number, false)
+        .map(|resolved| resolved.expect("required path resolution cannot skip"))
+}
+
+fn resolve_exec_path_value(
+    raw: &str,
+    vars: &BTreeMap<String, String>,
+    source: &SourceFile,
+    line_number: usize,
+    optional: bool,
+) -> Result<Option<ResolvedPathValue>, SandboxError> {
+    resolve_path_value_optional(raw, vars, source, line_number, optional)
+}
+
+fn resolve_path_value_optional(
+    raw: &str,
+    vars: &BTreeMap<String, String>,
+    source: &SourceFile,
+    line_number: usize,
+    optional: bool,
+) -> Result<Option<ResolvedPathValue>, SandboxError> {
     let source_name = source_label(source);
     let expanded = expand_variables(raw, vars, &source_name, line_number)?;
     if expanded.is_empty() {
@@ -2298,6 +2332,10 @@ fn resolve_path_value(
     };
     let resolved = resolve_relative_path(Path::new(&trimmed), &source.base_dir);
     let normalized = normalize_absolute_input_path(resolved);
+    if optional && !normalized.exists() {
+        return Ok(None);
+    }
+
     let kind = if forced_root {
         if !normalized.is_dir() {
             return Err(SandboxError::InvalidPath {
@@ -2314,11 +2352,11 @@ fn resolve_path_value(
         infer_existing_path_kind(&normalized)
     };
 
-    Ok(ResolvedPathValue {
+    Ok(Some(ResolvedPathValue {
         aliases: path_aliases(&normalized),
         path: normalized,
         kind,
-    })
+    }))
 }
 
 fn validate_fs_allowance(
@@ -3940,6 +3978,7 @@ NET ALLOW CONNECT udp *:53
         fs::create_dir_all(repo_root.join("home")).expect("home");
         fs::create_dir_all(repo_root.join("home/.codex")).expect("agent state");
         fs::write(bin_root.join("codex"), "#!/bin/sh\nexit 0\n").expect("fake codex");
+        fs::write(bin_root.join("rg"), "#!/bin/sh\nexit 0\n").expect("fake rg");
         fs::write(repo_root.join(REPO_SANDBOXFILE), "USE agent\n").expect("sandbox");
 
         let mut context = context_for(&repo_root, &["codex"]);
@@ -3984,6 +4023,85 @@ NET ALLOW CONNECT udp *:53
                 .executable_roots
                 .iter()
                 .any(|path| path.ends_with(".codex"))
+        );
+        assert!(
+            explain
+                .policy
+                .executable_paths
+                .iter()
+                .any(|path| path == &normalize_absolute_path(bin_root.join("rg")))
+        );
+    }
+
+    #[test]
+    fn use_agent_allows_optional_rg_for_non_codex_agents() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        let bin_root = temp.path().join("bin");
+        fs::create_dir_all(&repo_root).expect("repo");
+        fs::create_dir_all(&bin_root).expect("bin");
+        fs::create_dir_all(repo_root.join("home")).expect("home");
+        fs::create_dir_all(repo_root.join("home/.gemini")).expect("agent state");
+        fs::write(bin_root.join("gemini"), "#!/bin/sh\nexit 0\n").expect("fake gemini");
+        fs::write(bin_root.join("rg"), "#!/bin/sh\nexit 0\n").expect("fake rg");
+        fs::write(repo_root.join(REPO_SANDBOXFILE), "USE agent\n").expect("sandbox");
+
+        let mut context = context_for(&repo_root, &["gemini"]);
+        context.launch = LaunchKind::Agent;
+        context.agent = Some("gemini".to_string());
+        context.env.insert(
+            "PATH".to_string(),
+            format!("{}:/bin:/usr/bin", bin_root.display()),
+        );
+
+        let explain = explain(&context, &[]).expect("explain");
+
+        assert!(
+            explain
+                .sources
+                .iter()
+                .any(|source| source.name == "agent/gemini" && source.kind == "builtin")
+        );
+        assert!(
+            explain
+                .policy
+                .executable_paths
+                .iter()
+                .any(|path| path == &normalize_absolute_path(bin_root.join("rg")))
+        );
+    }
+
+    #[test]
+    fn use_agent_does_not_allow_optional_rg_for_shell_launches() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        let bin_root = temp.path().join("bin");
+        fs::create_dir_all(&repo_root).expect("repo");
+        fs::create_dir_all(&bin_root).expect("bin");
+        fs::create_dir_all(repo_root.join("home")).expect("home");
+        fs::write(bin_root.join("rg"), "#!/bin/sh\nexit 0\n").expect("fake rg");
+        fs::write(
+            repo_root.join(REPO_SANDBOXFILE),
+            "EXEC DEFAULT ALLOW\nUSE agent\n",
+        )
+        .expect("sandbox");
+
+        let mut context = context_for(&repo_root, &["/bin/zsh"]);
+        context.launch = LaunchKind::Shell;
+        context.agent = None;
+        context.env.insert(
+            "PATH".to_string(),
+            format!("{}:/bin:/usr/bin", bin_root.display()),
+        );
+
+        let explain = explain(&context, &[]).expect("explain");
+
+        assert!(
+            explain
+                .policy
+                .executable_paths
+                .iter()
+                .all(|path| path != &normalize_absolute_path(bin_root.join("rg")))
         );
     }
 
@@ -4373,6 +4491,7 @@ END
         .expect("sandbox");
 
         let mut context = context_for(&repo_root, &["/bin/zsh"]);
+        context.argv.clear();
         context
             .env
             .insert("PATH".to_string(), "/bin:/usr/bin".to_string());
@@ -4385,6 +4504,66 @@ END
                 && origin.ends_with("Sandboxfile")
                 && line == 1
         ));
+    }
+
+    #[test]
+    fn optional_exec_commands_are_skipped_when_missing() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        fs::create_dir_all(&repo_root).expect("repo");
+        fs::create_dir_all(repo_root.join("home")).expect("home");
+        fs::write(
+            repo_root.join(REPO_SANDBOXFILE),
+            "EXEC ALLOW OPTIONAL missing-tool\nEXEC ALLOW OPTIONAL ./missing-path\n",
+        )
+        .expect("sandbox");
+
+        let mut context = context_for(&repo_root, &["/bin/zsh"]);
+        context.argv.clear();
+        context
+            .env
+            .insert("PATH".to_string(), "/bin:/usr/bin".to_string());
+
+        let explain = explain(&context, &[]).expect("optional missing exec commands are skipped");
+        assert!(
+            !explain
+                .policy
+                .executable_paths
+                .iter()
+                .any(|path| path.ends_with("missing-tool") || path.ends_with("missing-path"))
+        );
+    }
+
+    #[test]
+    fn optional_exec_commands_resolve_when_present() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        let home = repo_root.join("home");
+        let bin = repo_root.join("bin");
+        fs::create_dir_all(&bin).expect("bin");
+        fs::create_dir_all(&home).expect("home");
+        fs::write(
+            repo_root.join(REPO_SANDBOXFILE),
+            "EXEC DEFAULT DENY\nEXEC ALLOW OPTIONAL tool\n",
+        )
+        .expect("sandbox");
+        fs::write(bin.join("tool"), "#!/bin/sh\n").expect("tool");
+
+        let mut context = context_for(&repo_root, &["tool"]);
+        context.launch = LaunchKind::Command;
+        context.interactive = false;
+        context
+            .env
+            .insert("PATH".to_string(), bin.display().to_string());
+
+        let explain = explain(&context, &[]).expect("optional command resolves");
+        assert!(
+            explain
+                .policy
+                .executable_paths
+                .iter()
+                .any(|path| path == &normalize_absolute_path(bin.join("tool")))
+        );
     }
 
     #[test]

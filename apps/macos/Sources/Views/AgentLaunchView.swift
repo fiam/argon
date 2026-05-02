@@ -508,7 +508,7 @@ struct SandboxHelpPopover: View {
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
           Text(
-            "Bare `EXEC ALLOW git` rules search `PATH` and allow each matching executable. Path-like values such as `./bin/tool` or `/usr/bin/git` refer to specific files."
+            "Bare `EXEC ALLOW git` rules search `PATH` and allow each matching executable. Use `EXEC ALLOW OPTIONAL rg` for optional tools, and path-like values such as `./bin/tool` or `/usr/bin/git` for specific files."
           )
           .font(.caption)
           .foregroundStyle(.secondary)

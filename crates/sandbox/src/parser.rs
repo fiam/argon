@@ -53,6 +53,7 @@ pub(crate) enum StatementKind {
     },
     ExecAllow {
         value: String,
+        optional: bool,
     },
     ExecIntercept {
         command: String,
@@ -521,16 +522,25 @@ fn parse_exec(
             Ok(StatementKind::ExecDefault { value })
         }
         Some("ALLOW") => {
-            if tokens.len() != 3 {
-                return Err(parse_error(
-                    source_name,
-                    line_number,
-                    "EXEC ALLOW expects exactly one value",
-                ));
-            }
-            Ok(StatementKind::ExecAllow {
-                value: tokens[2].clone(),
-            })
+            let (optional, value) = match tokens {
+                [_, _, value] => (false, value.clone()),
+                [_, _, optional, value] if optional == "OPTIONAL" => (true, value.clone()),
+                [_, _, optional, _] if optional != "OPTIONAL" => {
+                    return Err(parse_error(
+                        source_name,
+                        line_number,
+                        "EXEC ALLOW optional form is `EXEC ALLOW OPTIONAL <value>`",
+                    ));
+                }
+                _ => {
+                    return Err(parse_error(
+                        source_name,
+                        line_number,
+                        "EXEC ALLOW expects exactly one value or `OPTIONAL <value>`",
+                    ));
+                }
+            };
+            Ok(StatementKind::ExecAllow { value, optional })
         }
         Some("INTERCEPT") => {
             if tokens.len() != 5 || tokens[3] != "WITH" {
@@ -765,6 +775,19 @@ mod tests {
         assert!(matches!(
             program.statements[0].kind,
             StatementKind::Info { .. }
+        ));
+    }
+
+    #[test]
+    fn parse_optional_exec_allow() {
+        let program =
+            parse_program("builtin", "EXEC ALLOW OPTIONAL rg").expect("optional exec allow");
+
+        assert_eq!(program.statements.len(), 1);
+        assert!(matches!(
+            &program.statements[0].kind,
+            StatementKind::ExecAllow { value, optional }
+                if value == "rg" && *optional
         ));
     }
 

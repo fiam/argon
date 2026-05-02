@@ -138,6 +138,7 @@ FS ALLOW WRITE path
 EXEC DEFAULT ALLOW
 EXEC DEFAULT DENY
 EXEC ALLOW git
+EXEC ALLOW OPTIONAL rg
 EXEC ALLOW ./bin
 EXEC INTERCEPT aws WITH .argon/sandbox/intercepts/aws.sh
 EXEC INTERCEPT gh WITH SCRIPT <<'ARGON'
@@ -162,8 +163,9 @@ Notes:
 - directory-vs-file is inferred from the existing path, or forced by a trailing `/`
 - directory-style paths must already exist; optional directories should be
   guarded with `IF TEST -d ...`
-- read-only file paths and explicit exec file paths must already exist; optional
-  files should be guarded with `IF TEST -f ...`
+- read-only file paths and required explicit exec file paths must already
+  exist; optional files should be guarded with `IF TEST -f ...`, or use
+  `EXEC ALLOW OPTIONAL ...` for optional executables
 - writable file paths may point at files that do not exist yet, but their
   parent directory must already exist
 - relative paths in the repo file resolve from the repo root
@@ -173,8 +175,14 @@ Notes:
   files, and may display resolved symlink targets where canonicalization
   succeeds
 - bare `EXEC ALLOW git` searches `PATH` and allows every matching executable
+- `EXEC ALLOW OPTIONAL rg` behaves like `EXEC ALLOW rg` when `rg` exists in
+  `PATH`, but skips the rule when no match is found
 - path-like `EXEC ALLOW /abs/tool` or `EXEC ALLOW ./bin/tool` allow that
   specific file or directory only
+- `EXEC DEFAULT ALLOW` allows process execution by default, but `FS DEFAULT`
+  still controls file lookup. With `FS DEFAULT NONE`, named rules such as
+  `EXEC ALLOW OPTIONAL rg` let shells read/test symlinked `PATH` entries for
+  tools you expect to run by name.
 - builtins use the same language as normal repo files
 - legacy `VERSION 1` lines are still accepted for compatibility, but new files
   should omit them
@@ -420,9 +428,11 @@ and the standard GnuPG agent sockets. It does not allow the full
 `USE agent` dispatches from `$AGENT` when the launcher provides an explicit
 agent family. If `$AGENT` is unset, it falls back to `$ARGV0_BASENAME` for
 direct launches such as `codex` or `/opt/homebrew/bin/codex`.
-For Codex, `USE agent` allows `codex`, preserves `OPENAI_*` and `CODEX_*`,
-and allows read, write, and exec access under `$HOME/.codex/` when it exists
-so Codex state and helper shims continue to work under `EXEC DEFAULT DENY`.
+For agent launches, `USE agent` allows `rg` from `PATH` when present so coding
+agents can use ripgrep without broad package-manager directory access.
+For Codex, it also allows `codex`, preserves `OPENAI_*` and `CODEX_*`, and
+allows read, write, and exec access under `$HOME/.codex/` when it exists so
+Codex state and helper shims continue to work under `EXEC DEFAULT DENY`.
 
 Inspect builtins with:
 
@@ -550,7 +560,7 @@ argon --repo <repo> sandbox check --json
 - parsed `Sandboxfile` syntax and control flow
 - builtin and relative `USE` expansion
 - referenced directories and required read/exec file paths
-- `EXEC ALLOW name` resolution through `PATH`
+- required `EXEC ALLOW name` resolution through `PATH`
 - `--write-root` arguments
 
 If validation fails, Argon reports the originating file and line number.
