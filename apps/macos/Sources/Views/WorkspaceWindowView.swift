@@ -1036,6 +1036,7 @@ private struct WorkspaceChangedFilesPane: View {
 
 private struct WorkspaceTerminalDeck: View {
   @Environment(WorkspaceState.self) private var workspaceState
+  @Environment(SavedAgentProfiles.self) private var savedAgents
   @Environment(ReviewWindowRegistry.self) private var reviewWindowRegistry
   @Environment(WorkspaceTerminalAttentionNotifier.self) private var terminalAttentionNotifier
   @Environment(\.openWindow) private var openWindow
@@ -1044,7 +1045,7 @@ private struct WorkspaceTerminalDeck: View {
     @Bindable var workspaceState = workspaceState
 
     VStack(spacing: 0) {
-      if !workspaceState.selectedTerminalTabs.isEmpty {
+      if shouldShowTerminalChrome {
         WorkspaceTerminalChromeBar()
       }
 
@@ -1117,6 +1118,11 @@ private struct WorkspaceTerminalDeck: View {
         )
       }
     )
+  }
+
+  private var shouldShowTerminalChrome: Bool {
+    !workspaceState.selectedTerminalTabs.isEmpty
+      || !workspaceState.restorableAgentSessions(savedProfiles: savedAgents.profiles).isEmpty
   }
 
   private func launchWorkspaceAgent(_ options: WorkspaceAgentLaunchOptions) async -> Bool {
@@ -1193,23 +1199,44 @@ private struct WorkspaceTerminalDeck: View {
 
 private struct WorkspaceTerminalChromeBar: View {
   @Environment(WorkspaceState.self) private var workspaceState
+  @Environment(SavedAgentProfiles.self) private var savedAgents
 
   var body: some View {
-    ScrollView(.horizontal, showsIndicators: false) {
-      HStack(spacing: 2) {
-        ForEach(workspaceState.selectedTerminalTabs) { tab in
-          WorkspaceTerminalTabItem(
-            tab: tab,
-            isSelected: workspaceState.selectedTerminalTab?.id == tab.id
-          ) {
-            workspaceState.selectTerminalTab(tab.id)
-          } onClose: {
-            workspaceState.closeTerminalTab(tab.id)
+    HStack(spacing: 0) {
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 2) {
+          ForEach(workspaceState.selectedTerminalTabs) { tab in
+            WorkspaceTerminalTabItem(
+              tab: tab,
+              isSelected: workspaceState.selectedTerminalTab?.id == tab.id
+            ) {
+              workspaceState.selectTerminalTab(tab.id)
+            } onClose: {
+              workspaceState.closeTerminalTab(tab.id)
+            } onChangeMode: { sandboxEnabled, yoloMode in
+              changeAgentTabMode(
+                tab,
+                sandboxEnabled: sandboxEnabled,
+                yoloMode: yoloMode
+              )
+            }
           }
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
       }
-      .padding(.horizontal, 8)
-      .padding(.vertical, 4)
+
+      if !restorableSessions.isEmpty {
+        Divider()
+          .frame(height: 20)
+        WorkspaceAgentSessionRestoreMenu(
+          sessions: restorableSessions,
+          onRestore: { session in
+            workspaceState.restoreAgentSession(session)
+          }
+        )
+        .padding(.horizontal, 8)
+      }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.top, 2)
@@ -1220,6 +1247,72 @@ private struct WorkspaceTerminalChromeBar: View {
         .frame(height: 1)
     }
   }
+
+  private var restorableSessions: [WorkspaceRestorableAgentSession] {
+    Array(workspaceState.restorableAgentSessions(savedProfiles: savedAgents.profiles).prefix(12))
+  }
+
+  private func changeAgentTabMode(
+    _ tab: WorkspaceTerminalTab,
+    sandboxEnabled: Bool? = nil,
+    yoloMode: Bool? = nil
+  ) {
+    let nextSandboxEnabled = sandboxEnabled ?? tab.isSandboxed
+    let nextYoloMode = yoloMode ?? tab.yoloMode
+    guard nextSandboxEnabled != tab.isSandboxed || nextYoloMode != tab.yoloMode else { return }
+
+    if tab.agentActivityState == .thinking, !confirmThinkingAgentModeChange(tab) {
+      return
+    }
+
+    workspaceState.relaunchAgentTab(
+      tab.id,
+      sandboxEnabled: nextSandboxEnabled,
+      yoloMode: nextYoloMode
+    )
+  }
+
+  private func confirmThinkingAgentModeChange(_ tab: WorkspaceTerminalTab) -> Bool {
+    let alert = NSAlert()
+    alert.messageText = "Interrupt Agent?"
+    alert.informativeText =
+      "Changing modes will close and reopen \(tab.title), interrupting its current task."
+    alert.addButton(withTitle: "Change Mode")
+    alert.addButton(withTitle: "Cancel")
+    alert.alertStyle = .warning
+    return alert.runModal() == .alertFirstButtonReturn
+  }
+}
+
+private struct WorkspaceAgentSessionRestoreMenu: View {
+  let sessions: [WorkspaceRestorableAgentSession]
+  let onRestore: (WorkspaceRestorableAgentSession) -> Void
+
+  var body: some View {
+    Menu {
+      ForEach(sessions) { session in
+        Button {
+          onRestore(session)
+        } label: {
+          Label(menuTitle(for: session), systemImage: "arrow.clockwise")
+        }
+      }
+    } label: {
+      Image(systemName: "ellipsis")
+        .font(.system(size: 14, weight: .semibold))
+        .frame(width: 24, height: 24)
+        .contentShape(Rectangle())
+    }
+    .menuStyle(.borderlessButton)
+    .buttonStyle(.plain)
+    .help("Restore an agent session")
+    .accessibilityIdentifier("workspace-agent-session-restore-menu")
+  }
+
+  private func menuTitle(for session: WorkspaceRestorableAgentSession) -> String {
+    let timestamp = session.startedAt.formatted(date: .abbreviated, time: .shortened)
+    return "\(session.profileName) - \(timestamp) - \(session.sessionID.prefix(8))"
+  }
 }
 
 private struct WorkspaceTerminalTabItem: View {
@@ -1227,6 +1320,7 @@ private struct WorkspaceTerminalTabItem: View {
   let isSelected: Bool
   let onSelect: () -> Void
   let onClose: () -> Void
+  let onChangeMode: (_ sandboxEnabled: Bool?, _ yoloMode: Bool?) -> Void
   @State private var isHovering = false
 
   var body: some View {
@@ -1284,6 +1378,29 @@ private struct WorkspaceTerminalTabItem: View {
         )
     )
     .contentShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+    .contextMenu {
+      if case .agent = tab.kind {
+        if !tab.yoloFlag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          Button {
+            onChangeMode(nil, !tab.yoloMode)
+          } label: {
+            Label(
+              tab.yoloMode ? "Disable Yolo Mode" : "Enable Yolo Mode",
+              systemImage: tab.yoloMode ? "bolt.slash" : "bolt"
+            )
+          }
+        }
+
+        Button {
+          onChangeMode(!tab.isSandboxed, nil)
+        } label: {
+          Label(
+            tab.isSandboxed ? "Disable Sandbox" : "Enable Sandbox",
+            systemImage: tab.isSandboxed ? "lock.open" : "lock"
+          )
+        }
+      }
+    }
     .onHover { hovering in
       isHovering = hovering
     }
@@ -1716,6 +1833,8 @@ private struct WorkspaceTerminalStage: View {
             )
           },
           onAttention: { event in
+            guard !tab.shouldSuppressAttention() else { return }
+
             if case .desktopNotification = event {
               workspaceState.markAgentWaitingForHuman(tab.id)
             }
@@ -2107,7 +2226,7 @@ private struct WorkspaceAgentTabSheet: View {
 
       if taskContext.allowsCustomCommand && useCustom {
         VStack(alignment: .leading, spacing: 8) {
-          TextField("Command", text: $customCommand, prompt: Text("e.g. codex --full-auto"))
+          TextField("Command", text: $customCommand, prompt: Text("e.g. codex --yolo"))
             .textFieldStyle(.roundedBorder)
             .font(.system(.body, design: .monospaced))
         }

@@ -110,10 +110,18 @@ targets:
             echo "error: bundled argon CLI not found at $CLI_PATH" >&2
             exit 1
           fi
-          DEST_DIR="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/bin"
+          LEGACY_DEST_DIR="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/bin"
+          rm -f "$LEGACY_DEST_DIR/argon"
+          DEST_DIR="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers"
           mkdir -p "$DEST_DIR"
           cp "$CLI_PATH" "$DEST_DIR/argon"
           chmod +x "$DEST_DIR/argon"
+          if [ "${CODE_SIGNING_ALLOWED:-NO}" = "YES" ]; then
+            SIGN_IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:-${CODE_SIGN_IDENTITY:-}}"
+            if [ -n "$SIGN_IDENTITY" ]; then
+              /usr/bin/codesign --force --sign "$SIGN_IDENTITY" --timestamp=none "$DEST_DIR/argon"
+            fi
+          fi
     sources:
       - Sources
       - path: Resources

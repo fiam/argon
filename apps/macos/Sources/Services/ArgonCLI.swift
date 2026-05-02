@@ -76,6 +76,21 @@ enum ArgonCLI {
   }
 
   static func bundledCLIPath() -> String? {
+    let helperPath = Bundle.main.bundleURL
+      .appendingPathComponent("Contents/Helpers/argon").path
+    if FileManager.default.fileExists(atPath: helperPath) {
+      return helperPath
+    }
+
+    if let executablePath = Bundle.main.executableURL?
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .appendingPathComponent("Helpers/argon").path,
+      FileManager.default.fileExists(atPath: executablePath)
+    {
+      return executablePath
+    }
+
     if let resourcePath = Bundle.main.resourceURL?
       .appendingPathComponent("bin/argon").path,
       FileManager.default.fileExists(atPath: resourcePath)

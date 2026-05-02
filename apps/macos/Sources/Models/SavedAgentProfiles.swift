@@ -1,94 +1,5 @@
 import Foundation
 
-enum AgentFamilyID: String, Codable, CaseIterable, Sendable {
-  case claudeCode = "claude-code"
-  case codex
-  case gemini
-
-  var defaultProfileID: String {
-    rawValue
-  }
-}
-
-struct AgentHarnessDefinition: Sendable {
-  let familyID: AgentFamilyID
-  let name: String
-  let command: String
-  let icon: String
-  let yoloFlag: String
-  let promptArgumentTemplate: String
-  let resumeArgumentTemplate: String
-  let versionArguments: [String]
-
-  var defaultProfile: SavedAgentProfile {
-    SavedAgentProfile(
-      id: familyID.defaultProfileID,
-      familyID: familyID,
-      name: name,
-      command: command,
-      icon: icon,
-      yoloFlag: yoloFlag,
-      promptArgumentTemplate: promptArgumentTemplate,
-      resumeArgumentTemplate: resumeArgumentTemplate
-    )
-  }
-}
-
-enum AgentHarnesses {
-  private static let definitionsByFamily: [AgentFamilyID: AgentHarnessDefinition] = [
-    .claudeCode: AgentHarnessDefinition(
-      familyID: .claudeCode,
-      name: "Claude Code",
-      command: "claude",
-      icon: "claude",
-      yoloFlag: "--dangerously-skip-permissions",
-      promptArgumentTemplate: "",
-      resumeArgumentTemplate: "-c",
-      versionArguments: ["--version"]
-    ),
-    .codex: AgentHarnessDefinition(
-      familyID: .codex,
-      name: "Codex",
-      command: "codex",
-      icon: "codex",
-      yoloFlag: "--full-auto",
-      promptArgumentTemplate: "",
-      resumeArgumentTemplate: "resume {{session_id}}",
-      versionArguments: ["--version"]
-    ),
-    .gemini: AgentHarnessDefinition(
-      familyID: .gemini,
-      name: "Gemini CLI",
-      command: "gemini",
-      icon: "gemini",
-      yoloFlag: "-y",
-      promptArgumentTemplate: "",
-      resumeArgumentTemplate: "--resume latest",
-      versionArguments: ["--version"]
-    ),
-  ]
-
-  static func definition(for familyID: AgentFamilyID) -> AgentHarnessDefinition {
-    definitionsByFamily[familyID]!
-  }
-
-  static func displayVersion(for familyID: AgentFamilyID, rawOutput: String?) -> String? {
-    guard let rawOutput else { return nil }
-    let firstLine = rawOutput.split(whereSeparator: \.isNewline).first.map(String.init) ?? rawOutput
-    let trimmed = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return nil }
-
-    switch familyID {
-    case .claudeCode:
-      return trimmed.replacingOccurrences(of: " (Claude Code)", with: "")
-    case .codex:
-      return trimmed.replacingOccurrences(of: "codex-cli ", with: "")
-    case .gemini:
-      return trimmed
-    }
-  }
-}
-
 struct SavedAgentProfile: Codable, Identifiable, Hashable, Sendable {
   var id: String
   var familyID: AgentFamilyID?
@@ -346,11 +257,12 @@ final class SavedAgentProfiles {
     if migrated.familyID == nil {
       migrated.familyID = AgentFamilyID.inferred(from: migrated)
     }
-    if migrated.familyID == .codex,
-      migrated.command == "codex",
-      migrated.yoloFlag == "--yolo"
-    {
-      migrated.yoloFlag = "--full-auto"
+    migrated = AgentHarnesses.migratedProfile(migrated)
+    if let familyID = migrated.familyID {
+      let defaultProfile = familyID.defaultProfile
+      let isEnabled = migrated.isEnabled
+      migrated = defaultProfile
+      migrated.isEnabled = isEnabled
     }
     return migrated
   }
@@ -412,16 +324,7 @@ func commandExecutableName(from command: String) -> String {
 }
 
 func sandboxAgentFamily(from command: String) -> String? {
-  switch commandExecutableName(from: command).lowercased() {
-  case "claude":
-    "claude"
-  case "codex":
-    "codex"
-  case "gemini":
-    "gemini"
-  default:
-    nil
-  }
+  AgentHarnesses.sandboxAgentFamily(matchingCommand: command)
 }
 
 func commandExecutableToken(from command: String) -> String {

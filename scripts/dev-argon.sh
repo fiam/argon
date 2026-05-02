@@ -36,8 +36,32 @@ if [[ -z "$APP_PATH" ]]; then
     exit 1
 fi
 
-# Kill any running instance
-pkill -x Argon 2>/dev/null && sleep 0.5 || true
+quit_running_argon() {
+    if ! pgrep -x Argon >/dev/null 2>&1; then
+        return
+    fi
+
+    echo "==> Quitting running Argon..."
+    osascript -e 'tell application id "dev.argonapp.macos" to quit' >/dev/null 2>&1 &
+
+    for _ in {1..50}; do
+        if ! pgrep -x Argon >/dev/null 2>&1; then
+            return
+        fi
+        sleep 0.1
+    done
+
+    echo "==> Force stopping unresponsive Argon..."
+    pkill -x Argon 2>/dev/null || true
+    for _ in {1..20}; do
+        if ! pgrep -x Argon >/dev/null 2>&1; then
+            return
+        fi
+        sleep 0.1
+    done
+}
+
+quit_running_argon
 
 echo "==> Launching workspace for $TARGET_REPO"
 ARGON_APP="$APP_PATH" "$REPO_ROOT/target/release/argon" \

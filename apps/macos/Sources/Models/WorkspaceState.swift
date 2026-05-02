@@ -6,8 +6,20 @@ final class WorkspaceState {
   nonisolated(unsafe) static var tabRestoreTestDelay: Duration?
   nonisolated(unsafe) static var terminalBellFlashDuration: Duration = .seconds(1)
   nonisolated(unsafe) static var agentThinkingIdleTimeout: Duration = .seconds(1)
-  nonisolated(unsafe) static var sessionRecordsProvider: (@Sendable () -> [AgentSessionRecord])?
   nonisolated(unsafe) static var commandStatusProvider: (@Sendable ([String]) -> [String: Bool])?
+  nonisolated(unsafe) static var terminalSessionReferenceProvider:
+    (@Sendable (UUID) -> TerminalSessionReference?) = { tabID in
+      TerminalSessionBackends.reference(for: tabID)
+    }
+  nonisolated(unsafe) static var terminalSessionCommandBuilder:
+    (@Sendable (TerminalSessionReference, String) -> String) = { session, command in
+      TerminalSessionBackends.attachCommand(reference: session, createCommand: command)
+    }
+  nonisolated(unsafe) static var terminalSessionStopper:
+    (@Sendable (TerminalSessionReference) -> Void) = { session in
+      TerminalSessionBackends.stop(reference: session)
+    }
+  private static let restoredAgentAttentionSuppressionInterval: TimeInterval = 3
   nonisolated(unsafe) static var sandboxfilePromptLoader:
     (@Sendable (String, SandboxfileLaunchKind) async throws -> SandboxfilePromptRequest?) = {
       repoRoot,
@@ -82,6 +94,7 @@ final class WorkspaceState {
   private var stagedReviewLaunch: StagedReviewLaunch?
   private var preparedReviewTargetsByAgentTabID: [UUID: ReviewTarget] = [:]
   private var didApplyUITestWebsiteDemo = false
+  private var isPreparingForTerminalDetach = false
   @ObservationIgnored
   nonisolated(unsafe) private var reviewSessionCloseObserver: NSObjectProtocol?
 
@@ -161,6 +174,29 @@ final class WorkspaceState {
     terminalTabsByWorktreePath.values
       .flatMap { $0 }
       .sorted { $0.createdAt < $1.createdAt }
+  }
+
+  var runningPersistentAgentCount: Int {
+    allTerminalTabs.filter { tab in
+      tab.shouldKeepRunningAcrossQuit
+    }.count
+  }
+
+  var hasPendingRestorableTerminalTabs: Bool {
+    pendingRestorableTabsByWorktreePath.values.contains { !$0.isEmpty }
+  }
+
+  var quitAgentSummary: WorkspaceQuitAgentSummary {
+    allTerminalTabs.reduce(.empty) { summary, tab in
+      guard tab.shouldWarnBeforeQuit else { return summary }
+
+      return WorkspaceQuitAgentSummary(
+        warningCount: summary.warningCount + 1,
+        keepRunningCount: summary.keepRunningCount
+          + (tab.shouldKeepTerminalSessionAliveAcrossQuit ? 1 : 0),
+        thinkingCount: summary.thinkingCount + 1
+      )
+    }
   }
 
   var isPreparingReviewAgentLaunch: Bool {
@@ -273,7 +309,7 @@ final class WorkspaceState {
   }
 
   func applyPersistedWindowSnapshot(_ snapshot: PersistedWorkspaceWindowSnapshot) {
-    let resumeTemplatesByProfileName = Self.resumeTemplatesByProfileName(
+    let restoreMetadataByProfileName = Self.restoreMetadataByProfileName(
       savedProfiles: SavedAgentProfiles().profiles
     )
 
@@ -290,15 +326,20 @@ final class WorkspaceState {
             worktreeLabel: tab.worktreeLabel,
             title: tab.title,
             commandDescription: tab.commandDescription,
+            baseCommandDescription: tab.baseCommandDescription,
             kind: tab.kind,
+            agentFamilyID: tab.agentFamilyID,
             createdAt: tab.createdAt,
             isSandboxed: tab.isSandboxed,
+            yoloMode: tab.yoloMode,
             writableRoots: tab.writableRoots.map(normalizedPath),
             resumeArgumentTemplate: tab.resumeArgumentTemplate,
+            keepsRunningAfterQuit: tab.keepsRunningAfterQuit,
+            terminalSession: tab.terminalSession,
             resumeSessionID: tab.resumeSessionID,
             resumeCommandDescription: tab.resumeCommandDescription
           ),
-          using: resumeTemplatesByProfileName
+          using: restoreMetadataByProfileName
         )
       }
     }
@@ -991,21 +1032,37 @@ final class WorkspaceState {
       )
       : []
     let tabID = UUID()
-    let launch =
+    let terminalSession =
+      request.keepRunningWhileThinking
+      ? Self.terminalSessionReferenceProvider(tabID)
+      : nil
+    let sandboxAgentFamily =
+      request.agentFamilyID.map(AgentHarnesses.sandboxAgentFamily)
+      ?? sandboxAgentFamily(from: request.command)
+    let launchCommand = request.launchCommandOverride ?? request.command
+    let directLaunch =
       request.sandboxEnabled
       ? TerminalLaunchConfiguration.sandboxedCommand(
-        request.command,
+        launchCommand,
         currentDirectory: worktree.path,
         writableRoots: writableRoots,
         launchKind: "agent",
-        agentFamily: sandboxAgentFamily(from: request.command),
+        agentFamily: sandboxAgentFamily,
         tabID: tabID
       )
       : TerminalLaunchConfiguration.command(
-        request.command,
+        launchCommand,
         currentDirectory: worktree.path,
         tabID: tabID
       )
+    let launch =
+      terminalSession.map { session in
+        TerminalLaunchConfiguration.command(
+          Self.terminalSessionCommandBuilder(session, directLaunch.shellCommand),
+          currentDirectory: worktree.path,
+          tabID: tabID
+        )
+      } ?? directLaunch
     let resumeArgumentTemplate =
       request.isRestorableAfterRelaunch
       ? request.resumeArgumentTemplate
@@ -1013,7 +1070,7 @@ final class WorkspaceState {
     let resumeCommandDescription = renderAgentResumeCommand(
       baseCommand: request.command,
       resumeArgumentTemplate: resumeArgumentTemplate,
-      sessionID: nil
+      sessionID: request.resumeSessionID
     )
 
     let tab = WorkspaceTerminalTab(
@@ -1022,18 +1079,191 @@ final class WorkspaceState {
       worktreeLabel: worktree.branchName ?? repoName,
       title: agentTabTitle(for: request, ordinal: ordinal),
       commandDescription: request.command,
+      baseCommandDescription: request.baseCommandDescription,
       kind: .agent(profileName: request.displayName, icon: request.icon),
+      agentFamilyID: request.agentFamilyID,
       launch: launch,
       isSandboxed: request.sandboxEnabled,
+      yoloMode: request.yoloMode,
+      yoloFlag: request.yoloFlag,
       writableRoots: writableRoots.map(normalizedPath),
       isRestorableAfterRelaunch: request.isRestorableAfterRelaunch,
       resumeArgumentTemplate: resumeArgumentTemplate,
-      resumeSessionID: nil,
-      resumeCommandDescription: resumeCommandDescription
+      keepsRunningAfterQuit: request.keepRunningWhileThinking,
+      terminalSession: terminalSession,
+      resumeSessionID: request.resumeSessionID,
+      resumeCommandDescription: request.launchCommandOverride ?? resumeCommandDescription
     )
 
+    if let sessionID = request.resumeSessionID {
+      recordAgentSessionRestoreMetadata(for: tab, sessionID: sessionID)
+    }
     insertTerminalTab(tab, for: worktreePath)
     return tab
+  }
+
+  func restorableAgentSessions(
+    savedProfiles: [SavedAgentProfile],
+    notBefore: Date = .distantPast
+  ) -> [WorkspaceRestorableAgentSession] {
+    guard let worktreePath = normalizedSelectedWorktreePath else { return [] }
+
+    let profilesByFamily = Self.agentProfilesByFamily(savedProfiles: savedProfiles)
+    let openSessionKeys = Set(
+      selectedTerminalTabs.compactMap { tab -> String? in
+        guard let sessionID = tab.resumeSessionID, !sessionID.isEmpty else { return nil }
+        let familyID =
+          tab.agentFamilyID ?? AgentHarnesses.familyID(matchingCommand: tab.commandDescription)
+        guard let familyID else { return nil }
+        return Self.agentSessionKey(familyID: familyID, sessionID: sessionID)
+      }
+    )
+
+    var sessionsByKey: [String: WorkspaceRestorableAgentSession] = [:]
+    for familyID in AgentFamilyID.allCases {
+      let profile = profilesByFamily[familyID] ?? familyID.defaultProfile
+      let resumeArgumentTemplate = Self.sessionSpecificResumeArgumentTemplate(
+        for: familyID,
+        profile: profile
+      )
+      guard !resumeArgumentTemplate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      else { continue }
+
+      for record in AgentHarnesses.resumeSessionRecords(for: familyID, notBefore: notBefore) {
+        guard normalizedPath(record.cwd) == worktreePath else { continue }
+        let sessionKey = Self.agentSessionKey(familyID: familyID, sessionID: record.sessionID)
+        guard !openSessionKeys.contains(sessionKey) else { continue }
+
+        let metadata = AgentSessionRestoreMetadataStore.metadata(
+          familyID: familyID,
+          sessionID: record.sessionID,
+          cwd: record.cwd
+        )
+        let session = WorkspaceRestorableAgentSession(
+          familyID: familyID,
+          profileName: profile.name,
+          command: profile.command,
+          icon: profile.icon,
+          resumeArgumentTemplate: resumeArgumentTemplate,
+          sessionID: record.sessionID,
+          cwd: normalizedPath(record.cwd),
+          yoloMode: metadata?.yoloMode ?? false,
+          sandboxEnabled: metadata?.sandboxEnabled ?? true,
+          startedAt: record.startedAt
+        )
+        if let existing = sessionsByKey[sessionKey], existing.startedAt >= session.startedAt {
+          continue
+        }
+        sessionsByKey[sessionKey] = session
+      }
+    }
+
+    return sessionsByKey.values.sorted {
+      if $0.startedAt == $1.startedAt {
+        return $0.id < $1.id
+      }
+      return $0.startedAt > $1.startedAt
+    }
+  }
+
+  @discardableResult
+  func restoreAgentSession(
+    _ session: WorkspaceRestorableAgentSession
+  ) -> WorkspaceTerminalTab? {
+    let command = Self.agentCommand(
+      baseCommand: session.command,
+      yoloMode: session.yoloMode,
+      yoloFlag: session.yoloFlag
+    )
+    guard
+      let resumeCommand = renderAgentResumeCommand(
+        baseCommand: command,
+        resumeArgumentTemplate: session.resumeArgumentTemplate,
+        sessionID: session.sessionID
+      )
+    else {
+      errorMessage = "\(session.profileName) cannot restore this session."
+      return nil
+    }
+
+    return openAgentTab(
+      WorkspaceAgentLaunchRequest(
+        displayName: session.profileName,
+        command: command,
+        baseCommandDescription: session.command,
+        launchCommandOverride: resumeCommand,
+        icon: session.icon,
+        agentFamilyID: session.familyID,
+        sandboxEnabled: session.sandboxEnabled,
+        yoloMode: session.yoloMode,
+        yoloFlag: session.yoloFlag,
+        resumeArgumentTemplate: session.resumeArgumentTemplate,
+        resumeSessionID: session.sessionID,
+        keepRunningWhileThinking:
+          AgentTerminalPersistenceExperimentSettings.canUseTerminalSessionPersistence
+      )
+    )
+  }
+
+  @discardableResult
+  func relaunchAgentTab(
+    _ tabID: UUID,
+    sandboxEnabled: Bool? = nil,
+    yoloMode: Bool? = nil
+  ) -> WorkspaceTerminalTab? {
+    guard let tab = terminalTab(for: tabID) else { return nil }
+    guard case .agent(let profileName, let icon) = tab.kind else { return nil }
+
+    let nextSandboxEnabled = sandboxEnabled ?? tab.isSandboxed
+    let nextYoloMode = yoloMode ?? tab.yoloMode
+    guard nextSandboxEnabled != tab.isSandboxed || nextYoloMode != tab.yoloMode else {
+      return tab
+    }
+
+    let sessionID = tab.resumeSessionID ?? hydrateAgentResumeSessionID(for: tab)
+    if let sessionID {
+      tab.resumeSessionID = sessionID
+      recordAgentSessionRestoreMetadata(for: tab, sessionID: sessionID)
+    }
+
+    let command = Self.agentCommand(
+      baseCommand: tab.baseCommandDescription,
+      yoloMode: nextYoloMode,
+      yoloFlag: tab.yoloFlag
+    )
+    let launchCommandOverride = renderAgentResumeCommand(
+      baseCommand: command,
+      resumeArgumentTemplate: tab.resumeArgumentTemplate,
+      sessionID: sessionID
+    )
+    let additionalWritableRoots = tab.writableRoots.filter { $0 != tab.worktreePath }
+    let request = WorkspaceAgentLaunchRequest(
+      displayName: profileName,
+      command: command,
+      baseCommandDescription: tab.baseCommandDescription,
+      launchCommandOverride: launchCommandOverride,
+      icon: icon,
+      agentFamilyID: tab.agentFamilyID
+        ?? AgentHarnesses.familyID(
+          matchingCommand: tab.baseCommandDescription
+        ),
+      sandboxEnabled: nextSandboxEnabled,
+      yoloMode: nextYoloMode,
+      yoloFlag: tab.yoloFlag,
+      resumeArgumentTemplate: tab.resumeArgumentTemplate,
+      resumeSessionID: sessionID,
+      keepRunningWhileThinking:
+        AgentTerminalPersistenceExperimentSettings.canUseTerminalSessionPersistence,
+      useHashedDuplicateSuffix: false,
+      isRestorableAfterRelaunch: tab.isRestorableAfterRelaunch,
+      additionalWritableRoots: additionalWritableRoots
+    )
+
+    if normalizedSelectedWorktreePath != tab.worktreePath {
+      selectWorktree(path: tab.worktreePath)
+    }
+    closeTerminalTab(tabID)
+    return openAgentTab(request)
   }
 
   func selectTerminalTab(_ tabID: UUID) {
@@ -1153,6 +1383,13 @@ final class WorkspaceState {
   }
 
   func closeTerminalTab(_ tabID: UUID) {
+    closeTerminalTab(tabID, preserveRestorableAgentSession: false)
+  }
+
+  private func closeTerminalTab(
+    _ tabID: UUID,
+    preserveRestorableAgentSession: Bool
+  ) {
     terminalBellTasksByTabID.removeValue(forKey: tabID)?.cancel()
     agentActivityIdleTasksByTabID.removeValue(forKey: tabID)?.cancel()
 
@@ -1160,6 +1397,15 @@ final class WorkspaceState {
       guard let index = tabs.firstIndex(where: { $0.id == tabID }) else { continue }
 
       var updatedTabs = tabs
+      let closingTab = updatedTabs[index]
+      persistAgentSessionRestoreMetadataIfPossible(for: closingTab)
+      if preserveRestorableAgentSession {
+        preserveRestorableAgentTabForLater(closingTab)
+      }
+      if let session = closingTab.terminalSession {
+        Self.terminalSessionStopper(session)
+        updatedTabs[index].terminalSession = nil
+      }
       updatedTabs.remove(at: index)
       terminalTabsByWorktreePath[worktreePath] = updatedTabs
 
@@ -1178,6 +1424,33 @@ final class WorkspaceState {
     }
   }
 
+  func prepareTerminalSessionsForTermination(keepRunningAgentsAlive: Bool) {
+    isPreparingForTerminalDetach = true
+
+    for tab in allTerminalTabs {
+      guard let session = tab.terminalSession else { continue }
+      let shouldKeepSessionAlive =
+        keepRunningAgentsAlive && tab.shouldKeepTerminalSessionAliveAcrossQuit
+      guard !shouldKeepSessionAlive else { continue }
+
+      Self.terminalSessionStopper(session)
+      tab.terminalSession = nil
+    }
+  }
+
+  func closeThinkingAgentTabs() {
+    let tabIDs = allTerminalTabs.compactMap { tab -> UUID? in
+      tab.shouldWarnBeforeQuit ? tab.id : nil
+    }
+    for tabID in tabIDs {
+      closeTerminalTab(tabID, preserveRestorableAgentSession: true)
+    }
+  }
+
+  func finishTerminalDetach() {
+    isPreparingForTerminalDetach = false
+  }
+
   @discardableResult
   func closeSelectedTerminalTab() -> Bool {
     guard let tabID = selectedTerminalTab?.id else { return false }
@@ -1188,6 +1461,17 @@ final class WorkspaceState {
   func handleTerminalExit(_ tabID: UUID, exitBehavior: WorkspaceFinishedTerminalBehavior) {
     guard let tab = terminalTab(for: tabID) else { return }
     agentActivityIdleTasksByTabID.removeValue(forKey: tabID)?.cancel()
+
+    if isPreparingForTerminalDetach {
+      tab.isRunning = true
+      return
+    }
+
+    if let session = tab.terminalSession {
+      Self.terminalSessionStopper(session)
+      tab.terminalSession = nil
+    }
+    persistAgentSessionRestoreMetadataIfPossible(for: tab)
     tab.isRunning = false
     tab.agentActivityState = .idle
 
@@ -1417,15 +1701,16 @@ final class WorkspaceState {
   private static func restoredTerminalTab(
     from persistedTab: PersistedWorkspaceTerminalTab
   ) -> WorkspaceTerminalTab {
-    let launch: TerminalLaunchConfiguration
+    let directLaunch: TerminalLaunchConfiguration
     let kind: WorkspaceTerminalKind
+    let terminalSession = terminalSessionForRestore(persistedTab)
     let launchCommandDescription =
       persistedTab.resumeCommandDescription ?? persistedTab.commandDescription
 
     switch persistedTab.kind {
     case .shell:
       kind = .shell
-      launch =
+      directLaunch =
         persistedTab.isSandboxed
         ? TerminalLaunchConfiguration.sandboxedShell(
           currentDirectory: persistedTab.worktreePath,
@@ -1438,14 +1723,15 @@ final class WorkspaceState {
         )
     case .agent(let profileName, let icon):
       kind = .agent(profileName: profileName, icon: icon)
-      launch =
+      directLaunch =
         persistedTab.isSandboxed
         ? TerminalLaunchConfiguration.sandboxedCommand(
           launchCommandDescription,
           currentDirectory: persistedTab.worktreePath,
           writableRoots: persistedTab.writableRoots,
           launchKind: "agent",
-          agentFamily: sandboxAgentFamily(from: launchCommandDescription),
+          agentFamily: persistedTab.agentFamilyID.map(AgentHarnesses.sandboxAgentFamily)
+            ?? sandboxAgentFamily(from: persistedTab.commandDescription),
           tabID: persistedTab.id
         )
         : TerminalLaunchConfiguration.command(
@@ -1454,6 +1740,23 @@ final class WorkspaceState {
           tabID: persistedTab.id
         )
     }
+    let launch =
+      terminalSession.map { session in
+        TerminalLaunchConfiguration.command(
+          Self.terminalSessionCommandBuilder(session, directLaunch.shellCommand),
+          currentDirectory: persistedTab.worktreePath,
+          tabID: persistedTab.id
+        )
+      } ?? directLaunch
+
+    let suppressAttentionUntil: Date?
+    if case .agent = kind {
+      suppressAttentionUntil = Date().addingTimeInterval(
+        Self.restoredAgentAttentionSuppressionInterval
+      )
+    } else {
+      suppressAttentionUntil = nil
+    }
 
     return WorkspaceTerminalTab(
       id: persistedTab.id,
@@ -1461,16 +1764,61 @@ final class WorkspaceState {
       worktreeLabel: persistedTab.worktreeLabel,
       title: persistedTab.title,
       commandDescription: persistedTab.commandDescription,
+      baseCommandDescription: persistedTab.baseCommandDescription,
       kind: kind,
+      agentFamilyID: persistedTab.agentFamilyID,
       launch: launch,
       createdAt: persistedTab.createdAt,
       isSandboxed: persistedTab.isSandboxed,
+      yoloMode: persistedTab.yoloMode,
+      yoloFlag: Self.yoloFlag(for: persistedTab),
       writableRoots: persistedTab.writableRoots,
       isRestorableAfterRelaunch: true,
       resumeArgumentTemplate: persistedTab.resumeArgumentTemplate,
+      keepsRunningAfterQuit: persistedTab.keepsRunningAfterQuit,
+      terminalSession: terminalSession,
       resumeSessionID: persistedTab.resumeSessionID,
-      resumeCommandDescription: persistedTab.resumeCommandDescription
+      resumeCommandDescription: persistedTab.resumeCommandDescription,
+      suppressAttentionUntil: suppressAttentionUntil
     )
+  }
+
+  private static func terminalSessionForRestore(_ tab: PersistedWorkspaceTerminalTab)
+    -> TerminalSessionReference?
+  {
+    guard AgentTerminalPersistenceExperimentSettings.canUseTerminalSessionPersistence else {
+      if let terminalSession = tab.terminalSession {
+        Self.terminalSessionStopper(terminalSession)
+      }
+      return nil
+    }
+    if let terminalSession = tab.terminalSession {
+      guard TerminalSessionBackends.wasPreservedForRestore(reference: terminalSession),
+        TerminalSessionBackends.canReconnect(reference: terminalSession)
+      else {
+        Self.terminalSessionStopper(terminalSession)
+        return replacementTerminalSessionForRestore(tab)
+      }
+      return terminalSession
+    }
+    let replacementSession = replacementTerminalSessionForRestore(tab)
+    if let replacementSession {
+      // The replacement ID is deterministic for the restored tab. Clear any stale
+      // server so attach recreates it with the hydrated resume command.
+      Self.terminalSessionStopper(replacementSession)
+    }
+    return replacementSession
+  }
+
+  private static func replacementTerminalSessionForRestore(_ tab: PersistedWorkspaceTerminalTab)
+    -> TerminalSessionReference?
+  {
+    guard AgentTerminalPersistenceExperimentSettings.canUseTerminalSessionPersistence else {
+      return nil
+    }
+    guard tab.keepsRunningAfterQuit else { return nil }
+    guard case .agent = tab.kind else { return nil }
+    return Self.terminalSessionReferenceProvider(tab.id)
   }
 
   nonisolated private static func hydratedPersistedAgentResumeMetadata(
@@ -1495,26 +1843,34 @@ final class WorkspaceState {
         worktreeLabel: tab.worktreeLabel,
         title: tab.title,
         commandDescription: tab.commandDescription,
+        baseCommandDescription: tab.baseCommandDescription,
         kind: tab.kind,
+        agentFamilyID: tab.agentFamilyID,
         createdAt: tab.createdAt,
         isSandboxed: tab.isSandboxed,
+        yoloMode: tab.yoloMode,
         writableRoots: tab.writableRoots,
         resumeArgumentTemplate: tab.resumeArgumentTemplate,
+        keepsRunningAfterQuit: tab.keepsRunningAfterQuit,
+        terminalSession: tab.terminalSession,
         resumeSessionID: tab.resumeSessionID,
         resumeCommandDescription: renderedResumeCommand
       )
     }
 
-    let unresolvedGroups = Dictionary(
-      grouping: hydratedTabs.indices.filter { index in
-        let tab = hydratedTabs[index]
-        guard case .agent = tab.kind else { return false }
-        guard tab.resumeCommandDescription == nil else { return false }
-        guard tab.resumeArgumentTemplate.contains("{{session_id}}") else { return false }
-        return isCodexCommand(tab.commandDescription)
-      }
-    ) { index in
-      normalizedPath(hydratedTabs[index].worktreePath)
+    var unresolvedGroups: [AgentResumeHydrationGroup: [Int]] = [:]
+    for index in hydratedTabs.indices {
+      let tab = hydratedTabs[index]
+      guard case .agent = tab.kind else { continue }
+      guard tab.resumeCommandDescription == nil else { continue }
+      guard tab.resumeArgumentTemplate.contains("{{session_id}}") else { continue }
+      guard let familyID = agentFamilyIDForResumeHydration(tab) else { continue }
+
+      let group = AgentResumeHydrationGroup(
+        familyID: familyID,
+        worktreePath: normalizedPath(tab.worktreePath)
+      )
+      unresolvedGroups[group, default: []].append(index)
     }
 
     guard !unresolvedGroups.isEmpty else { return hydratedTabs }
@@ -1525,13 +1881,14 @@ final class WorkspaceState {
       .compactMap { hydratedTabs[$0].createdAt }
       .min()
       ?? .distantPast
-    let codexSessionsByWorktreePath = groupedCodexSessions(
+    let sessionLookup = resumeSessionsByHydrationGroup(
+      familyIDs: Set(unresolvedGroups.keys.map(\.familyID)),
       notBefore: earliestCreatedAt.addingTimeInterval(-3600)
     )
 
-    for (worktreePath, indices) in unresolvedGroups {
+    for (group, indices) in unresolvedGroups {
       guard !indices.isEmpty else { continue }
-      guard var sessions = codexSessionsByWorktreePath[worktreePath], !sessions.isEmpty else {
+      guard var sessions = sessionLookup[group], !sessions.isEmpty else {
         continue
       }
 
@@ -1545,7 +1902,8 @@ final class WorkspaceState {
       let existingSessionIDs: Set<String> = Set(
         hydratedTabs.compactMap { tab in
           let normalizedTabWorktreePath = normalizedPath(tab.worktreePath)
-          guard normalizedTabWorktreePath == worktreePath else { return nil }
+          guard normalizedTabWorktreePath == group.worktreePath else { return nil }
+          guard agentFamilyIDForResumeHydration(tab) == group.familyID else { return nil }
           return tab.resumeSessionID
         }
       )
@@ -1575,11 +1933,16 @@ final class WorkspaceState {
               worktreeLabel: tab.worktreeLabel,
               title: tab.title,
               commandDescription: tab.commandDescription,
+              baseCommandDescription: tab.baseCommandDescription,
               kind: tab.kind,
+              agentFamilyID: tab.agentFamilyID,
               createdAt: tab.createdAt,
               isSandboxed: tab.isSandboxed,
+              yoloMode: tab.yoloMode,
               writableRoots: tab.writableRoots,
               resumeArgumentTemplate: tab.resumeArgumentTemplate,
+              keepsRunningAfterQuit: tab.keepsRunningAfterQuit,
+              terminalSession: tab.terminalSession,
               resumeSessionID: tabSessionID,
               resumeCommandDescription: renderedResumeCommand
             )
@@ -1612,11 +1975,16 @@ final class WorkspaceState {
           worktreeLabel: tab.worktreeLabel,
           title: tab.title,
           commandDescription: tab.commandDescription,
+          baseCommandDescription: tab.baseCommandDescription,
           kind: tab.kind,
+          agentFamilyID: tab.agentFamilyID,
           createdAt: tab.createdAt,
           isSandboxed: tab.isSandboxed,
+          yoloMode: tab.yoloMode,
           writableRoots: tab.writableRoots,
           resumeArgumentTemplate: tab.resumeArgumentTemplate,
+          keepsRunningAfterQuit: tab.keepsRunningAfterQuit,
+          terminalSession: tab.terminalSession,
           resumeSessionID: matchingSession.sessionID,
           resumeCommandDescription: renderedResumeCommand
         )
@@ -1626,130 +1994,38 @@ final class WorkspaceState {
     return hydratedTabs
   }
 
-  nonisolated private static func groupedCodexSessions(notBefore: Date) -> [String:
-    [CodexSessionRecord]]
-  {
-    let records = loadCodexSessionRecords(notBefore: notBefore)
-    return Dictionary(grouping: records) { record in
-      normalizedPath(record.cwd)
-    }
+  nonisolated private static func agentFamilyIDForResumeHydration(
+    _ tab: PersistedWorkspaceTerminalTab
+  ) -> AgentFamilyID? {
+    tab.agentFamilyID ?? AgentHarnesses.familyID(matchingCommand: tab.commandDescription)
   }
 
-  nonisolated private static func loadCodexSessionRecords(notBefore: Date) -> [CodexSessionRecord] {
-    if let provider = sessionRecordsProvider {
-      return provider()
-        .filter { $0.provider == .codex && $0.startedAt >= notBefore }
-        .map {
-          CodexSessionRecord(sessionID: $0.sessionID, cwd: $0.cwd, startedAt: $0.startedAt)
-        }
-    }
-
-    let root = FileManager.default.homeDirectoryForCurrentUser
-      .appendingPathComponent(".codex/sessions", isDirectory: true)
-    guard FileManager.default.fileExists(atPath: root.path) else { return [] }
-
-    let keys: Set<URLResourceKey> = [.isRegularFileKey]
+  nonisolated private static func yoloFlag(for tab: PersistedWorkspaceTerminalTab) -> String {
+    guard case .agent = tab.kind else { return "" }
     guard
-      let enumerator = FileManager.default.enumerator(
-        at: root,
-        includingPropertiesForKeys: Array(keys),
-        options: [.skipsHiddenFiles]
-      )
-    else { return [] }
+      let familyID = tab.agentFamilyID
+        ?? AgentHarnesses.familyID(
+          matchingCommand: tab.baseCommandDescription
+        )
+    else { return "" }
+    return familyID.defaultProfile.yoloFlag
+  }
 
-    var records: [CodexSessionRecord] = []
-    for case let fileURL as URL in enumerator {
-      guard fileURL.pathExtension == "jsonl" else { continue }
-      guard fileURL.lastPathComponent.hasPrefix("rollout-") else { continue }
-      guard
-        let values = try? fileURL.resourceValues(forKeys: keys),
-        values.isRegularFile == true
-      else {
-        continue
+  nonisolated private static func resumeSessionsByHydrationGroup(
+    familyIDs: Set<AgentFamilyID>,
+    notBefore: Date
+  ) -> [AgentResumeHydrationGroup: [AgentResumeSessionRecord]] {
+    var groupedSessions: [AgentResumeHydrationGroup: [AgentResumeSessionRecord]] = [:]
+    for familyID in familyIDs {
+      for session in AgentHarnesses.resumeSessionRecords(for: familyID, notBefore: notBefore) {
+        let group = AgentResumeHydrationGroup(
+          familyID: familyID,
+          worktreePath: normalizedPath(session.cwd)
+        )
+        groupedSessions[group, default: []].append(session)
       }
-      guard
-        let metadata = codexSessionMetadataFromRolloutFilename(fileURL.lastPathComponent)
-      else {
-        continue
-      }
-      let startedAt = metadata.startedAt ?? .distantPast
-      guard startedAt >= notBefore else { continue }
-      guard let prefix = try? readUTF8Prefix(of: fileURL, maxBytes: 4096) else { continue }
-      guard let cwd = jsonStringValue(forKey: "cwd", in: prefix), !cwd.isEmpty else { continue }
-      records.append(
-        CodexSessionRecord(sessionID: metadata.sessionID, cwd: cwd, startedAt: startedAt)
-      )
     }
-
-    return records
-  }
-
-  nonisolated private static func readUTF8Prefix(of url: URL, maxBytes: Int) throws -> String {
-    let handle = try FileHandle(forReadingFrom: url)
-    defer { try? handle.close() }
-    let data = try handle.read(upToCount: maxBytes) ?? Data()
-    return String(decoding: data, as: UTF8.self)
-  }
-
-  nonisolated private static func codexSessionMetadataFromRolloutFilename(_ filename: String)
-    -> (sessionID: String, startedAt: Date?)?
-  {
-    guard filename.hasPrefix("rollout-"), filename.hasSuffix(".jsonl") else { return nil }
-    let stem = filename.dropFirst("rollout-".count).dropLast(".jsonl".count)
-    let timestampLength = 19  // yyyy-MM-dd'T'HH-mm-ss
-    guard stem.count > timestampLength else {
-      return nil
-    }
-    let separatorIndex = stem.index(stem.startIndex, offsetBy: timestampLength)
-    guard stem[separatorIndex] == "-" else { return nil }
-
-    let timestampText = String(stem[..<separatorIndex])
-    let sessionStart = parseCodexRolloutTimestamp(timestampText)
-
-    let sessionIDStart = stem.index(after: separatorIndex)
-    let sessionID = String(stem[sessionIDStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !sessionID.isEmpty else {
-      return nil
-    }
-    return (sessionID, sessionStart)
-  }
-
-  nonisolated private static func parseCodexRolloutTimestamp(_ value: String) -> Date? {
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.timeZone = .current
-    formatter.dateFormat = "yyyy-MM-dd'T'HH-mm-ss"
-    return formatter.date(from: value)
-  }
-
-  nonisolated private static func jsonStringValue(forKey key: String, in text: String) -> String? {
-    let token = "\"\(key)\":\""
-    guard let tokenRange = text.range(of: token) else { return nil }
-    var index = tokenRange.upperBound
-    var escaped = false
-    var characters: [Character] = []
-
-    while index < text.endIndex {
-      let character = text[index]
-      if escaped {
-        characters.append(character)
-        escaped = false
-      } else if character == "\\" {
-        escaped = true
-      } else if character == "\"" {
-        let raw = String(characters)
-        return raw.replacingOccurrences(of: "\\/", with: "/")
-      } else {
-        characters.append(character)
-      }
-      index = text.index(after: index)
-    }
-
-    return nil
-  }
-
-  nonisolated private static func isCodexCommand(_ command: String) -> Bool {
-    commandExecutableName(from: command).lowercased() == "codex"
+    return groupedSessions
   }
 
   private static func persistedTerminalTab(from tab: WorkspaceTerminalTab)
@@ -1765,17 +2041,28 @@ final class WorkspaceState {
       kind = .agent(profileName: profileName, icon: icon)
     }
 
+    let terminalSession = tab.terminalSession.map { session in
+      tab.shouldKeepTerminalSessionAliveAcrossQuit
+        ? TerminalSessionBackends.markPreservedForRestore(reference: session)
+        : session
+    }
+
     return PersistedWorkspaceTerminalTab(
       id: tab.id,
       worktreePath: tab.worktreePath,
       worktreeLabel: tab.worktreeLabel,
       title: tab.title,
       commandDescription: tab.commandDescription,
+      baseCommandDescription: tab.baseCommandDescription,
       kind: kind,
+      agentFamilyID: tab.agentFamilyID,
       createdAt: tab.createdAt,
       isSandboxed: tab.isSandboxed,
+      yoloMode: tab.yoloMode,
       writableRoots: tab.writableRoots,
       resumeArgumentTemplate: tab.resumeArgumentTemplate,
+      keepsRunningAfterQuit: tab.keepsRunningAfterQuit,
+      terminalSession: terminalSession,
       resumeSessionID: tab.resumeSessionID,
       resumeCommandDescription: tab.resumeCommandDescription
     )
@@ -1783,11 +2070,14 @@ final class WorkspaceState {
 
   nonisolated private static func persistedTabByResolvingResumeTemplate(
     from tab: PersistedWorkspaceTerminalTab,
-    using resumeTemplatesByProfileName: [String: String]
+    using restoreMetadataByProfileName: [String: AgentRestoreProfileMetadata]
   ) -> PersistedWorkspaceTerminalTab {
     guard case .agent(let profileName, _) = tab.kind else { return tab }
-    let resumeArgumentTemplate = resumeTemplatesByProfileName[profileName] ?? ""
-    guard resumeArgumentTemplate != tab.resumeArgumentTemplate else { return tab }
+    let metadata = restoreMetadataByProfileName[profileName]
+    let resumeArgumentTemplate = metadata?.resumeArgumentTemplate ?? ""
+    guard
+      resumeArgumentTemplate != tab.resumeArgumentTemplate
+    else { return tab }
 
     return PersistedWorkspaceTerminalTab(
       id: tab.id,
@@ -1795,31 +2085,89 @@ final class WorkspaceState {
       worktreeLabel: tab.worktreeLabel,
       title: tab.title,
       commandDescription: tab.commandDescription,
+      baseCommandDescription: tab.baseCommandDescription,
       kind: tab.kind,
+      agentFamilyID: tab.agentFamilyID,
       createdAt: tab.createdAt,
       isSandboxed: tab.isSandboxed,
+      yoloMode: tab.yoloMode,
       writableRoots: tab.writableRoots,
       resumeArgumentTemplate: resumeArgumentTemplate,
+      keepsRunningAfterQuit: tab.keepsRunningAfterQuit,
+      terminalSession: tab.terminalSession,
       resumeSessionID: tab.resumeSessionID,
       resumeCommandDescription: tab.resumeCommandDescription
     )
   }
 
-  private static func resumeTemplatesByProfileName(savedProfiles: [SavedAgentProfile])
-    -> [String: String]
+  private static func restoreMetadataByProfileName(savedProfiles: [SavedAgentProfile])
+    -> [String: AgentRestoreProfileMetadata]
   {
-    var templates: [String: String] = [:]
+    var metadataByProfileName: [String: AgentRestoreProfileMetadata] = [:]
 
-    for profile in SavedAgentProfiles.builtinDefaults where !profile.resumeArgumentTemplate.isEmpty
-    {
-      templates[profile.name] = profile.resumeArgumentTemplate
+    for profile in SavedAgentProfiles.builtinDefaults {
+      metadataByProfileName[profile.name] = AgentRestoreProfileMetadata(profile: profile)
     }
 
-    for profile in savedProfiles where !profile.resumeArgumentTemplate.isEmpty {
-      templates[profile.name] = profile.resumeArgumentTemplate
+    for profile in savedProfiles {
+      metadataByProfileName[profile.name] = AgentRestoreProfileMetadata(profile: profile)
     }
 
-    return templates
+    return metadataByProfileName
+  }
+
+  private static func agentProfilesByFamily(savedProfiles: [SavedAgentProfile])
+    -> [AgentFamilyID: SavedAgentProfile]
+  {
+    var profilesByFamily = Dictionary(
+      uniqueKeysWithValues: SavedAgentProfiles.builtinDefaults.map { profile in
+        (profile.familyID!, profile)
+      }
+    )
+
+    for profile in savedProfiles where profile.isEnabled {
+      let familyID =
+        profile.familyID
+        ?? AgentFamilyID.inferred(from: profile)
+        ?? AgentHarnesses.familyID(matchingCommand: profile.command)
+      guard let familyID else { continue }
+      profilesByFamily[familyID] = profile
+    }
+
+    return profilesByFamily
+  }
+
+  private static func sessionSpecificResumeArgumentTemplate(
+    for familyID: AgentFamilyID,
+    profile: SavedAgentProfile
+  ) -> String {
+    switch familyID {
+    case .claudeCode, .gemini:
+      "--resume {{session_id}}"
+    case .codex:
+      profile.resumeArgumentTemplate.isEmpty
+        ? familyID.defaultProfile.resumeArgumentTemplate
+        : profile.resumeArgumentTemplate
+    }
+  }
+
+  private static func agentCommand(
+    baseCommand: String,
+    yoloMode: Bool,
+    yoloFlag: String
+  ) -> String {
+    let command = baseCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+    let flag = yoloFlag.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard yoloMode, !flag.isEmpty else { return command }
+    guard !command.hasSuffix(" \(flag)") else { return command }
+    return "\(command) \(flag)"
+  }
+
+  private static func agentSessionKey(
+    familyID: AgentFamilyID,
+    sessionID: String
+  ) -> String {
+    "\(familyID.rawValue):\(sessionID)"
   }
 
   nonisolated private static func normalizedPath(_ path: String) -> String {
@@ -2405,6 +2753,137 @@ final class WorkspaceState {
       .first { $0.id == tabID }
   }
 
+  private func persistAgentSessionRestoreMetadataIfPossible(for tab: WorkspaceTerminalTab) {
+    guard let sessionID = tab.resumeSessionID ?? hydrateAgentResumeSessionID(for: tab) else {
+      return
+    }
+
+    tab.resumeSessionID = sessionID
+    recordAgentSessionRestoreMetadata(for: tab, sessionID: sessionID)
+  }
+
+  private func preserveRestorableAgentTabForLater(_ tab: WorkspaceTerminalTab) {
+    guard let persistedTab = stoppedRestorableAgentTab(from: tab) else { return }
+    let worktreePath = normalizedPath(tab.worktreePath)
+    var pendingTabs = pendingRestorableTabsByWorktreePath[worktreePath] ?? []
+    pendingTabs.removeAll { $0.id == persistedTab.id }
+    pendingTabs.append(persistedTab)
+    pendingRestorableTabsByWorktreePath[worktreePath] = pendingTabs
+  }
+
+  private func stoppedRestorableAgentTab(
+    from tab: WorkspaceTerminalTab
+  ) -> PersistedWorkspaceTerminalTab? {
+    guard tab.isRestorableAfterRelaunch else { return nil }
+    let kind: PersistedWorkspaceTerminalTabKind
+    switch tab.kind {
+    case .shell:
+      return nil
+    case .agent(let profileName, let icon):
+      kind = .agent(profileName: profileName, icon: icon)
+    }
+    guard !tab.resumeArgumentTemplate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+      return nil
+    }
+
+    let resumeCommandDescription =
+      tab.resumeCommandDescription
+      ?? renderAgentResumeCommand(
+        baseCommand: tab.commandDescription,
+        resumeArgumentTemplate: tab.resumeArgumentTemplate,
+        sessionID: tab.resumeSessionID
+      )
+
+    return PersistedWorkspaceTerminalTab(
+      id: tab.id,
+      worktreePath: tab.worktreePath,
+      worktreeLabel: tab.worktreeLabel,
+      title: tab.title,
+      commandDescription: tab.commandDescription,
+      baseCommandDescription: tab.baseCommandDescription,
+      kind: kind,
+      agentFamilyID: tab.agentFamilyID,
+      createdAt: tab.createdAt,
+      isSandboxed: tab.isSandboxed,
+      yoloMode: tab.yoloMode,
+      writableRoots: tab.writableRoots,
+      resumeArgumentTemplate: tab.resumeArgumentTemplate,
+      keepsRunningAfterQuit: tab.keepsRunningAfterQuit,
+      terminalSession: nil,
+      resumeSessionID: tab.resumeSessionID,
+      resumeCommandDescription: resumeCommandDescription
+    )
+  }
+
+  private func hydrateAgentResumeSessionID(for tab: WorkspaceTerminalTab) -> String? {
+    if let sessionID = tab.resumeSessionID, !sessionID.isEmpty {
+      return sessionID
+    }
+    guard case .agent = tab.kind else { return nil }
+    guard
+      let familyID = tab.agentFamilyID
+        ?? AgentHarnesses.familyID(
+          matchingCommand: tab.baseCommandDescription
+        )
+    else { return nil }
+
+    let worktreePath = normalizedPath(tab.worktreePath)
+    let usedSessionIDs = Set(
+      allTerminalTabs.compactMap { otherTab -> String? in
+        guard otherTab.id != tab.id else { return nil }
+        guard normalizedPath(otherTab.worktreePath) == worktreePath else { return nil }
+        return otherTab.resumeSessionID
+      }
+    )
+    let sessions =
+      AgentHarnesses.resumeSessionRecords(
+        for: familyID,
+        notBefore: tab.createdAt.addingTimeInterval(-120)
+      )
+      .filter {
+        normalizedPath($0.cwd) == worktreePath && !usedSessionIDs.contains($0.sessionID)
+      }
+      .sorted {
+        if $0.startedAt == $1.startedAt {
+          return $0.sessionID < $1.sessionID
+        }
+        return $0.startedAt < $1.startedAt
+      }
+
+    return sessions.first { $0.startedAt >= tab.createdAt.addingTimeInterval(-120) }?.sessionID
+      ?? sessions.first?.sessionID
+  }
+
+  private func recordAgentSessionRestoreMetadata(
+    for tab: WorkspaceTerminalTab,
+    sessionID: String
+  ) {
+    guard !sessionID.isEmpty else { return }
+    guard case .agent = tab.kind else { return }
+    guard tab.isRestorableAfterRelaunch else { return }
+    guard
+      let familyID = tab.agentFamilyID
+        ?? AgentHarnesses.familyID(
+          matchingCommand: tab.baseCommandDescription
+        )
+    else { return }
+    guard !tab.resumeArgumentTemplate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return
+    }
+
+    AgentSessionRestoreMetadataStore.record(
+      AgentSessionRestoreMetadata(
+        familyID: familyID,
+        sessionID: sessionID,
+        cwd: tab.worktreePath,
+        yoloMode: tab.yoloMode,
+        sandboxEnabled: tab.isSandboxed,
+        updatedAt: Date()
+      )
+    )
+  }
+
   private func agentTabTitle(for request: WorkspaceAgentLaunchRequest, ordinal: Int) -> String {
     guard ordinal > 1 else { return request.displayName }
     if request.useHashedDuplicateSuffix {
@@ -2907,21 +3386,38 @@ private struct StagedReviewLaunch {
   let agentTabID: UUID
 }
 
-enum AgentSessionProvider: String, Sendable {
-  case codex
+private struct AgentResumeHydrationGroup: Hashable, Sendable {
+  let familyID: AgentFamilyID
+  let worktreePath: String
 }
 
-struct AgentSessionRecord: Sendable, Equatable {
-  let provider: AgentSessionProvider
-  let sessionID: String
-  let cwd: String
-  let startedAt: Date
+private struct AgentRestoreProfileMetadata: Sendable {
+  let resumeArgumentTemplate: String
+
+  init(profile: SavedAgentProfile) {
+    self.resumeArgumentTemplate = profile.resumeArgumentTemplate
+  }
 }
 
-private struct CodexSessionRecord: Sendable, Equatable {
+struct WorkspaceRestorableAgentSession: Identifiable, Hashable, Sendable {
+  let familyID: AgentFamilyID
+  let profileName: String
+  let command: String
+  let icon: String
+  let resumeArgumentTemplate: String
   let sessionID: String
   let cwd: String
+  let yoloMode: Bool
+  let sandboxEnabled: Bool
   let startedAt: Date
+
+  var id: String {
+    "\(familyID.rawValue):\(sessionID):\(cwd)"
+  }
+
+  var yoloFlag: String {
+    familyID.defaultProfile.yoloFlag
+  }
 }
 
 struct WorktreeRemovalRequest: Identifiable, Sendable {

@@ -10,7 +10,7 @@ struct ArgonCLIInstallLinkTests {
     let fixture = try makeFixtureDirectory()
     defer { try? FileManager.default.removeItem(at: fixture) }
 
-    let target = fixture.appendingPathComponent("Argon.app/Contents/Resources/bin/argon")
+    let target = fixture.appendingPathComponent("Argon.app/Contents/Helpers/argon")
     try writeExecutable(at: target)
 
     let linkPath = fixture.appendingPathComponent("usr/local/bin/argon").path
@@ -34,7 +34,7 @@ struct ArgonCLIInstallLinkTests {
     let fixture = try makeFixtureDirectory()
     defer { try? FileManager.default.removeItem(at: fixture) }
 
-    let target = fixture.appendingPathComponent("Argon.app/Contents/Resources/bin/argon")
+    let target = fixture.appendingPathComponent("Argon.app/Contents/Helpers/argon")
     try writeExecutable(at: target)
 
     let status = ArgonCLIInstallLink.status(
@@ -53,10 +53,10 @@ struct ArgonCLIInstallLinkTests {
     let fixture = try makeFixtureDirectory()
     defer { try? FileManager.default.removeItem(at: fixture) }
 
-    let expectedTarget = fixture.appendingPathComponent("Argon.app/Contents/Resources/bin/argon")
+    let expectedTarget = fixture.appendingPathComponent("Argon.app/Contents/Helpers/argon")
     try writeExecutable(at: expectedTarget)
 
-    let otherTarget = fixture.appendingPathComponent("Other.app/Contents/Resources/bin/argon")
+    let otherTarget = fixture.appendingPathComponent("Other.app/Contents/Helpers/argon")
     try writeExecutable(at: otherTarget)
 
     let linkPath = fixture.appendingPathComponent("usr/local/bin/argon").path
@@ -80,7 +80,7 @@ struct ArgonCLIInstallLinkTests {
     let fixture = try makeFixtureDirectory()
     defer { try? FileManager.default.removeItem(at: fixture) }
 
-    let target = fixture.appendingPathComponent("Argon.app/Contents/Resources/bin/argon")
+    let target = fixture.appendingPathComponent("Argon.app/Contents/Helpers/argon")
     try writeExecutable(at: target)
 
     let linkURL = fixture.appendingPathComponent("usr/local/bin/argon")
@@ -104,7 +104,7 @@ struct ArgonCLIInstallLinkTests {
     let status = ArgonCLIInstallLink.status(
       paths: .init(
         linkPath: fixture.appendingPathComponent("usr/local/bin/argon").path,
-        targetPath: fixture.appendingPathComponent("Argon.app/Contents/Resources/bin/argon").path
+        targetPath: fixture.appendingPathComponent("Argon.app/Contents/Helpers/argon").path
       )
     )
 
@@ -118,7 +118,7 @@ struct ArgonCLIInstallLinkTests {
     let fixture = try makeFixtureDirectory()
     defer { try? FileManager.default.removeItem(at: fixture) }
 
-    let target = fixture.appendingPathComponent("Argon.app/Contents/Resources/bin/argon")
+    let target = fixture.appendingPathComponent("Argon.app/Contents/Helpers/argon")
     try writeExecutable(at: target)
 
     let linkPath = fixture.appendingPathComponent("usr/local/bin/argon").path

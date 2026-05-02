@@ -22,7 +22,7 @@ struct ArgonCLIInstallStartupPromptTests {
     let recorder = Recorder()
     let status = ArgonCLIInstallLinkStatus(
       linkPath: "/usr/local/bin/argon",
-      expectedTargetPath: "/Applications/Argon.app/Contents/Resources/bin/argon",
+      expectedTargetPath: "/Applications/Argon.app/Contents/Helpers/argon",
       state: .missing
     )
 
@@ -108,15 +108,15 @@ struct ArgonCLIInstallStartupPromptTests {
     let defaults = UserDefaults(suiteName: suiteName)!
     defaults.removePersistentDomain(forName: suiteName)
     defaults.set(
-      "/Applications/Argon.app/Contents/Resources/bin/argon",
+      "/Applications/Argon.app/Contents/Helpers/argon",
       forKey: ArgonCLIInstallOnboarding.dismissalStorageKey
     )
 
     let recorder = Recorder()
     let status = ArgonCLIInstallLinkStatus(
       linkPath: "/usr/local/bin/argon",
-      expectedTargetPath: "/Applications/Argon 2.app/Contents/Resources/bin/argon",
-      state: .pointsElsewhere(currentTarget: "/Applications/Argon.app/Contents/Resources/bin/argon")
+      expectedTargetPath: "/Applications/Argon 2.app/Contents/Helpers/argon",
+      state: .pointsElsewhere(currentTarget: "/Applications/Argon.app/Contents/Helpers/argon")
     )
 
     let prompt = ArgonCLIInstallStartupPrompt(
@@ -151,7 +151,7 @@ struct ArgonCLIInstallStartupPromptTests {
     let recorder = Recorder()
     recorder.nextAction = .repair
 
-    let expectedTarget = "/Applications/Argon.app/Contents/Resources/bin/argon"
+    let expectedTarget = "/Applications/Argon.app/Contents/Helpers/argon"
     let status = ArgonCLIInstallLinkStatus(
       linkPath: "/usr/local/bin/argon",
       expectedTargetPath: expectedTarget,
@@ -200,7 +200,7 @@ struct ArgonCLIInstallStartupPromptTests {
     let recorder = Recorder()
     let status = ArgonCLIInstallLinkStatus(
       linkPath: "/usr/local/bin/argon",
-      expectedTargetPath: "/Applications/Argon.app/Contents/Resources/bin/argon",
+      expectedTargetPath: "/Applications/Argon.app/Contents/Helpers/argon",
       state: .missing
     )
 

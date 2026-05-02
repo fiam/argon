@@ -5,6 +5,7 @@ import SwiftUI
 struct ArgonApp: App {
   private static let cliLaunchRequest = AppLaunchTarget.current()
   private static let launchAppearance = LaunchAppearance.current()
+  @NSApplicationDelegateAdaptor(ArgonApplicationDelegate.self) private var appDelegate
   @FocusedValue(\.appState) private var focusedAppState
   @State private var recentProjects = RecentProjects()
   @State private var savedAgents = SavedAgentProfiles()

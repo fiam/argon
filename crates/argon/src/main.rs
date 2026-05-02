@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 mod sandbox_intercept;
 mod sandbox_proxy;
+mod terminal_session;
 
 use anyhow::{Context, Result, bail};
 use argon_core::{
@@ -70,6 +71,8 @@ enum Commands {
     Agent(AgentCommands),
     #[command(subcommand)]
     Sandbox(SandboxCommands),
+    #[command(subcommand)]
+    Terminal(terminal_session::TerminalCommands),
     #[command(subcommand)]
     Reviewer(ReviewerCommands),
     #[command(subcommand)]
@@ -771,6 +774,7 @@ fn run() -> Result<()> {
         Commands::Review(args) => run_review(args, &runtime),
         Commands::Agent(command) => run_agent(command, &runtime),
         Commands::Sandbox(command) => run_sandbox(command, &runtime),
+        Commands::Terminal(command) => terminal_session::run_terminal(command),
         Commands::Reviewer(command) => run_reviewer(command, &runtime),
         Commands::Workspace(command) => run_workspace(command, &runtime),
         Commands::Diff(args) => run_diff(args, &runtime),
@@ -861,6 +865,7 @@ fn is_command_token(token: &str) -> bool {
         "review"
             | "agent"
             | "sandbox"
+            | "terminal"
             | "reviewer"
             | "workspace"
             | "diff"

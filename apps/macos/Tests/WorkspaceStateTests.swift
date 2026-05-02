@@ -737,6 +737,33 @@ struct WorkspaceStateTests {
     #expect(state.activeFinalizeAction == nil)
   }
 
+  @Test("agent launch options keep terminal persistence experimental")
+  @MainActor
+  func agentLaunchOptionsKeepTerminalPersistenceExperimental() {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(false)
+    defer { restoreExperiment() }
+
+    let defaultRequest = WorkspaceAgentLaunchOptions(
+      source: .savedProfile(AgentFamilyID.codex.defaultProfile, yoloMode: true),
+      sandboxEnabled: true
+    )
+    .buildRequest()
+
+    #expect(defaultRequest.keepRunningWhileThinking == false)
+
+    UserDefaults.standard.set(
+      true,
+      forKey: AgentTerminalPersistenceExperimentSettings.enabledStorageKey
+    )
+    let enabledRequest = WorkspaceAgentLaunchOptions(
+      source: .savedProfile(AgentFamilyID.codex.defaultProfile, yoloMode: true),
+      sandboxEnabled: true
+    )
+    .buildRequest()
+
+    #expect(enabledRequest.keepRunningWhileThinking == TerminalSessionBackends.isAvailable())
+  }
+
   @Test("finalize prompts include action, worktree, branch, and base branch context")
   @MainActor
   func finalizePromptIncludesActionContext() throws {
@@ -1027,6 +1054,12 @@ struct WorkspaceStateTests {
 
     #expect(restoredState.selectedTerminalTabs.map(\.title) == ["Codex", "Privileged Shell 1"])
     #expect(restoredState.selectedTerminalTab?.id == codexTab.id)
+    let restoredCodexTab = try #require(
+      restoredState.selectedTerminalTabs.first { $0.id == codexTab.id })
+    #expect(restoredCodexTab.shouldSuppressAttention())
+    let restoredShellTab = try #require(
+      restoredState.selectedTerminalTabs.first { $0.title == "Privileged Shell 1" })
+    #expect(restoredShellTab.suppressAttentionUntil == nil)
     #expect(
       restoredState.selectedTerminalTabs.allSatisfy { $0.worktreePath == "/tmp/repo/feature" })
     #expect(restoredState.terminalTabsByWorktreePath["/tmp/repo"] == nil)
@@ -1611,16 +1644,16 @@ struct WorkspaceStateTests {
   @Test("lazy restore maps Codex tabs to distinct sessions in one worktree")
   @MainActor
   func lazyRestoreMapsMultipleCodexTabsToDistinctSessions() async {
-    WorkspaceState.sessionRecordsProvider = {
+    AgentHarnesses.resumeSessionRecordsProvider = {
       [
-        AgentSessionRecord(
-          provider: .codex,
+        AgentResumeSessionRecord(
+          familyID: .codex,
           sessionID: "11111111-1111-1111-1111-111111111111",
           cwd: "/tmp/repo/feature",
           startedAt: Date(timeIntervalSince1970: 11)
         ),
-        AgentSessionRecord(
-          provider: .codex,
+        AgentResumeSessionRecord(
+          familyID: .codex,
           sessionID: "22222222-2222-2222-2222-222222222222",
           cwd: "/tmp/repo/feature",
           startedAt: Date(timeIntervalSince1970: 21)
@@ -1632,7 +1665,7 @@ struct WorkspaceStateTests {
     }
     defer {
       WorkspaceState.commandStatusProvider = nil
-      WorkspaceState.sessionRecordsProvider = nil
+      AgentHarnesses.resumeSessionRecordsProvider = nil
     }
 
     let snapshot = PersistedWorkspaceWindowSnapshot(
@@ -1700,13 +1733,13 @@ struct WorkspaceStateTests {
   @Test("lazy restore falls back to original command when no resume session is available")
   @MainActor
   func lazyRestoreFallsBackToOriginalCommandWhenNoResumeSessionIsAvailable() async {
-    WorkspaceState.sessionRecordsProvider = { [] }
+    AgentHarnesses.resumeSessionRecordsProvider = { [] }
     WorkspaceState.commandStatusProvider = { commands in
       Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
     }
     defer {
       WorkspaceState.commandStatusProvider = nil
-      WorkspaceState.sessionRecordsProvider = nil
+      AgentHarnesses.resumeSessionRecordsProvider = nil
     }
 
     let snapshot = PersistedWorkspaceWindowSnapshot(
@@ -1746,6 +1779,887 @@ struct WorkspaceStateTests {
     #expect(tab?.launch.processSpec.args.last == "codex --yolo")
   }
 
+  @Test("restorable agent sessions include supported families for selected worktree")
+  @MainActor
+  func restorableAgentSessionsIncludeSupportedFamiliesForSelectedWorktree() {
+    AgentHarnesses.resumeSessionRecordsProvider = {
+      [
+        AgentResumeSessionRecord(
+          familyID: .codex,
+          sessionID: "codex-current",
+          cwd: "/tmp/repo",
+          startedAt: Date(timeIntervalSince1970: 30)
+        ),
+        AgentResumeSessionRecord(
+          familyID: .claudeCode,
+          sessionID: "claude-current",
+          cwd: "/tmp/repo",
+          startedAt: Date(timeIntervalSince1970: 20)
+        ),
+        AgentResumeSessionRecord(
+          familyID: .gemini,
+          sessionID: "gemini-current",
+          cwd: "/tmp/repo",
+          startedAt: Date(timeIntervalSince1970: 10)
+        ),
+        AgentResumeSessionRecord(
+          familyID: .codex,
+          sessionID: "codex-other",
+          cwd: "/tmp/other",
+          startedAt: Date(timeIntervalSince1970: 40)
+        ),
+      ]
+    }
+    defer {
+      AgentHarnesses.resumeSessionRecordsProvider = nil
+    }
+
+    let state = makeState()
+    let sessions = state.restorableAgentSessions(savedProfiles: SavedAgentProfiles.builtinDefaults)
+
+    #expect(sessions.map(\.sessionID) == ["codex-current", "claude-current", "gemini-current"])
+    #expect(sessions.map(\.familyID) == [.codex, .claudeCode, .gemini])
+    #expect(
+      sessions.first(where: { $0.familyID == .claudeCode })?.resumeArgumentTemplate
+        == "--resume {{session_id}}")
+    #expect(
+      sessions.first(where: { $0.familyID == .gemini })?.resumeArgumentTemplate
+        == "--resume {{session_id}}")
+  }
+
+  @Test("restoring an agent session launches sandboxed")
+  @MainActor
+  func restoringAgentSessionLaunchesSandboxed() throws {
+    AgentHarnesses.resumeSessionRecordsProvider = {
+      [
+        AgentResumeSessionRecord(
+          familyID: .codex,
+          sessionID: "11111111-1111-1111-1111-111111111111",
+          cwd: "/tmp/repo",
+          startedAt: Date(timeIntervalSince1970: 30)
+        )
+      ]
+    }
+    defer {
+      AgentHarnesses.resumeSessionRecordsProvider = nil
+    }
+
+    let state = makeState()
+    let session = try #require(
+      state.restorableAgentSessions(savedProfiles: SavedAgentProfiles.builtinDefaults).first)
+    let tab = try #require(state.restoreAgentSession(session))
+
+    #expect(tab.isSandboxed == true)
+    #expect(tab.commandDescription == "codex")
+    #expect(tab.resumeSessionID == "11111111-1111-1111-1111-111111111111")
+    #expect(
+      tab.resumeCommandDescription == "codex resume '11111111-1111-1111-1111-111111111111'")
+    #expect(
+      state.restorableAgentSessions(savedProfiles: SavedAgentProfiles.builtinDefaults).isEmpty)
+  }
+
+  @Test("restoring an agent session uses persisted launch modes")
+  @MainActor
+  func restoringAgentSessionUsesPersistedLaunchModes() throws {
+    let restoreMetadataStore = isolateAgentSessionRestoreMetadataStoreForTest()
+    defer { restoreMetadataStore() }
+
+    AgentHarnesses.resumeSessionRecordsProvider = {
+      [
+        AgentResumeSessionRecord(
+          familyID: .codex,
+          sessionID: "22222222-2222-2222-2222-222222222222",
+          cwd: "/tmp/repo",
+          startedAt: Date(timeIntervalSince1970: 30)
+        )
+      ]
+    }
+    defer {
+      AgentHarnesses.resumeSessionRecordsProvider = nil
+    }
+    AgentSessionRestoreMetadataStore.record(
+      AgentSessionRestoreMetadata(
+        familyID: .codex,
+        sessionID: "22222222-2222-2222-2222-222222222222",
+        cwd: "/tmp/repo",
+        yoloMode: true,
+        sandboxEnabled: false,
+        updatedAt: Date(timeIntervalSince1970: 40)
+      )
+    )
+
+    let state = makeState()
+    let session = try #require(
+      state.restorableAgentSessions(savedProfiles: SavedAgentProfiles.builtinDefaults).first)
+    let tab = try #require(state.restoreAgentSession(session))
+
+    #expect(session.yoloMode == true)
+    #expect(session.sandboxEnabled == false)
+    #expect(tab.yoloMode == true)
+    #expect(tab.isSandboxed == false)
+    #expect(tab.commandDescription == "codex --yolo")
+    #expect(tab.baseCommandDescription == "codex")
+    #expect(
+      tab.resumeCommandDescription == "codex --yolo resume '22222222-2222-2222-2222-222222222222'")
+  }
+
+  @Test("agent session restore metadata stores only durable launch modes")
+  @MainActor
+  func agentSessionRestoreMetadataStoresOnlyDurableLaunchModes() throws {
+    let restoreMetadataStore = isolateAgentSessionRestoreMetadataStoreForTest()
+    defer { restoreMetadataStore() }
+
+    AgentSessionRestoreMetadataStore.record(
+      AgentSessionRestoreMetadata(
+        familyID: .codex,
+        sessionID: "22222222-2222-2222-2222-222222222222",
+        cwd: "/tmp/repo",
+        yoloMode: true,
+        sandboxEnabled: false,
+        updatedAt: Date(timeIntervalSince1970: 40)
+      )
+    )
+
+    let data = try #require(
+      AgentSessionRestoreMetadataStore.userDefaults.data(
+        forKey: AgentSessionRestoreMetadataStore.storageKey
+      )
+    )
+    let json = String(decoding: data, as: UTF8.self)
+
+    #expect(json.contains("\"yoloMode\""))
+    #expect(json.contains("\"sandboxEnabled\""))
+    #expect(!json.contains("\"profileName\""))
+    #expect(!json.contains("\"command\""))
+    #expect(!json.contains("\"icon\""))
+    #expect(!json.contains("\"resumeArgumentTemplate\""))
+    #expect(!json.contains("\"yoloFlag\""))
+  }
+
+  @Test("relaunching an agent tab updates yolo and sandbox modes")
+  @MainActor
+  func relaunchingAgentTabUpdatesYoloAndSandboxModes() throws {
+    let restoreMetadataStore = isolateAgentSessionRestoreMetadataStoreForTest()
+    defer { restoreMetadataStore() }
+
+    let state = makeState()
+    let tab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchOptions(
+          source: .savedProfile(AgentFamilyID.codex.defaultProfile, yoloMode: false),
+          sandboxEnabled: true
+        )
+        .buildRequest()
+      )
+    )
+    tab.resumeSessionID = "33333333-3333-3333-3333-333333333333"
+
+    let relaunched = try #require(
+      state.relaunchAgentTab(tab.id, sandboxEnabled: false, yoloMode: true))
+
+    #expect(!state.allTerminalTabs.contains { $0.id == tab.id })
+    #expect(state.selectedTerminalTab?.id == relaunched.id)
+    #expect(relaunched.isSandboxed == false)
+    #expect(relaunched.yoloMode == true)
+    #expect(relaunched.commandDescription == "codex --yolo")
+    #expect(relaunched.baseCommandDescription == "codex")
+    #expect(
+      relaunched.resumeCommandDescription
+        == "codex --yolo resume '33333333-3333-3333-3333-333333333333'")
+  }
+
+  @Test("lazy restore reconnects persistent terminal session when requested")
+  @MainActor
+  func lazyRestoreReconnectsPersistentTerminalSessionWhenRequested() async {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    defer { restoreExperiment() }
+
+    let session = TerminalSessionReference(backendID: "test", sessionID: "restored-session")
+    let stoppedSessions = TerminalSessionStopRecorder()
+    WorkspaceState.terminalSessionReferenceProvider = { _ in
+      session
+    }
+    WorkspaceState.terminalSessionCommandBuilder = { session, command in
+      "attach \(session.sessionID): \(command)"
+    }
+    WorkspaceState.terminalSessionStopper = { session in
+      stoppedSessions.append(session)
+    }
+    WorkspaceState.commandStatusProvider = { commands in
+      Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
+    }
+    defer {
+      WorkspaceState.terminalSessionReferenceProvider = { tabID in
+        TerminalSessionBackends.reference(for: tabID)
+      }
+      WorkspaceState.terminalSessionCommandBuilder = { session, command in
+        TerminalSessionBackends.attachCommand(reference: session, createCommand: command)
+      }
+      WorkspaceState.terminalSessionStopper = { session in
+        TerminalSessionBackends.stop(reference: session)
+      }
+      WorkspaceState.commandStatusProvider = nil
+    }
+
+    let snapshot = PersistedWorkspaceWindowSnapshot(
+      target: WorkspaceTarget(
+        repoRoot: "/tmp/repo",
+        repoCommonDir: "/tmp/repo/.git",
+        selectedWorktreePath: "/tmp/repo/feature"
+      ),
+      terminalTabsByWorktreePath: [
+        "/tmp/repo/feature": [
+          PersistedWorkspaceTerminalTab(
+            id: UUID(uuidString: "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD")!,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Codex",
+            commandDescription: "codex --yolo",
+            kind: .agent(profileName: "Codex", icon: "codex"),
+            agentFamilyID: .codex,
+            createdAt: Date(timeIntervalSince1970: 40),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"],
+            resumeArgumentTemplate: "resume {{session_id}}",
+            keepsRunningAfterQuit: true,
+            resumeSessionID: "019de52a-af6e-7620-9d04-9c8ccd6158b7",
+            resumeCommandDescription:
+              "codex --yolo resume '019de52a-af6e-7620-9d04-9c8ccd6158b7'"
+          )
+        ]
+      ],
+      selectedTerminalTabIDsByWorktreePath: [
+        "/tmp/repo/feature": UUID(uuidString: "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD")!
+      ]
+    )
+
+    let state = makeState()
+    state.applyPersistedWindowSnapshot(snapshot)
+
+    state.prepareSelectionLoading(for: "/tmp/repo/feature")
+    #expect(await waitUntil { state.selectedTerminalTabs.count == 1 })
+
+    let tab = state.selectedTerminalTabs.first
+    #expect(stoppedSessions.sessions == [session])
+    #expect(tab?.terminalSession == session)
+    #expect(tab?.keepsRunningAfterQuit == true)
+    #expect(tab?.launch.processSpec.args.last?.contains("attach restored-session:") == true)
+    #expect(tab?.launch.processSpec.args.last?.contains("codex --yolo resume") == true)
+  }
+
+  @Test("lazy restore replaces legacy screen terminal sessions")
+  @MainActor
+  func lazyRestoreReplacesLegacyScreenTerminalSessions() async {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    defer { restoreExperiment() }
+
+    let legacySession = TerminalSessionReference(backendID: "screen", sessionID: "legacy-session")
+    let replacementSession = TerminalSessionReference(
+      backendID: "test",
+      sessionID: "replacement-session"
+    )
+    WorkspaceState.terminalSessionReferenceProvider = { _ in
+      replacementSession
+    }
+    WorkspaceState.terminalSessionCommandBuilder = { session, command in
+      "attach \(session.sessionID): \(command)"
+    }
+    WorkspaceState.commandStatusProvider = { commands in
+      Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
+    }
+    defer {
+      WorkspaceState.terminalSessionReferenceProvider = { tabID in
+        TerminalSessionBackends.reference(for: tabID)
+      }
+      WorkspaceState.terminalSessionCommandBuilder = { session, command in
+        TerminalSessionBackends.attachCommand(reference: session, createCommand: command)
+      }
+      WorkspaceState.commandStatusProvider = nil
+    }
+
+    let snapshot = PersistedWorkspaceWindowSnapshot(
+      target: WorkspaceTarget(
+        repoRoot: "/tmp/repo",
+        repoCommonDir: "/tmp/repo/.git",
+        selectedWorktreePath: "/tmp/repo/feature"
+      ),
+      terminalTabsByWorktreePath: [
+        "/tmp/repo/feature": [
+          PersistedWorkspaceTerminalTab(
+            id: UUID(uuidString: "EEEEEEEE-EEEE-EEEE-EEEE-EEEEEEEEEEEE")!,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Codex",
+            commandDescription: "codex --yolo",
+            kind: .agent(profileName: "Codex", icon: "codex"),
+            agentFamilyID: .codex,
+            createdAt: Date(timeIntervalSince1970: 50),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"],
+            resumeArgumentTemplate: "resume {{session_id}}",
+            keepsRunningAfterQuit: true,
+            terminalSession: legacySession,
+            resumeSessionID: "019de52a-af6e-7620-9d04-9c8ccd6158b7",
+            resumeCommandDescription:
+              "codex --yolo resume '019de52a-af6e-7620-9d04-9c8ccd6158b7'"
+          )
+        ]
+      ],
+      selectedTerminalTabIDsByWorktreePath: [
+        "/tmp/repo/feature": UUID(uuidString: "EEEEEEEE-EEEE-EEEE-EEEE-EEEEEEEEEEEE")!
+      ]
+    )
+
+    let state = makeState()
+    state.applyPersistedWindowSnapshot(snapshot)
+    state.prepareSelectionLoading(for: "/tmp/repo/feature")
+    #expect(await waitUntil { state.selectedTerminalTabs.count == 1 })
+
+    let tab = state.selectedTerminalTabs.first
+    #expect(tab?.terminalSession == replacementSession)
+    #expect(tab?.launch.processSpec.args.last?.contains("attach replacement-session:") == true)
+  }
+
+  @Test("lazy restore replaces unmarked persistent terminal sessions")
+  @MainActor
+  func lazyRestoreReplacesUnmarkedPersistentTerminalSessions() async {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    defer { restoreExperiment() }
+
+    let staleSession = TerminalSessionReference(backendID: "argon", sessionID: "stale-session")
+    let replacementSession = TerminalSessionReference(
+      backendID: "test",
+      sessionID: "replacement-session"
+    )
+    let stoppedSessions = TerminalSessionStopRecorder()
+    WorkspaceState.terminalSessionReferenceProvider = { _ in
+      replacementSession
+    }
+    WorkspaceState.terminalSessionCommandBuilder = { session, command in
+      "attach \(session.sessionID): \(command)"
+    }
+    WorkspaceState.terminalSessionStopper = { session in
+      stoppedSessions.append(session)
+    }
+    WorkspaceState.commandStatusProvider = { commands in
+      Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
+    }
+    defer {
+      WorkspaceState.terminalSessionReferenceProvider = { tabID in
+        TerminalSessionBackends.reference(for: tabID)
+      }
+      WorkspaceState.terminalSessionCommandBuilder = { session, command in
+        TerminalSessionBackends.attachCommand(reference: session, createCommand: command)
+      }
+      WorkspaceState.terminalSessionStopper = { session in
+        TerminalSessionBackends.stop(reference: session)
+      }
+      WorkspaceState.commandStatusProvider = nil
+    }
+
+    let snapshot = PersistedWorkspaceWindowSnapshot(
+      target: WorkspaceTarget(
+        repoRoot: "/tmp/repo",
+        repoCommonDir: "/tmp/repo/.git",
+        selectedWorktreePath: "/tmp/repo/feature"
+      ),
+      terminalTabsByWorktreePath: [
+        "/tmp/repo/feature": [
+          PersistedWorkspaceTerminalTab(
+            id: UUID(uuidString: "ABABABAB-ABAB-ABAB-ABAB-ABABABABABAB")!,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Codex",
+            commandDescription: "codex --yolo",
+            kind: .agent(profileName: "Codex", icon: "codex"),
+            agentFamilyID: .codex,
+            createdAt: Date(timeIntervalSince1970: 60),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"],
+            resumeArgumentTemplate: "resume {{session_id}}",
+            keepsRunningAfterQuit: true,
+            terminalSession: staleSession,
+            resumeSessionID: "019de52a-af6e-7620-9d04-9c8ccd6158b7",
+            resumeCommandDescription:
+              "codex --yolo resume '019de52a-af6e-7620-9d04-9c8ccd6158b7'"
+          )
+        ]
+      ],
+      selectedTerminalTabIDsByWorktreePath: [
+        "/tmp/repo/feature": UUID(uuidString: "ABABABAB-ABAB-ABAB-ABAB-ABABABABABAB")!
+      ]
+    )
+
+    let state = makeState()
+    state.applyPersistedWindowSnapshot(snapshot)
+    state.prepareSelectionLoading(for: "/tmp/repo/feature")
+    #expect(await waitUntil { state.selectedTerminalTabs.count == 1 })
+
+    let tab = state.selectedTerminalTabs.first
+    #expect(stoppedSessions.sessions == [staleSession])
+    #expect(tab?.terminalSession == replacementSession)
+    #expect(tab?.launch.processSpec.args.last?.contains("attach replacement-session:") == true)
+    #expect(tab?.launch.processSpec.args.last?.contains("codex --yolo resume") == true)
+  }
+
+  @Test("lazy restore disables terminal session wrappers when experiment is off")
+  @MainActor
+  func lazyRestoreDisablesTerminalSessionWrappersWhenExperimentIsOff() async {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(false)
+    defer { restoreExperiment() }
+
+    let persistedSession = TerminalSessionReference(
+      backendID: "argon",
+      sessionID: "persisted-session"
+    )
+    let stoppedSessions = TerminalSessionStopRecorder()
+    WorkspaceState.terminalSessionStopper = { session in
+      stoppedSessions.append(session)
+    }
+    WorkspaceState.commandStatusProvider = { commands in
+      Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
+    }
+    defer {
+      WorkspaceState.terminalSessionStopper = { session in
+        TerminalSessionBackends.stop(reference: session)
+      }
+      WorkspaceState.commandStatusProvider = nil
+    }
+
+    let snapshot = PersistedWorkspaceWindowSnapshot(
+      target: WorkspaceTarget(
+        repoRoot: "/tmp/repo",
+        repoCommonDir: "/tmp/repo/.git",
+        selectedWorktreePath: "/tmp/repo/feature"
+      ),
+      terminalTabsByWorktreePath: [
+        "/tmp/repo/feature": [
+          PersistedWorkspaceTerminalTab(
+            id: UUID(uuidString: "CDCDCDCD-CDCD-CDCD-CDCD-CDCDCDCDCDCD")!,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Codex",
+            commandDescription: "codex --yolo",
+            kind: .agent(profileName: "Codex", icon: "codex"),
+            agentFamilyID: .codex,
+            createdAt: Date(timeIntervalSince1970: 70),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"],
+            resumeArgumentTemplate: "resume {{session_id}}",
+            keepsRunningAfterQuit: true,
+            terminalSession: persistedSession,
+            resumeSessionID: "019de52a-af6e-7620-9d04-9c8ccd6158b7",
+            resumeCommandDescription:
+              "codex --yolo resume '019de52a-af6e-7620-9d04-9c8ccd6158b7'"
+          )
+        ]
+      ],
+      selectedTerminalTabIDsByWorktreePath: [
+        "/tmp/repo/feature": UUID(uuidString: "CDCDCDCD-CDCD-CDCD-CDCD-CDCDCDCDCDCD")!
+      ]
+    )
+
+    let state = makeState()
+    state.applyPersistedWindowSnapshot(snapshot)
+    state.prepareSelectionLoading(for: "/tmp/repo/feature")
+    #expect(await waitUntil { state.selectedTerminalTabs.count == 1 })
+
+    let tab = state.selectedTerminalTabs.first
+    #expect(stoppedSessions.sessions == [persistedSession])
+    #expect(tab?.terminalSession == nil)
+    #expect(tab?.launch.processSpec.args.last?.contains("attach persisted-session:") == false)
+    #expect(tab?.launch.processSpec.args.last?.contains("codex --yolo resume") == true)
+  }
+
+  @Test("quit summary warns for thinking agent without persistence")
+  @MainActor
+  func quitSummaryWarnsForThinkingAgentWithoutPersistence() throws {
+    let state = makeState()
+    let thinkingTab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Claude Code",
+          command: "claude",
+          icon: "claude",
+          agentFamilyID: .claudeCode,
+          sandboxEnabled: true
+        ))
+    )
+    thinkingTab.agentActivityState = .thinking
+
+    #expect(
+      state.quitAgentSummary
+        == WorkspaceQuitAgentSummary(warningCount: 1, keepRunningCount: 0, thinkingCount: 1))
+  }
+
+  @Test("quit summary ignores idle persistent agents")
+  @MainActor
+  func quitSummaryIgnoresIdlePersistentAgents() throws {
+    let session = TerminalSessionReference(backendID: "test", sessionID: "idle-session")
+    let state = makeState()
+    let tab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex --yolo",
+          icon: "codex",
+          agentFamilyID: .codex,
+          sandboxEnabled: true,
+          keepRunningWhileThinking: true
+        ))
+    )
+    tab.terminalSession = session
+
+    #expect(state.quitAgentSummary == .empty)
+  }
+
+  @Test("quit summary counts thinking persistent agents")
+  @MainActor
+  func quitSummaryCountsThinkingPersistentAgents() throws {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    defer { restoreExperiment() }
+
+    let session = TerminalSessionReference(backendID: "test", sessionID: "thinking-session")
+    let state = makeState()
+    let tab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex --yolo",
+          icon: "codex",
+          agentFamilyID: .codex,
+          sandboxEnabled: true,
+          keepRunningWhileThinking: true
+        ))
+    )
+    tab.terminalSession = session
+    tab.agentActivityState = .thinking
+
+    #expect(
+      state.quitAgentSummary
+        == WorkspaceQuitAgentSummary(warningCount: 1, keepRunningCount: 1, thinkingCount: 1))
+  }
+
+  @Test("persistent terminal launch uses the terminal session backend")
+  @MainActor
+  func persistentTerminalLaunchUsesTerminalSessionBackend() throws {
+    let session = TerminalSessionReference(backendID: "test", sessionID: "launch-session")
+    WorkspaceState.terminalSessionReferenceProvider = { _ in
+      session
+    }
+    WorkspaceState.terminalSessionCommandBuilder = { session, command in
+      "attach \(session.sessionID): \(command)"
+    }
+    defer {
+      WorkspaceState.terminalSessionReferenceProvider = { tabID in
+        TerminalSessionBackends.reference(for: tabID)
+      }
+      WorkspaceState.terminalSessionCommandBuilder = { session, command in
+        TerminalSessionBackends.attachCommand(reference: session, createCommand: command)
+      }
+    }
+
+    let state = makeState()
+    let tab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex --yolo",
+          icon: "codex",
+          agentFamilyID: .codex,
+          sandboxEnabled: true,
+          resumeArgumentTemplate: "resume {{session_id}}",
+          keepRunningWhileThinking: true
+        ))
+    )
+
+    #expect(tab.terminalSession == session)
+    #expect(tab.launch.processSpec.args.last?.contains("attach launch-session:") == true)
+    #expect(tab.launch.processSpec.args.last?.contains("codex --yolo") == true)
+    #expect(tab.launch.processSpec.args.last?.contains("--remote") == false)
+  }
+
+  @Test("terminal sessions stop unless running persistence is preserved")
+  @MainActor
+  func terminalSessionsStopUnlessRunningAndPreserved() throws {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    defer { restoreExperiment() }
+
+    let session = TerminalSessionReference(backendID: "test", sessionID: "thinking")
+    let stoppedSessions = TerminalSessionStopRecorder()
+    WorkspaceState.terminalSessionStopper = { session in
+      stoppedSessions.append(session)
+    }
+    defer {
+      WorkspaceState.terminalSessionStopper = { session in
+        TerminalSessionBackends.stop(reference: session)
+      }
+    }
+
+    let state = makeState()
+    let thinkingTab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          agentFamilyID: .codex,
+          sandboxEnabled: true,
+          keepRunningWhileThinking: true
+        ))
+    )
+    thinkingTab.terminalSession = session
+    thinkingTab.agentActivityState = .thinking
+
+    let idleSession = TerminalSessionReference(backendID: "test", sessionID: "idle")
+    let idleTab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          agentFamilyID: .codex,
+          sandboxEnabled: true,
+          keepRunningWhileThinking: true
+        ))
+    )
+    idleTab.terminalSession = idleSession
+
+    let waitingSession = TerminalSessionReference(backendID: "test", sessionID: "waiting")
+    let waitingTab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          agentFamilyID: .codex,
+          sandboxEnabled: true,
+          keepRunningWhileThinking: true
+        ))
+    )
+    waitingTab.terminalSession = waitingSession
+    waitingTab.agentActivityState = .waitingForHuman
+
+    state.prepareTerminalSessionsForTermination(keepRunningAgentsAlive: true)
+    #expect(thinkingTab.terminalSession == session)
+    #expect(idleTab.terminalSession == nil)
+    #expect(waitingTab.terminalSession == nil)
+    #expect(stoppedSessions.sessions.map(\.sessionID).sorted() == ["idle", "waiting"])
+
+    state.prepareTerminalSessionsForTermination(keepRunningAgentsAlive: false)
+    #expect(thinkingTab.terminalSession == nil)
+    #expect(idleTab.terminalSession == nil)
+    #expect(waitingTab.terminalSession == nil)
+    #expect(stoppedSessions.sessions.map(\.sessionID).sorted() == ["idle", "thinking", "waiting"])
+
+    let regularState = makeState()
+    let closeSession = TerminalSessionReference(backendID: "test", sessionID: "close")
+    let closeTab = try #require(
+      regularState.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          agentFamilyID: .codex,
+          sandboxEnabled: true,
+          keepRunningWhileThinking: true
+        ))
+    )
+    closeTab.terminalSession = closeSession
+    regularState.closeTerminalTab(closeTab.id)
+    #expect(stoppedSessions.sessions.map(\.sessionID).contains(closeSession.sessionID))
+
+    let exitSession = TerminalSessionReference(backendID: "test", sessionID: "exit")
+    let exitTab = try #require(
+      regularState.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          agentFamilyID: .codex,
+          sandboxEnabled: true,
+          keepRunningWhileThinking: true
+        ))
+    )
+    exitTab.terminalSession = exitSession
+    regularState.handleTerminalExit(exitTab.id, exitBehavior: .keepOpen)
+    #expect(exitTab.terminalSession == nil)
+    #expect(stoppedSessions.sessions.map(\.sessionID).contains(exitSession.sessionID))
+  }
+
+  @Test("stopping thinking agent tabs preserves them for lazy restore")
+  @MainActor
+  func stoppingThinkingAgentTabsPreservesThemForLazyRestore() async throws {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(false)
+    defer { restoreExperiment() }
+
+    let session = TerminalSessionReference(backendID: "test", sessionID: "stopped-thinking")
+    let stoppedSessions = TerminalSessionStopRecorder()
+    WorkspaceState.terminalSessionReferenceProvider = { _ in
+      session
+    }
+    WorkspaceState.terminalSessionStopper = { session in
+      stoppedSessions.append(session)
+    }
+    WorkspaceState.commandStatusProvider = { commands in
+      Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
+    }
+    defer {
+      WorkspaceState.terminalSessionReferenceProvider = { tabID in
+        TerminalSessionBackends.reference(for: tabID)
+      }
+      WorkspaceState.terminalSessionStopper = { session in
+        TerminalSessionBackends.stop(reference: session)
+      }
+      WorkspaceState.commandStatusProvider = nil
+    }
+
+    let state = makeState()
+    let tab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex --yolo",
+          baseCommandDescription: "codex",
+          icon: "codex",
+          agentFamilyID: .codex,
+          sandboxEnabled: true,
+          yoloMode: true,
+          yoloFlag: "--yolo",
+          resumeArgumentTemplate: "resume {{session_id}}",
+          resumeSessionID: "44444444-4444-4444-4444-444444444444",
+          keepRunningWhileThinking: true
+        ))
+    )
+    tab.agentActivityState = .thinking
+
+    state.closeThinkingAgentTabs()
+
+    #expect(stoppedSessions.sessions == [session])
+    #expect(state.allTerminalTabs.isEmpty)
+
+    let snapshot = state.persistedWindowSnapshot
+    let persistedTabs = try #require(snapshot.terminalTabsByWorktreePath["/tmp/repo"])
+    let persistedTab = try #require(persistedTabs.first { $0.id == tab.id })
+    #expect(persistedTab.terminalSession == nil)
+    #expect(persistedTab.resumeSessionID == "44444444-4444-4444-4444-444444444444")
+    #expect(
+      persistedTab.resumeCommandDescription
+        == "codex --yolo resume '44444444-4444-4444-4444-444444444444'")
+
+    state.prepareSelectionLoading(for: "/tmp/repo")
+    #expect(await waitUntil { state.selectedTerminalTabs.contains { $0.id == tab.id } })
+
+    let restoredTab = try #require(state.selectedTerminalTabs.first { $0.id == tab.id })
+    #expect(restoredTab.resumeSessionID == "44444444-4444-4444-4444-444444444444")
+    #expect(
+      restoredTab.launch.processSpec.args.last?
+        .contains("codex --yolo resume '44444444-4444-4444-4444-444444444444'") == true)
+  }
+
+  @Test("preserved terminal sessions survive the view detach during quit")
+  @MainActor
+  func preservedTerminalSessionsSurviveViewDetachDuringQuit() throws {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    defer { restoreExperiment() }
+
+    let session = TerminalSessionReference(backendID: "test", sessionID: "thinking")
+    let stoppedSessions = TerminalSessionStopRecorder()
+    WorkspaceState.terminalSessionStopper = { session in
+      stoppedSessions.append(session)
+    }
+    defer {
+      WorkspaceState.terminalSessionStopper = { session in
+        TerminalSessionBackends.stop(reference: session)
+      }
+    }
+
+    let state = makeState()
+    let tab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          agentFamilyID: .codex,
+          sandboxEnabled: true,
+          keepRunningWhileThinking: true
+        ))
+    )
+    tab.terminalSession = session
+    tab.agentActivityState = .thinking
+
+    state.prepareTerminalSessionsForTermination(keepRunningAgentsAlive: true)
+    tab.isRunning = false
+    state.handleTerminalExit(tab.id, exitBehavior: .autoClose)
+
+    #expect(tab.terminalSession == session)
+    #expect(tab.isRunning)
+    #expect(state.allTerminalTabs.contains { $0 === tab })
+    #expect(stoppedSessions.sessions.isEmpty)
+
+    state.finishTerminalDetach()
+    state.handleTerminalExit(tab.id, exitBehavior: .keepOpen)
+    #expect(tab.terminalSession == nil)
+    #expect(stoppedSessions.sessions == [session])
+  }
+
+  @Test("persisted snapshots mark running terminal sessions for restore")
+  @MainActor
+  func persistedSnapshotsMarkRunningTerminalSessionsForRestore() throws {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    defer { restoreExperiment() }
+
+    WorkspaceState.terminalSessionReferenceProvider = { tabID in
+      TerminalSessionReference(
+        backendID: "test",
+        sessionID: "session-\(tabID.uuidString.lowercased())"
+      )
+    }
+    defer {
+      WorkspaceState.terminalSessionReferenceProvider = { tabID in
+        TerminalSessionBackends.reference(for: tabID)
+      }
+    }
+
+    let state = makeState()
+    let thinkingTab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          agentFamilyID: .codex,
+          sandboxEnabled: true,
+          keepRunningWhileThinking: true
+        ))
+    )
+    thinkingTab.agentActivityState = .thinking
+
+    let idleTab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          agentFamilyID: .codex,
+          sandboxEnabled: true,
+          keepRunningWhileThinking: true
+        ))
+    )
+
+    let snapshot = state.persistedWindowSnapshot
+    let tabs = try #require(snapshot.terminalTabsByWorktreePath["/tmp/repo"])
+    let persistedThinkingTab = try #require(tabs.first { $0.id == thinkingTab.id })
+    let persistedIdleTab = try #require(tabs.first { $0.id == idleTab.id })
+    let thinkingSession = try #require(persistedThinkingTab.terminalSession)
+    let idleSession = try #require(persistedIdleTab.terminalSession)
+
+    #expect(TerminalSessionBackends.wasPreservedForRestore(reference: thinkingSession))
+    #expect(!TerminalSessionBackends.wasPreservedForRestore(reference: idleSession))
+    #expect(persistedIdleTab.keepsRunningAfterQuit == true)
+  }
+
   @Test("persisted snapshots do not serialize resume templates per tab")
   @MainActor
   func persistedSnapshotsDoNotSerializeResumeTemplatesPerTab() throws {
@@ -1765,6 +2679,7 @@ struct WorkspaceStateTests {
     let json = String(decoding: data, as: UTF8.self)
 
     #expect(!json.contains("resumeArgumentTemplate"))
+    #expect(!json.contains("yoloFlag"))
   }
 
   @MainActor
@@ -1794,6 +2709,42 @@ struct WorkspaceStateTests {
     ]
     state.selectedWorktreePath = "/tmp/repo"
     return state
+  }
+
+  @MainActor
+  private func setExperimentalPersistentAgentTerminalsForTest(_ enabled: Bool) -> () -> Void {
+    let previous = UserDefaults.standard.object(
+      forKey: AgentTerminalPersistenceExperimentSettings.enabledStorageKey
+    )
+    UserDefaults.standard.set(
+      enabled,
+      forKey: AgentTerminalPersistenceExperimentSettings.enabledStorageKey
+    )
+    return {
+      if let previous {
+        UserDefaults.standard.set(
+          previous,
+          forKey: AgentTerminalPersistenceExperimentSettings.enabledStorageKey
+        )
+      } else {
+        UserDefaults.standard.removeObject(
+          forKey: AgentTerminalPersistenceExperimentSettings.enabledStorageKey
+        )
+      }
+    }
+  }
+
+  @MainActor
+  private func isolateAgentSessionRestoreMetadataStoreForTest() -> () -> Void {
+    let suiteName = "WorkspaceStateTests.agentSessionRestoreMetadata.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defaults.removePersistentDomain(forName: suiteName)
+    let previousDefaults = AgentSessionRestoreMetadataStore.userDefaults
+    AgentSessionRestoreMetadataStore.userDefaults = defaults
+    return {
+      AgentSessionRestoreMetadataStore.userDefaults = previousDefaults
+      defaults.removePersistentDomain(forName: suiteName)
+    }
   }
 
   @MainActor
@@ -1865,5 +2816,22 @@ struct WorkspaceStateTests {
     }
 
     return await condition()
+  }
+}
+
+final class TerminalSessionStopRecorder: @unchecked Sendable {
+  private let lock = NSLock()
+  private var storedSessions: [TerminalSessionReference] = []
+
+  var sessions: [TerminalSessionReference] {
+    lock.withLock {
+      storedSessions
+    }
+  }
+
+  func append(_ session: TerminalSessionReference) {
+    lock.withLock {
+      storedSessions.append(session)
+    }
   }
 }

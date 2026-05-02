@@ -535,6 +535,378 @@ struct WorkspaceWindowRegistryTests {
     #expect(openedTargets.isEmpty)
   }
 
+  @Test("workspace window close prompts for thinking agents")
+  @MainActor
+  func workspaceWindowClosePromptsForThinkingAgents() {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    defer { restoreExperiment() }
+
+    var promptedSummaries: [WorkspaceQuitAgentSummary] = []
+    let registry = WorkspaceWindowRegistry { summary, _ in
+      promptedSummaries.append(summary)
+      return .cancel
+    }
+    let target = makeTarget(selectedWorktreePath: "/tmp/repo-worktrees/feature-b")
+    let state = registry.workspaceState(for: target)
+    let window = NSWindow()
+    let session = TerminalSessionReference(backendID: "test", sessionID: "window-close")
+    let tab = makeAgentTab(
+      id: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
+      worktreePath: "/tmp/repo-worktrees/feature-b",
+      title: "Codex",
+      command: "codex --yolo",
+      sandboxed: true,
+      terminalSession: session,
+      keepsRunningAfterQuit: true
+    )
+    tab.agentActivityState = .thinking
+
+    state.selectedWorktreePath = "/tmp/repo-worktrees/feature-b"
+    state.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"] = [tab]
+
+    registry.register(window: window, workspaceState: state, repoRoot: target.repoRoot)
+
+    #expect(window.delegate?.windowShouldClose?(window) == false)
+    #expect(
+      promptedSummaries
+        == [WorkspaceQuitAgentSummary(warningCount: 1, keepRunningCount: 1, thinkingCount: 1)]
+    )
+    #expect(tab.terminalSession == session)
+  }
+
+  @Test("workspace window close does not prompt for idle persistent agents")
+  @MainActor
+  func workspaceWindowCloseDoesNotPromptForIdlePersistentAgents() {
+    var didPrompt = false
+    let registry = WorkspaceWindowRegistry { _, _ in
+      didPrompt = true
+      return .cancel
+    }
+    let target = makeTarget(selectedWorktreePath: "/tmp/repo-worktrees/feature-b")
+    let state = registry.workspaceState(for: target)
+    let window = NSWindow()
+    let session = TerminalSessionReference(backendID: "test", sessionID: "window-close")
+    let tab = makeAgentTab(
+      id: UUID(uuidString: "11111111-2222-3333-4444-555555555556")!,
+      worktreePath: "/tmp/repo-worktrees/feature-b",
+      title: "Codex",
+      command: "codex --yolo",
+      sandboxed: true,
+      terminalSession: session,
+      keepsRunningAfterQuit: true
+    )
+
+    state.selectedWorktreePath = "/tmp/repo-worktrees/feature-b"
+    state.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"] = [tab]
+
+    registry.register(window: window, workspaceState: state, repoRoot: target.repoRoot)
+
+    #expect(window.delegate?.windowShouldClose?(window) == true)
+    #expect(didPrompt == false)
+    #expect(tab.terminalSession == session)
+  }
+
+  @Test("workspace window close can stop thinking agents")
+  @MainActor
+  func workspaceWindowCloseCanStopThinkingAgents() throws {
+    let stoppedSessions = TerminalSessionStopRecorder()
+    WorkspaceState.terminalSessionStopper = { session in
+      stoppedSessions.append(session)
+    }
+    defer {
+      WorkspaceState.terminalSessionStopper = { session in
+        TerminalSessionBackends.stop(reference: session)
+      }
+    }
+
+    let registry = WorkspaceWindowRegistry { _, _ in .closeAndStopAgents }
+    let target = makeTarget(selectedWorktreePath: "/tmp/repo-worktrees/feature-b")
+    let state = registry.workspaceState(for: target)
+    let window = NSWindow()
+    let session = TerminalSessionReference(backendID: "test", sessionID: "window-stop")
+    let tab = makeAgentTab(
+      id: UUID(uuidString: "11111111-2222-3333-4444-555555555557")!,
+      worktreePath: "/tmp/repo-worktrees/feature-b",
+      title: "Codex",
+      command: "codex --yolo",
+      sandboxed: true,
+      agentFamilyID: .codex,
+      resumeArgumentTemplate: "resume {{session_id}}",
+      resumeSessionID: "55555555-5555-5555-5555-555555555555",
+      resumeCommandDescription: "codex --yolo resume '55555555-5555-5555-5555-555555555555'",
+      terminalSession: session,
+      keepsRunningAfterQuit: true
+    )
+    tab.agentActivityState = .thinking
+
+    state.selectedWorktreePath = "/tmp/repo-worktrees/feature-b"
+    state.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"] = [tab]
+
+    registry.register(window: window, workspaceState: state, repoRoot: target.repoRoot)
+
+    #expect(window.delegate?.windowShouldClose?(window) == true)
+    #expect(stoppedSessions.sessions == [session])
+    #expect(state.allTerminalTabs.contains { $0.id == tab.id } == false)
+
+    let snapshot = state.persistedWindowSnapshot
+    let persistedTabs = try #require(
+      snapshot.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"])
+    let persistedTab = try #require(persistedTabs.first { $0.id == tab.id })
+    #expect(persistedTab.terminalSession == nil)
+    #expect(persistedTab.resumeSessionID == "55555555-5555-5555-5555-555555555555")
+  }
+
+  @Test("workspace window close keeps persistent terminal sessions")
+  @MainActor
+  func workspaceWindowCloseKeepsPersistentTerminalSessions() {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    defer { restoreExperiment() }
+
+    let stoppedSessions = TerminalSessionStopRecorder()
+    WorkspaceState.terminalSessionStopper = { session in
+      stoppedSessions.append(session)
+    }
+    defer {
+      WorkspaceState.terminalSessionStopper = { session in
+        TerminalSessionBackends.stop(reference: session)
+      }
+    }
+
+    let registry = WorkspaceWindowRegistry()
+    let target = makeTarget(selectedWorktreePath: "/tmp/repo-worktrees/feature-b")
+    let state = registry.workspaceState(for: target)
+    let window = NSWindow()
+    let session = TerminalSessionReference(backendID: "test", sessionID: "window-close")
+    let tab = makeAgentTab(
+      id: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
+      worktreePath: "/tmp/repo-worktrees/feature-b",
+      title: "Codex",
+      command: "codex --yolo",
+      sandboxed: true,
+      terminalSession: session,
+      keepsRunningAfterQuit: true
+    )
+
+    state.selectedWorktreePath = "/tmp/repo-worktrees/feature-b"
+    state.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"] = [tab]
+
+    registry.register(window: window, workspaceState: state, repoRoot: target.repoRoot)
+    NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: window)
+
+    #expect(tab.terminalSession == session)
+    #expect(stoppedSessions.sessions.isEmpty)
+  }
+
+  @Test("app termination window close keeps persistent terminal sessions for restore")
+  @MainActor
+  func appTerminationWindowCloseKeepsPersistentTerminalSessionsForRestore() throws {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    defer { restoreExperiment() }
+
+    let suiteName = "WorkspaceWindowRegistryTests.appTerminationWindowClose"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defaults.removePersistentDomain(forName: suiteName)
+
+    let registry = WorkspaceWindowRegistry(userDefaults: defaults, storageKey: suiteName)
+    let target = makeTarget(selectedWorktreePath: "/tmp/repo-worktrees/feature-b")
+    let state = registry.workspaceState(for: target)
+    let window = NSWindow()
+    let session = TerminalSessionReference(backendID: "test", sessionID: "window-restore")
+    let tab = makeAgentTab(
+      id: UUID(uuidString: "22222222-3333-4444-5555-666666666666")!,
+      worktreePath: "/tmp/repo-worktrees/feature-b",
+      title: "Codex",
+      command: "codex --yolo",
+      sandboxed: true,
+      terminalSession: session,
+      keepsRunningAfterQuit: true
+    )
+    tab.agentActivityState = .thinking
+
+    state.selectedWorktreePath = "/tmp/repo-worktrees/feature-b"
+    state.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"] = [tab]
+
+    registry.register(window: window, workspaceState: state, repoRoot: target.repoRoot)
+    registry.prepareForAppTermination(keepRunningAgentsAlive: true)
+    NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: window)
+    registry.unregister(window: window, repoRoot: target.repoRoot)
+
+    let data = try #require(defaults.data(forKey: suiteName))
+    let snapshots = try JSONDecoder().decode([PersistedWorkspaceWindowSnapshot].self, from: data)
+    let snapshot = try #require(snapshots.first)
+    let tabs = try #require(snapshot.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"])
+    let persistedTab = try #require(tabs.first { $0.id == tab.id })
+    let persistedSession = try #require(persistedTab.terminalSession)
+
+    #expect(persistedSession.sessionID == session.sessionID)
+    #expect(TerminalSessionBackends.wasPreservedForRestore(reference: persistedSession))
+  }
+
+  @Test("app termination resumes idle persistent sessions without prompting")
+  @MainActor
+  func appTerminationResumesIdlePersistentSessionsWithoutPrompt() throws {
+    let stoppedSessions = TerminalSessionStopRecorder()
+    WorkspaceState.terminalSessionStopper = { session in
+      stoppedSessions.append(session)
+    }
+    defer {
+      WorkspaceState.terminalSessionStopper = { session in
+        TerminalSessionBackends.stop(reference: session)
+      }
+    }
+
+    let suiteName = "WorkspaceWindowRegistryTests.idlePersistentAppTermination"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defaults.removePersistentDomain(forName: suiteName)
+
+    let registry = WorkspaceWindowRegistry(userDefaults: defaults, storageKey: suiteName)
+    let target = makeTarget(selectedWorktreePath: "/tmp/repo-worktrees/feature-b")
+    let state = registry.workspaceState(for: target)
+    let window = NSWindow()
+    let session = TerminalSessionReference(backendID: "test", sessionID: "idle-app-quit")
+    let tab = makeAgentTab(
+      id: UUID(uuidString: "22222222-3333-4444-5555-666666666667")!,
+      worktreePath: "/tmp/repo-worktrees/feature-b",
+      title: "Codex",
+      command: "codex --yolo",
+      sandboxed: true,
+      terminalSession: session,
+      keepsRunningAfterQuit: true
+    )
+
+    state.selectedWorktreePath = "/tmp/repo-worktrees/feature-b"
+    state.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"] = [tab]
+    registry.register(window: window, workspaceState: state, repoRoot: target.repoRoot)
+
+    #expect(registry.quitAgentSummary == .empty)
+    #expect(
+      ArgonTerminationCoordinator.shared.applicationShouldTerminate(NSApplication.shared)
+        == .terminateNow)
+    #expect(stoppedSessions.sessions == [session])
+    #expect(tab.terminalSession == nil)
+
+    let data = try #require(defaults.data(forKey: suiteName))
+    let snapshots = try JSONDecoder().decode([PersistedWorkspaceWindowSnapshot].self, from: data)
+    let snapshot = try #require(snapshots.first)
+    let tabs = try #require(snapshot.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"])
+    let persistedTab = try #require(tabs.first { $0.id == tab.id })
+
+    #expect(persistedTab.terminalSession == nil)
+    #expect(persistedTab.keepsRunningAfterQuit)
+  }
+
+  @Test("app termination preserves hidden persistent workspace sessions")
+  @MainActor
+  func appTerminationPreservesHiddenPersistentWorkspaceSessions() async throws {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    defer { restoreExperiment() }
+
+    let suiteName = "WorkspaceWindowRegistryTests.hiddenPersistentTermination"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defaults.removePersistentDomain(forName: suiteName)
+    let registry = WorkspaceWindowRegistry(
+      userDefaults: defaults,
+      storageKey: suiteName,
+      unregisterPersistenceDelay: .milliseconds(10)
+    )
+    let target = makeTarget(selectedWorktreePath: "/tmp/repo-worktrees/feature-b")
+    let state = registry.workspaceState(for: target)
+    let window = NSWindow()
+    let session = TerminalSessionReference(backendID: "test", sessionID: "hidden-restore")
+    let tab = makeAgentTab(
+      id: UUID(uuidString: "33333333-4444-5555-6666-777777777777")!,
+      worktreePath: "/tmp/repo-worktrees/feature-b",
+      title: "Codex",
+      command: "codex --yolo",
+      sandboxed: true,
+      terminalSession: session,
+      keepsRunningAfterQuit: true
+    )
+    tab.agentActivityState = .thinking
+
+    state.selectedWorktreePath = "/tmp/repo-worktrees/feature-b"
+    state.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"] = [tab]
+
+    registry.register(window: window, workspaceState: state, repoRoot: target.repoRoot)
+    NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: window)
+    registry.unregister(window: window, repoRoot: target.repoRoot)
+    try? await Task.sleep(for: .milliseconds(30))
+
+    registry.prepareForAppTermination(keepRunningAgentsAlive: true)
+
+    let data = try #require(defaults.data(forKey: suiteName))
+    let snapshots = try JSONDecoder().decode([PersistedWorkspaceWindowSnapshot].self, from: data)
+    let snapshot = try #require(snapshots.first)
+    let tabs = try #require(snapshot.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"])
+    let persistedTab = try #require(tabs.first { $0.id == tab.id })
+    let persistedSession = try #require(persistedTab.terminalSession)
+
+    #expect(persistedSession.sessionID == session.sessionID)
+    #expect(TerminalSessionBackends.wasPreservedForRestore(reference: persistedSession))
+  }
+
+  @Test("app termination preserves hidden stopped agents for restore")
+  @MainActor
+  func appTerminationPreservesHiddenStoppedAgentsForRestore() async throws {
+    let suiteName = "WorkspaceWindowRegistryTests.hiddenStoppedTermination"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defaults.removePersistentDomain(forName: suiteName)
+    let stoppedSessions = TerminalSessionStopRecorder()
+    WorkspaceState.terminalSessionStopper = { session in
+      stoppedSessions.append(session)
+    }
+    defer {
+      WorkspaceState.terminalSessionStopper = { session in
+        TerminalSessionBackends.stop(reference: session)
+      }
+      defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    let registry = WorkspaceWindowRegistry(
+      userDefaults: defaults,
+      storageKey: suiteName,
+      unregisterPersistenceDelay: .milliseconds(10)
+    )
+    let target = makeTarget(selectedWorktreePath: "/tmp/repo-worktrees/feature-b")
+    let state = registry.workspaceState(for: target)
+    let window = NSWindow()
+    let session = TerminalSessionReference(backendID: "test", sessionID: "hidden-stopped")
+    let tab = makeAgentTab(
+      id: UUID(uuidString: "33333333-4444-5555-6666-777777777778")!,
+      worktreePath: "/tmp/repo-worktrees/feature-b",
+      title: "Codex",
+      command: "codex --yolo",
+      sandboxed: true,
+      agentFamilyID: .codex,
+      resumeArgumentTemplate: "resume {{session_id}}",
+      resumeSessionID: "66666666-6666-6666-6666-666666666666",
+      resumeCommandDescription: "codex --yolo resume '66666666-6666-6666-6666-666666666666'",
+      terminalSession: session,
+      keepsRunningAfterQuit: true
+    )
+    tab.agentActivityState = .thinking
+
+    state.selectedWorktreePath = "/tmp/repo-worktrees/feature-b"
+    state.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"] = [tab]
+
+    registry.register(window: window, workspaceState: state, repoRoot: target.repoRoot)
+    NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: window)
+    registry.unregister(window: window, repoRoot: target.repoRoot)
+
+    registry.closeThinkingAgentTabs()
+    registry.prepareForAppTermination(keepRunningAgentsAlive: false)
+
+    let data = try #require(defaults.data(forKey: suiteName))
+    let snapshots = try JSONDecoder().decode([PersistedWorkspaceWindowSnapshot].self, from: data)
+    let snapshot = try #require(snapshots.first)
+    let tabs = try #require(snapshot.terminalTabsByWorktreePath["/tmp/repo-worktrees/feature-b"])
+    let persistedTab = try #require(tabs.first { $0.id == tab.id })
+
+    #expect(stoppedSessions.sessions == [session])
+    #expect(persistedTab.terminalSession == nil)
+    #expect(persistedTab.resumeSessionID == "66666666-6666-6666-6666-666666666666")
+  }
+
   @Test("app termination preserves cold-restore snapshots even after windows unregister")
   @MainActor
   func appTerminationPreservesColdRestoreSnapshotsEvenAfterWindowsUnregister() async {
@@ -675,7 +1047,13 @@ struct WorkspaceWindowRegistryTests {
     title: String,
     command: String,
     sandboxed: Bool,
-    isRestorableAfterRelaunch: Bool = true
+    isRestorableAfterRelaunch: Bool = true,
+    agentFamilyID: AgentFamilyID? = nil,
+    resumeArgumentTemplate: String = "",
+    resumeSessionID: String? = nil,
+    resumeCommandDescription: String? = nil,
+    terminalSession: TerminalSessionReference? = nil,
+    keepsRunningAfterQuit: Bool = false
   ) -> WorkspaceTerminalTab {
     WorkspaceTerminalTab(
       id: id,
@@ -684,13 +1062,42 @@ struct WorkspaceWindowRegistryTests {
       title: title,
       commandDescription: command,
       kind: .agent(profileName: "Codex", icon: "codex"),
+      agentFamilyID: agentFamilyID,
       launch: sandboxed
         ? .sandboxedCommand(command, currentDirectory: worktreePath, writableRoots: [worktreePath])
         : .command(command, currentDirectory: worktreePath),
       isSandboxed: sandboxed,
       writableRoots: sandboxed ? [worktreePath] : [],
-      isRestorableAfterRelaunch: isRestorableAfterRelaunch
+      isRestorableAfterRelaunch: isRestorableAfterRelaunch,
+      resumeArgumentTemplate: resumeArgumentTemplate,
+      keepsRunningAfterQuit: keepsRunningAfterQuit,
+      terminalSession: terminalSession,
+      resumeSessionID: resumeSessionID,
+      resumeCommandDescription: resumeCommandDescription
     )
+  }
+
+  @MainActor
+  private func setExperimentalPersistentAgentTerminalsForTest(_ enabled: Bool) -> () -> Void {
+    let previous = UserDefaults.standard.object(
+      forKey: AgentTerminalPersistenceExperimentSettings.enabledStorageKey
+    )
+    UserDefaults.standard.set(
+      enabled,
+      forKey: AgentTerminalPersistenceExperimentSettings.enabledStorageKey
+    )
+    return {
+      if let previous {
+        UserDefaults.standard.set(
+          previous,
+          forKey: AgentTerminalPersistenceExperimentSettings.enabledStorageKey
+        )
+      } else {
+        UserDefaults.standard.removeObject(
+          forKey: AgentTerminalPersistenceExperimentSettings.enabledStorageKey
+        )
+      }
+    }
   }
 
   private func waitUntil(

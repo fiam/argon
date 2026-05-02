@@ -270,7 +270,7 @@ else
 fi
 
 APP_EXECUTABLE_PATH="$APP_PATH/Contents/MacOS/Argon"
-BUNDLED_CLI_PATH="$APP_PATH/Contents/Resources/bin/argon"
+BUNDLED_CLI_PATH="$APP_PATH/Contents/Helpers/argon"
 
 if [[ ! -d "$APP_PATH" ]]; then
   echo "expected app not found at $APP_PATH" >&2

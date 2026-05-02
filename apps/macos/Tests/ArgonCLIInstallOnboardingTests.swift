@@ -9,7 +9,7 @@ struct ArgonCLIInstallOnboardingTests {
   func currentOnboardingIsShownForAMissingLink() {
     let status = ArgonCLIInstallLinkStatus(
       linkPath: "/usr/local/bin/argon",
-      expectedTargetPath: "/Applications/Argon.app/Contents/Resources/bin/argon",
+      expectedTargetPath: "/Applications/Argon.app/Contents/Helpers/argon",
       state: .missing
     )
 
@@ -27,7 +27,7 @@ struct ArgonCLIInstallOnboardingTests {
 
   @Test("current onboarding is hidden after dismissing the same bundle target")
   func currentOnboardingIsHiddenAfterDismissingTheSameBundleTarget() {
-    let targetPath = "/Applications/Argon.app/Contents/Resources/bin/argon"
+    let targetPath = "/Applications/Argon.app/Contents/Helpers/argon"
     let status = ArgonCLIInstallLinkStatus(
       linkPath: "/usr/local/bin/argon",
       expectedTargetPath: targetPath,
@@ -46,13 +46,13 @@ struct ArgonCLIInstallOnboardingTests {
   func currentOnboardingReappearsWhenTheBundledTargetChanges() {
     let status = ArgonCLIInstallLinkStatus(
       linkPath: "/usr/local/bin/argon",
-      expectedTargetPath: "/Applications/Argon 2.app/Contents/Resources/bin/argon",
-      state: .pointsElsewhere(currentTarget: "/Applications/Argon.app/Contents/Resources/bin/argon")
+      expectedTargetPath: "/Applications/Argon 2.app/Contents/Helpers/argon",
+      state: .pointsElsewhere(currentTarget: "/Applications/Argon.app/Contents/Helpers/argon")
     )
 
     let onboarding = ArgonCLIInstallOnboarding.current(
       status: status,
-      dismissedTargetPath: "/Applications/Argon.app/Contents/Resources/bin/argon"
+      dismissedTargetPath: "/Applications/Argon.app/Contents/Helpers/argon"
     )
 
     #expect(onboarding?.title == "Repair Argon Command Line Tool")
@@ -66,7 +66,7 @@ struct ArgonCLIInstallOnboardingTests {
   func currentOnboardingIsOmittedForHealthyOrUnavailableStates() {
     let installedStatus = ArgonCLIInstallLinkStatus(
       linkPath: "/usr/local/bin/argon",
-      expectedTargetPath: "/Applications/Argon.app/Contents/Resources/bin/argon",
+      expectedTargetPath: "/Applications/Argon.app/Contents/Helpers/argon",
       state: .installed
     )
     let unavailableStatus = ArgonCLIInstallLinkStatus(

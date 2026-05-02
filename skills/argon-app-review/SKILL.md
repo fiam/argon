@@ -11,7 +11,7 @@ Argon native review app.
 ## Preconditions
 
 - Run inside a Git repository.
-- Ensure the `argon` CLI is available (bundled in `Argon.app/Contents/Resources/bin/argon` or on PATH).
+- Ensure the `argon` CLI is available (bundled in `Argon.app/Contents/Helpers/argon` or on PATH).
 
 ## Resolve the CLI
 

@@ -30,11 +30,11 @@ struct SavedAgentProfilesTests {
       name: "Codex",
       command: "codex",
       icon: "codex",
-      yoloFlag: "--full-auto"
+      yoloFlag: "--yolo"
     )
 
     #expect(profile.fullCommand(yolo: false, sandboxed: true) == "codex")
-    #expect(profile.fullCommand(yolo: true, sandboxed: true) == "codex --full-auto")
+    #expect(profile.fullCommand(yolo: true, sandboxed: true) == "codex --yolo")
   }
 
   @Test("prompt templates can place the prompt before trailing flags")
@@ -77,10 +77,10 @@ struct SavedAgentProfilesTests {
   func resumeTemplatesRenderWithOptionalSessionPlaceholders() {
     #expect(
       renderAgentResumeCommand(
-        baseCommand: "codex --full-auto",
+        baseCommand: "codex --yolo",
         resumeArgumentTemplate: "resume {{session_id}}",
         sessionID: "019da1c2-0e69-7c83-9f67-34c26af5fe33"
-      ) == "codex --full-auto resume '019da1c2-0e69-7c83-9f67-34c26af5fe33'"
+      ) == "codex --yolo resume '019da1c2-0e69-7c83-9f67-34c26af5fe33'"
     )
     #expect(
       renderAgentResumeCommand(
@@ -100,7 +100,7 @@ struct SavedAgentProfilesTests {
 
   @Test("command executable names strip paths and preserve quoted argv0")
   func commandExecutableNamesUseArgvZero() {
-    #expect(commandExecutableName(from: "codex --full-auto") == "codex")
+    #expect(commandExecutableName(from: "codex --yolo") == "codex")
     #expect(commandExecutableName(from: "/opt/tools/claude --print") == "claude")
     #expect(commandExecutableName(from: "'/Applications/My Tool/bin/agent' --json") == "agent")
     #expect(commandExecutableToken(from: "/opt/tools/claude --print") == "/opt/tools/claude")
@@ -122,9 +122,9 @@ struct SavedAgentProfilesTests {
     #expect(AgentHarnesses.displayVersion(for: .gemini, rawOutput: "0.38.2") == "0.38.2")
   }
 
-  @Test("stale builtin Codex auto-approve flag migrates")
+  @Test("stale builtin Codex full-auto flag migrates")
   @MainActor
-  func staleBuiltinCodexAutoApproveFlagMigrates() {
+  func staleBuiltinCodexFullAutoFlagMigrates() {
     let suiteName = "SavedAgentProfilesTests.migrate.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suiteName)!
     defaults.removePersistentDomain(forName: suiteName)
@@ -136,7 +136,7 @@ struct SavedAgentProfilesTests {
         name: "Codex",
         command: "codex",
         icon: "codex",
-        yoloFlag: "--yolo",
+        yoloFlag: "--full-auto",
         resumeArgumentTemplate: "resume {{session_id}}"
       )
     ]
@@ -145,7 +145,79 @@ struct SavedAgentProfilesTests {
 
     let profiles = SavedAgentProfiles(userDefaults: defaults, storageKey: suiteName)
 
-    #expect(profiles.profiles.first?.yoloFlag == "--full-auto")
+    #expect(profiles.profiles.first?.yoloFlag == "--yolo")
+  }
+
+  @Test("saved builtins use harness defaults but keep user settings")
+  @MainActor
+  func savedBuiltinsUseHarnessDefaultsButKeepUserSettings() {
+    let suiteName = "SavedAgentProfilesTests.defaults.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defaults.removePersistentDomain(forName: suiteName)
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    let staleProfiles = [
+      SavedAgentProfile(
+        id: "codex",
+        familyID: .codex,
+        name: "Edited Codex",
+        command: "codex-nightly",
+        icon: "agent",
+        isEnabled: false,
+        yoloFlag: "--full-auto",
+        promptArgumentTemplate: "--prompt {{prompt}}",
+        resumeArgumentTemplate: "--resume latest"
+      )
+    ]
+    let data = try! JSONEncoder().encode(staleProfiles)
+    defaults.set(data, forKey: suiteName)
+
+    let profiles = SavedAgentProfiles(userDefaults: defaults, storageKey: suiteName)
+    let codex = profiles.profiles.first { $0.familyID == .codex }
+
+    #expect(codex?.id == "codex")
+    #expect(codex?.name == "Codex")
+    #expect(codex?.command == "codex")
+    #expect(codex?.icon == "codex")
+    #expect(codex?.isEnabled == false)
+    #expect(codex?.yoloFlag == "--yolo")
+    #expect(codex?.promptArgumentTemplate == "")
+    #expect(codex?.resumeArgumentTemplate == "resume {{session_id}}")
+  }
+
+  @Test("legacy profile terminal persistence settings are ignored")
+  @MainActor
+  func legacyProfileTerminalPersistenceSettingsAreIgnored() throws {
+    let suiteName = "SavedAgentProfilesTests.keepalive.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defaults.removePersistentDomain(forName: suiteName)
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    let legacyJSON = """
+      [
+        {
+          "id": "codex",
+          "familyID": "codex",
+          "name": "Edited Codex",
+          "command": "codex-nightly",
+          "icon": "agent",
+          "isEnabled": true,
+          "yoloFlag": "--full-auto",
+          "promptArgumentTemplate": "--prompt {{prompt}}",
+          "resumeArgumentTemplate": "--resume latest",
+          "keepRunningWhileThinking": true
+        }
+      ]
+      """
+    defaults.set(Data(legacyJSON.utf8), forKey: suiteName)
+
+    let profiles = SavedAgentProfiles(userDefaults: defaults, storageKey: suiteName)
+    let codex = try #require(profiles.profiles.first { $0.familyID == .codex })
+    let savedData = try #require(defaults.data(forKey: suiteName))
+    let savedJSON = String(decoding: savedData, as: UTF8.self)
+
+    #expect(codex.command == "codex")
+    #expect(!savedJSON.contains("\"keepRunningWhileThinking\""))
   }
 
   @Test("older saved builtins infer family and enabled state")
@@ -176,7 +248,7 @@ struct SavedAgentProfilesTests {
 
     #expect(codex?.familyID == .codex)
     #expect(codex?.isEnabled == true)
-    #expect(codex?.yoloFlag == "--full-auto")
+    #expect(codex?.yoloFlag == "--yolo")
   }
 
   @Test("missing builtins are restored disabled")

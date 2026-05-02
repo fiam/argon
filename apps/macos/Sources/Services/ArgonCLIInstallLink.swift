@@ -44,7 +44,7 @@ struct ArgonCLIInstallLinkStatus: Equatable, Sendable {
       return "Argon’s command line tool needs to be fixed. \(usage)"
     case .bundledCLIUnavailable:
       return
-        "This app bundle does not include `Resources/bin/argon`, so Argon cannot install the link."
+        "This app bundle does not include `Contents/Helpers/argon`, so Argon cannot install the link."
     }
   }
 

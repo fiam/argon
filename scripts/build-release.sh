@@ -44,10 +44,11 @@ if [[ -z "$APP_PATH" ]]; then
     exit 1
 fi
 
-# 6. Bundle the CLI binary inside the app
-echo "==> Bundling CLI into app..."
-mkdir -p "$APP_PATH/Contents/Resources/bin"
-cp "$REPO_ROOT/target/release/argon" "$APP_PATH/Contents/Resources/bin/argon"
+# 6. Verify the CLI binary bundled by the Xcode build phase.
+if [[ ! -x "$APP_PATH/Contents/Helpers/argon" ]]; then
+    echo "error: bundled argon CLI not found at $APP_PATH/Contents/Helpers/argon" >&2
+    exit 1
+fi
 
 # 7. Copy to build output
 mkdir -p "$BUILD_DIR"

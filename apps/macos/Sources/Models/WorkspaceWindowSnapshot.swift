@@ -91,11 +91,16 @@ struct PersistedWorkspaceTerminalTab: Codable, Equatable {
   let worktreeLabel: String
   let title: String
   let commandDescription: String
+  let baseCommandDescription: String
   let kind: PersistedWorkspaceTerminalTabKind
+  let agentFamilyID: AgentFamilyID?
   let createdAt: Date
   let isSandboxed: Bool
+  let yoloMode: Bool
   let writableRoots: [String]
   let resumeArgumentTemplate: String
+  let keepsRunningAfterQuit: Bool
+  let terminalSession: TerminalSessionReference?
   let resumeSessionID: String?
   let resumeCommandDescription: String?
 
@@ -105,11 +110,16 @@ struct PersistedWorkspaceTerminalTab: Codable, Equatable {
     case worktreeLabel
     case title
     case commandDescription
+    case baseCommandDescription
     case kind
+    case agentFamilyID
     case createdAt
     case isSandboxed
+    case yoloMode
     case writableRoots
     case resumeArgumentTemplate
+    case keepsRunningAfterQuit
+    case terminalSession
     case resumeSessionID
     case resumeCommandDescription
   }
@@ -120,11 +130,16 @@ struct PersistedWorkspaceTerminalTab: Codable, Equatable {
     worktreeLabel: String,
     title: String,
     commandDescription: String,
+    baseCommandDescription: String? = nil,
     kind: PersistedWorkspaceTerminalTabKind,
+    agentFamilyID: AgentFamilyID? = nil,
     createdAt: Date,
     isSandboxed: Bool,
+    yoloMode: Bool = false,
     writableRoots: [String],
     resumeArgumentTemplate: String = "",
+    keepsRunningAfterQuit: Bool = false,
+    terminalSession: TerminalSessionReference? = nil,
     resumeSessionID: String? = nil,
     resumeCommandDescription: String? = nil
   ) {
@@ -133,11 +148,16 @@ struct PersistedWorkspaceTerminalTab: Codable, Equatable {
     self.worktreeLabel = worktreeLabel
     self.title = title
     self.commandDescription = commandDescription
+    self.baseCommandDescription = baseCommandDescription ?? commandDescription
     self.kind = kind
+    self.agentFamilyID = agentFamilyID
     self.createdAt = createdAt
     self.isSandboxed = isSandboxed
+    self.yoloMode = yoloMode
     self.writableRoots = writableRoots
     self.resumeArgumentTemplate = resumeArgumentTemplate
+    self.keepsRunningAfterQuit = keepsRunningAfterQuit
+    self.terminalSession = terminalSession
     self.resumeSessionID = resumeSessionID
     self.resumeCommandDescription = resumeCommandDescription
   }
@@ -149,12 +169,23 @@ struct PersistedWorkspaceTerminalTab: Codable, Equatable {
     worktreeLabel = try container.decode(String.self, forKey: .worktreeLabel)
     title = try container.decode(String.self, forKey: .title)
     commandDescription = try container.decode(String.self, forKey: .commandDescription)
+    baseCommandDescription =
+      try container.decodeIfPresent(String.self, forKey: .baseCommandDescription)
+      ?? commandDescription
     kind = try container.decode(PersistedWorkspaceTerminalTabKind.self, forKey: .kind)
+    agentFamilyID = try container.decodeIfPresent(AgentFamilyID.self, forKey: .agentFamilyID)
     createdAt = try container.decode(Date.self, forKey: .createdAt)
     isSandboxed = try container.decode(Bool.self, forKey: .isSandboxed)
+    yoloMode = try container.decodeIfPresent(Bool.self, forKey: .yoloMode) ?? false
     writableRoots = try container.decode([String].self, forKey: .writableRoots)
     resumeArgumentTemplate =
       try container.decodeIfPresent(String.self, forKey: .resumeArgumentTemplate) ?? ""
+    keepsRunningAfterQuit =
+      try container.decodeIfPresent(Bool.self, forKey: .keepsRunningAfterQuit) ?? false
+    terminalSession = try container.decodeIfPresent(
+      TerminalSessionReference.self,
+      forKey: .terminalSession
+    )
     resumeSessionID = try container.decodeIfPresent(String.self, forKey: .resumeSessionID)
     resumeCommandDescription = try container.decodeIfPresent(
       String.self,
@@ -169,12 +200,17 @@ struct PersistedWorkspaceTerminalTab: Codable, Equatable {
     try container.encode(worktreeLabel, forKey: .worktreeLabel)
     try container.encode(title, forKey: .title)
     try container.encode(commandDescription, forKey: .commandDescription)
+    try container.encode(baseCommandDescription, forKey: .baseCommandDescription)
     try container.encode(kind, forKey: .kind)
+    try container.encodeIfPresent(agentFamilyID, forKey: .agentFamilyID)
     try container.encode(createdAt, forKey: .createdAt)
     try container.encode(isSandboxed, forKey: .isSandboxed)
+    try container.encode(yoloMode, forKey: .yoloMode)
     try container.encode(writableRoots, forKey: .writableRoots)
     // Resume templates are derived from the saved agent profile/command at restore time.
     // Avoid persisting template strings into each tab snapshot.
+    try container.encode(keepsRunningAfterQuit, forKey: .keepsRunningAfterQuit)
+    try container.encodeIfPresent(terminalSession, forKey: .terminalSession)
     try container.encodeIfPresent(resumeSessionID, forKey: .resumeSessionID)
     try container.encodeIfPresent(resumeCommandDescription, forKey: .resumeCommandDescription)
   }

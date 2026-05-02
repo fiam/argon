@@ -84,7 +84,7 @@ enum AgentDetector {
         AgentProfile(
           id: "codex-yolo",
           name: "Codex (YOLO)",
-          command: "codex --full-auto",
+          command: "codex --yolo",
           icon: "terminal.fill",
           isDetected: true,
           promptArgumentTemplate: ""

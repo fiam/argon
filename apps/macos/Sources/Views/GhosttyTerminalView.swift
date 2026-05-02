@@ -6,6 +6,19 @@ private struct UnsafeRawPointerBox: @unchecked Sendable {
   let value: UnsafeMutableRawPointer?
 }
 
+extension NSScreen {
+  fileprivate var argonGhosttyDisplayID: UInt32 {
+    let key = NSDeviceDescriptionKey("NSScreenNumber")
+    if let displayID = deviceDescription[key] as? UInt32 {
+      return displayID
+    }
+    if let displayID = deviceDescription[key] as? NSNumber {
+      return displayID.uint32Value
+    }
+    return 0
+  }
+}
+
 private final class WeakGhosttyHostBox {
   weak var host: GhosttyTerminalHostView?
 
@@ -317,6 +330,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
     nsView.updateAttentionHandler(onAttention)
     nsView.updateTitleChangeHandler(onTitleChange)
     nsView.updateFocusRequestID(focusRequestID)
+    nsView.refreshRenderingSoon()
   }
 
   static func dismantleNSView(_ nsView: GhosttyTerminalHostView, coordinator: ()) {
@@ -401,8 +415,11 @@ final class GhosttyTerminalHostView: NSView {
   private var appDidResignActiveObserver: NSObjectProtocol?
   private var windowDidBecomeKeyObserver: NSObjectProtocol?
   private var windowDidResignKeyObserver: NSObjectProtocol?
+  private var windowDidChangeOcclusionStateObserver: NSObjectProtocol?
+  private var windowDidChangeScreenObserver: NSObjectProtocol?
   private weak var observedWindow: NSWindow?
   private var cellSize = NSSize(width: 8, height: 16)
+  private var renderingRefreshTask: Task<Void, Never>?
 
   private lazy var messageLabel: NSTextField = {
     let label = NSTextField(labelWithString: "")
@@ -457,13 +474,15 @@ final class GhosttyTerminalHostView: NSView {
 
     processPollTimer?.invalidate()
     processPollTimer = nil
+    renderingRefreshTask?.cancel()
+    renderingRefreshTask = nil
 
     if let eventMonitor {
       NSEvent.removeMonitor(eventMonitor)
       self.eventMonitor = nil
     }
 
-    removeWindowFocusObservers()
+    removeWindowStateObservers()
     removeApplicationFocusObservers()
 
     if let surface {
@@ -485,6 +504,7 @@ final class GhosttyTerminalHostView: NSView {
       removeFromSuperview()
       superview.layoutSubtreeIfNeeded()
     }
+    refreshRenderingSoon()
   }
 
   func prepareForDetachment() {
@@ -517,6 +537,22 @@ final class GhosttyTerminalHostView: NSView {
   func updateFocusRequestID(_ focusRequestID: UUID?) {
     pendingFocusRequestID = focusRequestID
     applyPendingFocusRequestIfNeeded()
+  }
+
+  func refreshRenderingSoon() {
+    guard renderingRefreshTask == nil else { return }
+
+    renderingRefreshTask = Task { @MainActor [weak self] in
+      defer { self?.renderingRefreshTask = nil }
+
+      self?.refreshRenderingNow()
+      try? await Task.sleep(for: .milliseconds(50))
+      self?.refreshRenderingNow()
+      try? await Task.sleep(for: .milliseconds(150))
+      self?.refreshRenderingNow()
+      try? await Task.sleep(for: .milliseconds(300))
+      self?.refreshRenderingNow()
+    }
   }
 
   func injectText(_ characters: String) {
@@ -575,19 +611,20 @@ final class GhosttyTerminalHostView: NSView {
   override func layout() {
     super.layout()
     updateSurfaceMetrics()
+    refreshRenderingNow()
   }
 
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
-    updateWindowFocusObservers()
-    updateSurfaceMetrics()
-    syncEmbeddedFocusState()
+    updateWindowStateObservers()
+    syncEmbeddedWindowState()
     applyPendingFocusRequestIfNeeded()
+    refreshRenderingSoon()
   }
 
   override func viewDidChangeBackingProperties() {
     super.viewDidChangeBackingProperties()
-    updateSurfaceMetrics()
+    syncEmbeddedWindowState()
   }
 
   override func updateTrackingAreas() {
@@ -878,8 +915,8 @@ final class GhosttyTerminalHostView: NSView {
 
     startProcessPollTimer()
     updateTrackingAreas()
-    updateSurfaceMetrics()
-    syncEmbeddedFocusState()
+    syncEmbeddedWindowState()
+    refreshRenderingSoon()
   }
 
   private func installApplicationFocusObservers() {
@@ -890,7 +927,7 @@ final class GhosttyTerminalHostView: NSView {
       queue: .main
     ) { [weak self] _ in
       MainActor.assumeIsolated {
-        self?.syncEmbeddedFocusState()
+        self?.syncEmbeddedWindowState()
       }
     }
     appDidResignActiveObserver = center.addObserver(
@@ -899,7 +936,7 @@ final class GhosttyTerminalHostView: NSView {
       queue: .main
     ) { [weak self] _ in
       MainActor.assumeIsolated {
-        self?.syncEmbeddedFocusState()
+        self?.syncEmbeddedWindowState()
       }
     }
   }
@@ -916,9 +953,9 @@ final class GhosttyTerminalHostView: NSView {
     }
   }
 
-  private func updateWindowFocusObservers() {
+  private func updateWindowStateObservers() {
     guard observedWindow !== window else { return }
-    removeWindowFocusObservers()
+    removeWindowStateObservers()
 
     guard let window else { return }
     observedWindow = window
@@ -930,7 +967,7 @@ final class GhosttyTerminalHostView: NSView {
       queue: .main
     ) { [weak self] _ in
       MainActor.assumeIsolated {
-        self?.syncEmbeddedFocusState()
+        self?.syncEmbeddedWindowState()
       }
     }
     windowDidResignKeyObserver = center.addObserver(
@@ -939,12 +976,34 @@ final class GhosttyTerminalHostView: NSView {
       queue: .main
     ) { [weak self] _ in
       MainActor.assumeIsolated {
-        self?.syncEmbeddedFocusState()
+        self?.syncEmbeddedWindowState()
       }
     }
+    windowDidChangeOcclusionStateObserver = center.addObserver(
+      forName: NSWindow.didChangeOcclusionStateNotification,
+      object: window,
+      queue: .main
+    ) { [weak self] _ in
+      MainActor.assumeIsolated {
+        self?.syncEmbeddedWindowState()
+        self?.refreshRenderingSoon()
+      }
+    }
+    windowDidChangeScreenObserver = center.addObserver(
+      forName: NSWindow.didChangeScreenNotification,
+      object: window,
+      queue: .main
+    ) { [weak self] _ in
+      MainActor.assumeIsolated {
+        self?.syncEmbeddedWindowState()
+        self?.refreshRenderingSoon()
+      }
+    }
+
+    syncEmbeddedWindowState()
   }
 
-  private func removeWindowFocusObservers() {
+  private func removeWindowStateObservers() {
     let center = NotificationCenter.default
     if let windowDidBecomeKeyObserver {
       center.removeObserver(windowDidBecomeKeyObserver)
@@ -954,7 +1013,22 @@ final class GhosttyTerminalHostView: NSView {
       center.removeObserver(windowDidResignKeyObserver)
       self.windowDidResignKeyObserver = nil
     }
+    if let windowDidChangeOcclusionStateObserver {
+      center.removeObserver(windowDidChangeOcclusionStateObserver)
+      self.windowDidChangeOcclusionStateObserver = nil
+    }
+    if let windowDidChangeScreenObserver {
+      center.removeObserver(windowDidChangeScreenObserver)
+      self.windowDidChangeScreenObserver = nil
+    }
     observedWindow = nil
+  }
+
+  private func syncEmbeddedWindowState() {
+    updateSurfaceMetrics()
+    syncSurfaceDisplay()
+    syncSurfaceVisibility()
+    syncEmbeddedFocusState()
   }
 
   private func syncEmbeddedFocusState() {
@@ -969,6 +1043,17 @@ final class GhosttyTerminalHostView: NSView {
       && (window?.isKeyWindow ?? false)
       && (window?.firstResponder === self)
     ghostty_surface_set_focus(surface, surfaceFocused)
+  }
+
+  private func syncSurfaceVisibility() {
+    guard let surface else { return }
+    let visible = window?.occlusionState.contains(.visible) ?? false
+    ghostty_surface_set_occlusion(surface, visible)
+  }
+
+  private func syncSurfaceDisplay() {
+    guard let surface else { return }
+    ghostty_surface_set_display_id(surface, window?.screen?.argonGhosttyDisplayID ?? 0)
   }
 
   private func reloadGhosttyConfiguration() {
@@ -1090,6 +1175,18 @@ final class GhosttyTerminalHostView: NSView {
     }
   }
 
+  private func refreshRenderingNow() {
+    guard let surface else { return }
+
+    updateSurfaceMetrics()
+    syncSurfaceDisplay()
+    syncSurfaceVisibility()
+    needsDisplay = true
+    layer?.setNeedsDisplay()
+    ghostty_surface_refresh(surface)
+    ghostty_surface_draw(surface)
+  }
+
   private func startProcessPollTimer() {
     processPollTimer?.invalidate()
     processPollTimer = Timer.scheduledTimer(
@@ -1113,11 +1210,7 @@ final class GhosttyTerminalHostView: NSView {
     guard !didMarkProcessExited else { return }
     didMarkProcessExited = true
     controller.isRunning = false
-    if let onProcessExit {
-      Task { @MainActor in
-        onProcessExit()
-      }
-    }
+    onProcessExit?()
   }
 
   private func handleAttention(_ event: TerminalAttentionEvent) {

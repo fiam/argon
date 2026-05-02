@@ -77,6 +77,9 @@ struct SettingsView: View {
   private var preventSleepWhileAgentsRun = AgentSleepPreventionSettings.defaultEnabled
   @AppStorage(AgentNotificationSettings.enabledStorageKey)
   private var agentNotificationsEnabled = AgentNotificationSettings.defaultEnabled
+  @AppStorage(AgentTerminalPersistenceExperimentSettings.enabledStorageKey)
+  private var experimentalPersistentAgentTerminals =
+    AgentTerminalPersistenceExperimentSettings.defaultEnabled
   @AppStorage(AgentSelectionSettings.rememberLastSelectionStorageKey)
   private var rememberLastAgentSelection = AgentSelectionSettings.defaultRememberLastSelection
   @AppStorage(WorktreeMergeStrategySettings.defaultStrategyStorageKey)
@@ -252,6 +255,22 @@ struct SettingsView: View {
             .controlSize(.small)
           }
         }
+
+        VStack(alignment: .leading, spacing: 4) {
+          Toggle(
+            "Persistent agent terminals",
+            isOn: $experimentalPersistentAgentTerminals
+          )
+          .help("Keep thinking agents running through a terminal session wrapper.")
+          .disabled(!TerminalSessionBackends.isAvailable())
+
+          Text(
+            "Experimental. Keeps thinking agents running after Argon quits, then reconnects to them on the next launch."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        }
       }
 
       Section("Terminals") {
@@ -337,7 +356,13 @@ struct SettingsView: View {
               savedAgents.update(updated)
             }
           )
+          .tag(profile.id)
           .opacity(draggingAgentId == profile.id ? 0.55 : 1)
+          .simultaneousGesture(
+            TapGesture().onEnded {
+              selectedAgentId = profile.id
+            }
+          )
           .onDrop(
             of: [.text],
             delegate: AgentProfileDropDelegate(
@@ -1523,7 +1548,11 @@ private struct AgentEditorSheet: View {
 
   private var builtInConfigurationFields: some View {
     VStack(alignment: .leading, spacing: 10) {
-      toggleField("Enabled", isOn: immediateEnabledBinding)
+      toggleField(
+        "Enabled",
+        isOn: immediateEnabledBinding,
+        help: "Show this agent in launch pickers."
+      )
       staticField("Command", value: familyDefaultCommand, isMonospaced: true)
       staticField("Status", value: availabilityLabel)
       if let version = availability.version {
@@ -1540,7 +1569,7 @@ private struct AgentEditorSheet: View {
         prompt: "Codex",
         validationMessage: attemptedSave && trimmedName.isEmpty ? "Name is required." : nil
       )
-      toggleField("Enabled", isOn: $editIsEnabled)
+      toggleField("Enabled", isOn: $editIsEnabled, help: "Show this agent in launch pickers.")
       editorField(
         "Command",
         text: $editCommand,
@@ -1551,7 +1580,7 @@ private struct AgentEditorSheet: View {
       editorField(
         "Auto-approve",
         text: $editYoloFlag,
-        prompt: "--full-auto",
+        prompt: "--yolo",
         isMonospaced: true,
         help: "Optional flag appended when auto-approve mode is enabled."
       )
@@ -1567,12 +1596,12 @@ private struct AgentEditorSheet: View {
       get: { editIsEnabled },
       set: { isEnabled in
         editIsEnabled = isEnabled
-        saveBuiltInEnabled(isEnabled)
+        saveBuiltInConfiguration()
       }
     )
   }
 
-  private func saveBuiltInEnabled(_ isEnabled: Bool) {
+  private func saveBuiltInConfiguration() {
     guard let familyID = profile.familyID else { return }
     let defaultProfile = familyID.defaultProfile
     var updated = profile
@@ -1583,7 +1612,7 @@ private struct AgentEditorSheet: View {
     updated.yoloFlag = defaultProfile.yoloFlag
     updated.promptArgumentTemplate = defaultProfile.promptArgumentTemplate
     updated.resumeArgumentTemplate = defaultProfile.resumeArgumentTemplate
-    updated.isEnabled = isEnabled
+    updated.isEnabled = editIsEnabled
     onSave(updated)
   }
 
@@ -1622,18 +1651,46 @@ private struct AgentEditorSheet: View {
   }
 
   @ViewBuilder
-  private func toggleField(_ label: String, isOn: Binding<Bool>) -> some View {
-    HStack(alignment: .center, spacing: 12) {
-      Text(label)
-        .frame(width: labelWidth, alignment: .trailing)
-        .foregroundStyle(.secondary)
+  private func toggleField(
+    _ label: String,
+    isOn: Binding<Bool>,
+    help: String? = nil,
+    caption: String? = nil
+  ) -> some View {
+    if let caption {
+      HStack(alignment: .top, spacing: 12) {
+        Text(label)
+          .frame(width: labelWidth, alignment: .trailing)
+          .foregroundStyle(.secondary)
+          .padding(.top, 2)
 
-      Toggle("", isOn: isOn)
-        .labelsHidden()
-        .toggleStyle(.checkbox)
-        .accessibilityLabel(label)
-        .help("Show this agent in launch pickers.")
+        VStack(alignment: .leading, spacing: 5) {
+          Toggle("", isOn: isOn)
+            .labelsHidden()
+            .toggleStyle(.checkbox)
+            .accessibilityLabel(label)
+            .help(help ?? "")
+
+          Text(caption)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
         .frame(width: fieldWidth, alignment: .leading)
+      }
+    } else {
+      HStack(alignment: .center, spacing: 12) {
+        Text(label)
+          .frame(width: labelWidth, alignment: .trailing)
+          .foregroundStyle(.secondary)
+
+        Toggle("", isOn: isOn)
+          .labelsHidden()
+          .toggleStyle(.checkbox)
+          .accessibilityLabel(label)
+          .help(help ?? "")
+          .frame(width: fieldWidth, alignment: .leading)
+      }
     }
   }
 
