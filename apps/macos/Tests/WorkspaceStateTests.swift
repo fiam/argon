@@ -1514,13 +1514,54 @@ struct WorkspaceStateTests {
       displayName: "feature/empty",
       branchName: "feature/empty",
       hasUncommittedChanges: false,
+      hasInitializedSubmodules: false,
+      submodulesWithUnpushedCommits: [],
       canDeleteBranch: true,
       branchComparisonBaseRef: "main",
-      branchHasUniqueCommits: false
+      branchHasUniqueCommits: false,
+      branchHasUnpushedCommits: false
     )
 
     #expect(request.shouldSkipConfirmation == true)
     #expect(request.defaultDeletesBranch == true)
+  }
+
+  @Test("unpushed branch commits require worktree removal confirmation")
+  func unpushedBranchCommitsRequireWorktreeRemovalConfirmation() {
+    let request = WorktreeRemovalRequest(
+      worktreePath: "/tmp/repo/feature",
+      displayName: "feature/unpushed",
+      branchName: "feature/unpushed",
+      hasUncommittedChanges: false,
+      hasInitializedSubmodules: false,
+      submodulesWithUnpushedCommits: [],
+      canDeleteBranch: true,
+      branchComparisonBaseRef: "main",
+      branchHasUniqueCommits: false,
+      branchHasUnpushedCommits: true
+    )
+
+    #expect(request.shouldSkipConfirmation == false)
+  }
+
+  @Test("unpushed submodule commits require worktree removal confirmation")
+  func unpushedSubmoduleCommitsRequireWorktreeRemovalConfirmation() {
+    let request = WorktreeRemovalRequest(
+      worktreePath: "/tmp/repo/feature",
+      displayName: "feature/submodule",
+      branchName: "feature/submodule",
+      hasUncommittedChanges: false,
+      hasInitializedSubmodules: true,
+      submodulesWithUnpushedCommits: [
+        SubmoduleUnpushedCommits(path: "vendor/sub", commitCount: 1)
+      ],
+      canDeleteBranch: true,
+      branchComparisonBaseRef: "main",
+      branchHasUniqueCommits: false,
+      branchHasUnpushedCommits: false
+    )
+
+    #expect(request.shouldSkipConfirmation == false)
   }
 
   @Test("worktree removal failures are prepared for an alert dialog")

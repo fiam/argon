@@ -533,12 +533,25 @@ final class WorkspaceState {
 
       return WorktreeRemovalBranchDetails(
         hasUncommittedChanges: GitService.hasUncommittedChanges(repoRoot: normalizedWorktreePath),
+        hasInitializedSubmodules: GitService.hasInitializedSubmodules(
+          repoRoot: normalizedWorktreePath
+        ),
+        submodulesWithUnpushedCommits: GitService.submodulesWithUnpushedCommits(
+          repoRoot: normalizedWorktreePath
+        ),
         branchName: normalizedBranchName,
         canDeleteBranch: canDeleteBranch,
         branchComparisonBaseRef: baseRef,
         branchHasUniqueCommits:
           canDeleteBranch
           && GitService.branchHasUniqueCommits(
+            repoRoot: target.repoRoot,
+            branchName: normalizedBranchName ?? "",
+            baseRef: baseRef
+          ),
+        branchHasUnpushedCommits:
+          canDeleteBranch
+          && GitService.branchHasUnpushedCommits(
             repoRoot: target.repoRoot,
             branchName: normalizedBranchName ?? "",
             baseRef: baseRef
@@ -552,9 +565,12 @@ final class WorkspaceState {
         ?? URL(fileURLWithPath: normalizedWorktreePath).lastPathComponent,
       branchName: branchDetails.branchName,
       hasUncommittedChanges: branchDetails.hasUncommittedChanges,
+      hasInitializedSubmodules: branchDetails.hasInitializedSubmodules,
+      submodulesWithUnpushedCommits: branchDetails.submodulesWithUnpushedCommits,
       canDeleteBranch: branchDetails.canDeleteBranch,
       branchComparisonBaseRef: branchDetails.branchComparisonBaseRef,
-      branchHasUniqueCommits: branchDetails.branchHasUniqueCommits
+      branchHasUniqueCommits: branchDetails.branchHasUniqueCommits,
+      branchHasUnpushedCommits: branchDetails.branchHasUnpushedCommits
     )
   }
 
@@ -583,6 +599,11 @@ final class WorkspaceState {
             repoRoot: target.repoRoot,
             branchName: branchName,
             force: request.branchHasUniqueCommits
+              || GitService.branchRequiresForceDelete(
+                repoRoot: target.repoRoot,
+                branchName: branchName,
+                baseRef: request.branchComparisonBaseRef
+              )
           )
         }.value
       } catch {
@@ -3685,12 +3706,18 @@ struct WorktreeRemovalRequest: Identifiable, Sendable {
   let displayName: String
   let branchName: String?
   let hasUncommittedChanges: Bool
+  let hasInitializedSubmodules: Bool
+  let submodulesWithUnpushedCommits: [SubmoduleUnpushedCommits]
   let canDeleteBranch: Bool
   let branchComparisonBaseRef: String?
   let branchHasUniqueCommits: Bool
+  let branchHasUnpushedCommits: Bool
 
   var shouldSkipConfirmation: Bool {
-    !hasUncommittedChanges && (!canDeleteBranch || !branchHasUniqueCommits)
+    !hasUncommittedChanges
+      && !branchHasUniqueCommits
+      && !branchHasUnpushedCommits
+      && submodulesWithUnpushedCommits.isEmpty
   }
 
   var defaultDeletesBranch: Bool {
@@ -3700,8 +3727,11 @@ struct WorktreeRemovalRequest: Identifiable, Sendable {
 
 private struct WorktreeRemovalBranchDetails: Sendable {
   let hasUncommittedChanges: Bool
+  let hasInitializedSubmodules: Bool
+  let submodulesWithUnpushedCommits: [SubmoduleUnpushedCommits]
   let branchName: String?
   let canDeleteBranch: Bool
   let branchComparisonBaseRef: String?
   let branchHasUniqueCommits: Bool
+  let branchHasUnpushedCommits: Bool
 }

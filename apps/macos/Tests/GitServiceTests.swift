@@ -525,6 +525,42 @@ struct GitServiceTests {
     #expect(FileManager.default.fileExists(atPath: worktree.path) == false)
   }
 
+  @Test("removeWorktree removes a clean linked worktree with initialized submodules")
+  func removeWorktreeRemovesCleanLinkedWorktreeWithInitializedSubmodules() throws {
+    let fixture = try makeSubmoduleWorktreeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+    #expect(GitService.hasInitializedSubmodules(repoRoot: fixture.worktree.path))
+    #expect(GitService.hasUncommittedChanges(repoRoot: fixture.worktree.path) == false)
+
+    try GitService.removeWorktree(repoRoot: fixture.repo.path, path: fixture.worktree.path)
+
+    #expect(FileManager.default.fileExists(atPath: fixture.worktree.path) == false)
+  }
+
+  @Test("removeWorktree requires force for dirty initialized submodules")
+  func removeWorktreeRequiresForceForDirtyInitializedSubmodules() throws {
+    let fixture = try makeSubmoduleWorktreeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+    try "sub one\ndirty\n".write(
+      to: fixture.worktree.appendingPathComponent("vendor/sub/sub.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+
+    #expect(GitService.hasInitializedSubmodules(repoRoot: fixture.worktree.path))
+    #expect(GitService.hasUncommittedChanges(repoRoot: fixture.worktree.path))
+    #expect(throws: GitService.GitError.self) {
+      try GitService.removeWorktree(repoRoot: fixture.repo.path, path: fixture.worktree.path)
+    }
+
+    try GitService.removeWorktree(
+      repoRoot: fixture.repo.path, path: fixture.worktree.path, force: true)
+
+    #expect(FileManager.default.fileExists(atPath: fixture.worktree.path) == false)
+  }
+
   @Test("branchHasUniqueCommits distinguishes empty and non-empty branches")
   func branchHasUniqueCommitsDistinguishesEmptyAndNonEmptyBranches() throws {
     let fixture = try makeFixtureDirectory()
@@ -565,6 +601,153 @@ struct GitServiceTests {
         branchName: "feature/non-empty",
         baseRef: "main"
       ) == true
+    )
+  }
+
+  @Test("branch safety checks treat cherry-picked commits as integrated")
+  func branchSafetyChecksTreatCherryPickedCommitsAsIntegrated() throws {
+    let fixture = try makeFixtureDirectory()
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let repo = fixture.appendingPathComponent("repo")
+    try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+
+    try git(repo, ["init"])
+    try git(repo, ["config", "user.name", "Argon Test"])
+    try git(repo, ["config", "user.email", "argon-test@example.com"])
+
+    try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    try git(repo, ["add", "a.txt"])
+    try git(repo, ["commit", "-m", "init"])
+    try git(repo, ["branch", "-M", "main"])
+
+    try git(repo, ["checkout", "-b", "feature/cherry-picked"])
+    try "one\ntwo\n".write(
+      to: repo.appendingPathComponent("a.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repo, ["commit", "-am", "feature"])
+    let featureCommit = try git(repo, ["rev-parse", "HEAD"])
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+
+    try git(repo, ["checkout", "main"])
+    try "base\n".write(
+      to: repo.appendingPathComponent("base.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repo, ["add", "base.txt"])
+    try git(repo, ["commit", "-m", "base change"])
+    try git(repo, ["cherry-pick", featureCommit])
+
+    #expect(
+      GitService.branchHasUniqueCommits(
+        repoRoot: repo.path,
+        branchName: "feature/cherry-picked",
+        baseRef: "main"
+      ) == false
+    )
+    #expect(
+      GitService.branchHasUnpushedCommits(
+        repoRoot: repo.path,
+        branchName: "feature/cherry-picked",
+        baseRef: "main"
+      ) == false
+    )
+    #expect(
+      GitService.branchRequiresForceDelete(
+        repoRoot: repo.path,
+        branchName: "feature/cherry-picked",
+        baseRef: "main"
+      )
+    )
+    #expect(throws: GitService.GitError.self) {
+      try GitService.deleteBranch(
+        repoRoot: repo.path,
+        branchName: "feature/cherry-picked"
+      )
+    }
+
+    try GitService.deleteBranch(
+      repoRoot: repo.path,
+      branchName: "feature/cherry-picked",
+      force: GitService.branchRequiresForceDelete(
+        repoRoot: repo.path,
+        branchName: "feature/cherry-picked",
+        baseRef: "main"
+      )
+    )
+    #expect(GitService.resolveRef(repoRoot: repo.path, ref: "feature/cherry-picked") == nil)
+  }
+
+  @Test("branchHasUnpushedCommits detects branch commits missing from remotes and base")
+  func branchHasUnpushedCommitsDetectsBranchCommitsMissingFromRemotesAndBase() throws {
+    let fixture = try makeFixtureDirectory()
+    defer { try? FileManager.default.removeItem(at: fixture) }
+
+    let remote = fixture.appendingPathComponent("remote.git")
+    try FileManager.default.createDirectory(at: remote, withIntermediateDirectories: true)
+    try git(remote, ["init", "--bare"])
+
+    let repo = fixture.appendingPathComponent("repo")
+    try git(fixture, ["clone", remote.path, repo.path])
+    try git(repo, ["config", "user.name", "Argon Test"])
+    try git(repo, ["config", "user.email", "argon-test@example.com"])
+
+    try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    try git(repo, ["add", "a.txt"])
+    try git(repo, ["commit", "-m", "init"])
+    try git(repo, ["branch", "-M", "main"])
+    try git(repo, ["push", "-u", "origin", "main"])
+
+    try git(repo, ["checkout", "-b", "feature/unpushed"])
+    try "one\ntwo\n".write(
+      to: repo.appendingPathComponent("a.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repo, ["commit", "-am", "feature"])
+
+    #expect(
+      GitService.branchHasUnpushedCommits(
+        repoRoot: repo.path,
+        branchName: "feature/unpushed",
+        baseRef: "main"
+      )
+    )
+
+    try git(repo, ["push", "-u", "origin", "feature/unpushed"])
+
+    #expect(
+      GitService.branchHasUnpushedCommits(
+        repoRoot: repo.path,
+        branchName: "feature/unpushed",
+        baseRef: "main"
+      ) == false
+    )
+  }
+
+  @Test("submodulesWithUnpushedCommits detects local submodule commits")
+  func submodulesWithUnpushedCommitsDetectsLocalSubmoduleCommits() throws {
+    let fixture = try makeSubmoduleWorktreeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+    let submodule = fixture.worktree.appendingPathComponent("vendor/sub")
+    try git(submodule, ["config", "user.name", "Argon Test"])
+    try git(submodule, ["config", "user.email", "argon-test@example.com"])
+    try "sub one\nlocal\n".write(
+      to: submodule.appendingPathComponent("sub.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(submodule, ["commit", "-am", "local submodule commit"])
+    try git(fixture.worktree, ["add", "vendor/sub"])
+    try git(fixture.worktree, ["commit", "-m", "Update submodule pointer"])
+
+    #expect(GitService.hasUncommittedChanges(repoRoot: fixture.worktree.path) == false)
+    #expect(
+      GitService.submodulesWithUnpushedCommits(repoRoot: fixture.worktree.path)
+        == [SubmoduleUnpushedCommits(path: "vendor/sub", commitCount: 1)]
     )
   }
 
@@ -805,6 +988,44 @@ struct GitServiceTests {
     return dir
   }
 
+  private func makeSubmoduleWorktreeFixture() throws -> SubmoduleWorktreeFixture {
+    let fixture = try makeFixtureDirectory()
+    let submoduleSource = fixture.appendingPathComponent("submodule-source")
+    let repo = fixture.appendingPathComponent("repo")
+    let worktree = fixture.appendingPathComponent("feature-submodule-worktree")
+
+    try FileManager.default.createDirectory(at: submoduleSource, withIntermediateDirectories: true)
+    try git(submoduleSource, ["init"])
+    try git(submoduleSource, ["config", "user.name", "Argon Test"])
+    try git(submoduleSource, ["config", "user.email", "argon-test@example.com"])
+    try "sub one\n".write(
+      to: submoduleSource.appendingPathComponent("sub.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(submoduleSource, ["add", "sub.txt"])
+    try git(submoduleSource, ["commit", "-m", "submodule init"])
+
+    try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+    try git(repo, ["init"])
+    try git(repo, ["config", "user.name", "Argon Test"])
+    try git(repo, ["config", "user.email", "argon-test@example.com"])
+    try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    try git(repo, ["add", "a.txt"])
+    try git(repo, ["commit", "-m", "init"])
+    try git(repo, ["branch", "-M", "main"])
+    try git(
+      repo,
+      ["-c", "protocol.file.allow=always", "submodule", "add", submoduleSource.path, "vendor/sub"])
+    try git(repo, ["commit", "-am", "add submodule"])
+    try git(repo, ["worktree", "add", "-b", "feature/submodule", worktree.path, "HEAD"])
+    try git(
+      worktree,
+      ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"])
+
+    return SubmoduleWorktreeFixture(root: fixture, repo: repo, worktree: worktree)
+  }
+
   @discardableResult
   private func git(_ repo: URL, _ args: [String]) throws -> String {
     let process = Process()
@@ -827,4 +1048,10 @@ struct GitServiceTests {
       process.terminationStatus == 0, "git \(args.joined(separator: " ")) failed: \(stderrString)")
     return stdoutString
   }
+}
+
+private struct SubmoduleWorktreeFixture {
+  let root: URL
+  let repo: URL
+  let worktree: URL
 }

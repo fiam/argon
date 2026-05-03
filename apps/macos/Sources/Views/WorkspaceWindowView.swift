@@ -3716,6 +3716,19 @@ private struct WorkspaceRemoveWorktreeConfirmationSheet: View {
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
 
+      if !submoduleRiskMessages.isEmpty {
+        VStack(alignment: .leading, spacing: 6) {
+          ForEach(submoduleRiskMessages, id: \.self) { message in
+            Text(message)
+              .font(.caption)
+              .foregroundStyle(.red)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+        .padding(10)
+        .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+      }
+
       if request.canDeleteBranch, let branchName = request.branchName {
         Toggle(isOn: $deleteBranch) {
           VStack(alignment: .leading, spacing: 3) {
@@ -3748,12 +3761,17 @@ private struct WorkspaceRemoveWorktreeConfirmationSheet: View {
   }
 
   private var removalMessage: String {
+    let removedContent =
+      request.hasInitializedSubmodules
+      ? "the worktree directory and initialized submodule checkouts"
+      : "the worktree directory"
+
     if request.hasUncommittedChanges {
       return
-        "This worktree has uncommitted changes. Deleting it will remove the worktree directory and discard those changes."
+        "This worktree has uncommitted changes. Deleting it will remove \(removedContent) and discard those changes."
     }
 
-    return "This will remove the linked worktree directory from disk."
+    return "This will remove \(removedContent) from disk."
   }
 
   private var deleteButtonTitle: String {
@@ -3765,11 +3783,22 @@ private struct WorkspaceRemoveWorktreeConfirmationSheet: View {
   }
 
   private var branchSubtitle: String {
+    if request.branchHasUniqueCommits && request.branchHasUnpushedCommits {
+      if let baseRef = request.branchComparisonBaseRef {
+        return "Contains commits not merged into \(baseRef) and not pushed to a remote."
+      }
+      return "Contains commits that are not confirmed as merged or pushed."
+    }
+
     if request.branchHasUniqueCommits {
       if let baseRef = request.branchComparisonBaseRef {
         return "Contains commits not merged into \(baseRef)."
       }
       return "Contains commits that are not confirmed as merged."
+    }
+
+    if request.branchHasUnpushedCommits {
+      return "Contains commits not pushed to a remote."
     }
 
     if let baseRef = request.branchComparisonBaseRef {
@@ -3779,9 +3808,23 @@ private struct WorkspaceRemoveWorktreeConfirmationSheet: View {
   }
 
   private var branchSubtitleColor: Color {
-    if request.branchHasUniqueCommits && deleteBranch {
+    if (request.branchHasUniqueCommits || request.branchHasUnpushedCommits) && deleteBranch {
       return .red
     }
     return .secondary
+  }
+
+  private var submoduleRiskMessages: [String] {
+    request.submodulesWithUnpushedCommits.map { submodule in
+      if let commitCount = submodule.commitCount {
+        return
+          "\(submodule.path) contains \(commitCount) \(commitNoun(for: commitCount)) not pushed to a remote."
+      }
+      return "Argon could not confirm that \(submodule.path)'s commits are pushed to a remote."
+    }
+  }
+
+  private func commitNoun(for count: Int) -> String {
+    count == 1 ? "commit" : "commits"
   }
 }

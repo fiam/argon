@@ -59,6 +59,13 @@ struct WorktreeDiffSummary: Hashable, Sendable {
   }
 }
 
+struct SubmoduleUnpushedCommits: Identifiable, Hashable, Sendable {
+  var id: String { path }
+
+  let path: String
+  let commitCount: Int?
+}
+
 enum GitService {
   private static let emptyTreeSHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
   nonisolated(unsafe) static var commandRunner:
@@ -172,17 +179,51 @@ enum GitService {
     return !output.isEmpty
   }
 
+  static func hasInitializedSubmodules(repoRoot: String) -> Bool {
+    !initializedSubmodulePaths(repoRoot: repoRoot).isEmpty
+  }
+
+  static func submodulesWithUnpushedCommits(repoRoot: String) -> [SubmoduleUnpushedCommits] {
+    initializedSubmodulePaths(repoRoot: repoRoot).compactMap { path in
+      let submoduleRoot = normalizePath(
+        URL(fileURLWithPath: repoRoot).appendingPathComponent(path).path
+      )
+      guard resolveRef(repoRoot: submoduleRoot, ref: "HEAD") != nil else {
+        return SubmoduleUnpushedCommits(path: path, commitCount: nil)
+      }
+
+      let count = commitCountNotReachable(
+        repoRoot: submoduleRoot,
+        ref: "HEAD",
+        protectedRefs: remoteRefs(repoRoot: submoduleRoot)
+      )
+      guard let count else {
+        return SubmoduleUnpushedCommits(path: path, commitCount: nil)
+      }
+      return count > 0 ? SubmoduleUnpushedCommits(path: path, commitCount: count) : nil
+    }
+  }
+
   static func removeWorktree(
     repoRoot: String,
     path: String,
     force: Bool = false
   ) throws {
     let normalizedWorktreePath = normalizePath(path)
+    let containsInitializedSubmodules = hasInitializedSubmodules(repoRoot: normalizedWorktreePath)
+    if containsInitializedSubmodules && !force
+      && hasUncommittedChanges(repoRoot: normalizedWorktreePath)
+    {
+      throw GitError.commandFailed(
+        "The worktree has uncommitted changes. Confirm removal before deleting it."
+      )
+    }
+
     var arguments = [
       "-C", repoRoot,
       "worktree", "remove",
     ]
-    if force {
+    if force || containsInitializedSubmodules {
       arguments.append("--force")
     }
     arguments.append(normalizedWorktreePath)
@@ -196,12 +237,50 @@ enum GitService {
   ) -> Bool {
     guard let baseRef, !baseRef.isEmpty else { return true }
 
-    let output = runGit([
-      "-C", repoRoot,
-      "rev-list", "--count", "\(baseRef)..\(branchName)",
-    ]).trimmingCharacters(in: .whitespacesAndNewlines)
+    return refHasCommitsNotProtectedByPatchID(
+      repoRoot: repoRoot,
+      ref: branchName,
+      protectedRefs: [baseRef]
+    )
+  }
 
-    guard let count = Int(output) else { return true }
+  static func branchHasUnpushedCommits(
+    repoRoot: String,
+    branchName: String,
+    baseRef: String?
+  ) -> Bool {
+    let trimmedBranchName = branchName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedBranchName.isEmpty else { return false }
+
+    let protectedRefs =
+      ([baseRef?.trimmingCharacters(in: .whitespacesAndNewlines)].compactMap { ref in
+        guard let ref, !ref.isEmpty else { return nil }
+        return ref
+      } + remoteRefs(repoRoot: repoRoot))
+
+    return refHasCommitsNotProtectedByPatchID(
+      repoRoot: repoRoot,
+      ref: trimmedBranchName,
+      protectedRefs: protectedRefs
+    )
+  }
+
+  static func branchRequiresForceDelete(
+    repoRoot: String,
+    branchName: String,
+    baseRef: String?
+  ) -> Bool {
+    guard let baseRef, !baseRef.isEmpty else { return true }
+
+    guard
+      let count = commitCountNotReachable(
+        repoRoot: repoRoot,
+        ref: branchName,
+        protectedRefs: [baseRef]
+      )
+    else {
+      return true
+    }
     return count > 0
   }
 
@@ -706,6 +785,153 @@ enum GitService {
     let output = runGit(["-C", repoRoot, "rev-list", "--count", range])
       .trimmingCharacters(in: .whitespacesAndNewlines)
     return Int(output)
+  }
+
+  private static func commitCountNotReachable(
+    repoRoot: String,
+    ref: String,
+    protectedRefs: [String]
+  ) -> Int? {
+    var arguments = [
+      "-C", repoRoot,
+      "rev-list", "--count",
+      ref,
+    ]
+
+    let trimmedProtectedRefs = protectedRefs.map {
+      $0.trimmingCharacters(in: .whitespacesAndNewlines)
+    }.filter { !$0.isEmpty }
+    if !trimmedProtectedRefs.isEmpty {
+      arguments.append("--not")
+      arguments.append(contentsOf: trimmedProtectedRefs)
+    }
+
+    let output = runGit(arguments).trimmingCharacters(in: .whitespacesAndNewlines)
+    return Int(output)
+  }
+
+  private static func commitsNotReachable(
+    repoRoot: String,
+    ref: String,
+    protectedRefs: [String]
+  ) -> [String]? {
+    var arguments = [
+      "-C", repoRoot,
+      "rev-list",
+      ref,
+    ]
+
+    let trimmedProtectedRefs = existingRefs(repoRoot: repoRoot, refs: protectedRefs)
+    if !trimmedProtectedRefs.isEmpty {
+      arguments.append("--not")
+      arguments.append(contentsOf: trimmedProtectedRefs)
+    }
+
+    let output = runGit(arguments).trimmingCharacters(in: .whitespacesAndNewlines)
+    if output.isEmpty { return [] }
+
+    let commits =
+      output
+      .split(whereSeparator: \.isNewline)
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    return commits.isEmpty ? nil : commits
+  }
+
+  private static func refHasCommitsNotProtectedByPatchID(
+    repoRoot: String,
+    ref: String,
+    protectedRefs: [String]
+  ) -> Bool {
+    let trimmedRef = ref.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedRef.isEmpty else { return false }
+    guard resolveRef(repoRoot: repoRoot, ref: trimmedRef) != nil else { return true }
+
+    let existingProtectedRefs = existingRefs(repoRoot: repoRoot, refs: protectedRefs)
+    guard !existingProtectedRefs.isEmpty else { return true }
+
+    guard
+      let commits = commitsNotReachable(
+        repoRoot: repoRoot,
+        ref: trimmedRef,
+        protectedRefs: existingProtectedRefs
+      )
+    else {
+      return true
+    }
+
+    return commits.contains { commit in
+      !commitPatchExists(repoRoot: repoRoot, commit: commit, protectedRefs: existingProtectedRefs)
+    }
+  }
+
+  private static func commitPatchExists(
+    repoRoot: String,
+    commit: String,
+    protectedRefs: [String]
+  ) -> Bool {
+    protectedRefs.contains { protectedRef in
+      var arguments = [
+        "-C", repoRoot,
+        "cherry",
+        protectedRef,
+        commit,
+      ]
+      if let parent = firstParent(repoRoot: repoRoot, commit: commit) {
+        arguments.append(parent)
+      }
+
+      return runGit(arguments)
+        .split(whereSeparator: \.isNewline)
+        .contains { line in
+          line.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("- ")
+        }
+    }
+  }
+
+  private static func firstParent(repoRoot: String, commit: String) -> String? {
+    let output = runGit([
+      "-C", repoRoot,
+      "rev-list", "--parents", "-n", "1",
+      commit,
+    ])
+    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+    return
+      output
+      .split(separator: " ")
+      .dropFirst()
+      .first
+      .map(String.init)
+  }
+
+  private static func existingRefs(repoRoot: String, refs: [String]) -> [String] {
+    refs.map {
+      $0.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    .filter { !$0.isEmpty }
+    .filter { resolveRef(repoRoot: repoRoot, ref: $0) != nil }
+  }
+
+  private static func remoteRefs(repoRoot: String) -> [String] {
+    runGit([
+      "-C", repoRoot,
+      "for-each-ref", "--format=%(refname)", "refs/remotes",
+    ])
+    .split(whereSeparator: \.isNewline)
+    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    .filter { !$0.isEmpty && !$0.hasSuffix("/HEAD") }
+  }
+
+  private static func initializedSubmodulePaths(repoRoot: String) -> [String] {
+    runGit([
+      "-C", repoRoot,
+      "submodule", "foreach", "--recursive", "--quiet",
+      #"printf '%s\n' "$sm_path""#,
+    ])
+    .split(whereSeparator: \.isNewline)
+    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    .filter { !$0.isEmpty }
   }
 
   private static func localBranchStartPoint(repoRoot: String, remoteRef: String) -> String? {
