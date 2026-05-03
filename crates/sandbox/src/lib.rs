@@ -3291,6 +3291,7 @@ mod tests {
         assert!(names.contains(&"os".to_string()));
         assert!(names.contains(&"git".to_string()));
         assert!(names.contains(&"git/signing".to_string()));
+        assert!(names.contains(&"rust".to_string()));
         assert!(names.contains(&"ssh".to_string()));
         assert!(names.contains(&"gpg".to_string()));
         assert!(names.contains(&"shell".to_string()));
@@ -3744,6 +3745,141 @@ mod tests {
                     .contains(&xcode_shared_frameworks.to_path_buf())
             );
         }
+    }
+
+    #[test]
+    fn use_rust_allows_standard_rust_tools_and_homes() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        let home = repo_root.join("home");
+        let cargo_home = home.join(".cargo");
+        let cargo_bin = cargo_home.join("bin");
+        let cargo_registry = cargo_home.join("registry");
+        let cargo_git = cargo_home.join("git");
+        let cargo_advisory_db = cargo_home.join("advisory-db");
+        let cargo_advisory_dbs = cargo_home.join("advisory-dbs");
+        let rustup_home = home.join(".rustup");
+        let rustup_toolchains = rustup_home.join("toolchains");
+        let rustup_downloads = rustup_home.join("downloads");
+        let rustup_tmp = rustup_home.join("tmp");
+        let rustup_update_hashes = rustup_home.join("update-hashes");
+
+        fs::create_dir_all(&repo_root).expect("repo");
+        fs::create_dir_all(&cargo_bin).expect("cargo bin");
+        fs::create_dir_all(&cargo_registry).expect("cargo registry");
+        fs::create_dir_all(&cargo_git).expect("cargo git");
+        fs::create_dir_all(&cargo_advisory_db).expect("cargo advisory db");
+        fs::create_dir_all(&cargo_advisory_dbs).expect("cargo advisory dbs");
+        fs::create_dir_all(&rustup_toolchains).expect("rustup toolchains");
+        fs::create_dir_all(&rustup_downloads).expect("rustup downloads");
+        fs::create_dir_all(&rustup_tmp).expect("rustup tmp");
+        fs::create_dir_all(&rustup_update_hashes).expect("rustup update hashes");
+
+        for tool in [
+            "cargo",
+            "cargo-clippy",
+            "cargo-fmt",
+            "clippy-driver",
+            "rust-analyzer",
+            "rustc",
+            "rustdoc",
+            "rustfmt",
+            "rustup",
+        ] {
+            fs::write(cargo_bin.join(tool), "#!/bin/sh\nexit 0\n").expect("fake rust tool");
+        }
+        fs::write(cargo_home.join("config.toml"), "[build]\n").expect("cargo config");
+        fs::write(cargo_home.join("credentials.toml"), "[registry]\n").expect("cargo credentials");
+        fs::write(
+            rustup_home.join("settings.toml"),
+            "default_toolchain = 'stable'\n",
+        )
+        .expect("rustup settings");
+        fs::write(repo_root.join(REPO_SANDBOXFILE), "USE rust\n").expect("sandbox");
+
+        let mut context = context_for(&repo_root, &["cargo", "test"]);
+        context
+            .env
+            .insert("HOME".to_string(), home.display().to_string());
+        context
+            .env
+            .insert("PATH".to_string(), cargo_bin.display().to_string());
+
+        let explain = explain(&context, &[]).expect("explain");
+
+        assert!(
+            explain
+                .sources
+                .iter()
+                .any(|source| source.name == "rust" && source.kind == "builtin")
+        );
+        assert!(
+            explain
+                .infos
+                .iter()
+                .any(|info| info.contains("does not allow Cargo credential files"))
+        );
+        assert!(
+            explain
+                .allowed_environment_patterns
+                .iter()
+                .any(|pattern| pattern == "CARGO_*")
+        );
+        assert!(
+            explain
+                .allowed_environment_patterns
+                .iter()
+                .any(|pattern| pattern == "RUST*")
+        );
+
+        let cargo_bin = normalize_absolute_input_path(cargo_bin);
+        let cargo_registry = normalize_absolute_input_path(cargo_registry);
+        let cargo_git = normalize_absolute_input_path(cargo_git);
+        let cargo_advisory_db = normalize_absolute_input_path(cargo_advisory_db);
+        let cargo_advisory_dbs = normalize_absolute_input_path(cargo_advisory_dbs);
+        let rustup_toolchains = normalize_absolute_input_path(rustup_toolchains);
+        let rustup_downloads = normalize_absolute_input_path(rustup_downloads);
+        let rustup_tmp = normalize_absolute_input_path(rustup_tmp);
+        let rustup_update_hashes = normalize_absolute_input_path(rustup_update_hashes);
+        let cargo_config = normalize_absolute_input_path(cargo_home.join("config.toml"));
+        let cargo_credentials = normalize_absolute_input_path(cargo_home.join("credentials.toml"));
+        let cargo_root = normalize_absolute_input_path(cargo_home);
+        let package_cache = cargo_root.join(".package-cache");
+        let rustup_settings = normalize_absolute_input_path(rustup_home.join("settings.toml"));
+
+        assert!(explain.policy.readable_roots.contains(&cargo_bin));
+        assert!(explain.policy.executable_roots.contains(&cargo_bin));
+        assert!(explain.policy.readable_roots.contains(&cargo_registry));
+        assert!(explain.policy.writable_roots.contains(&cargo_registry));
+        assert!(explain.policy.readable_roots.contains(&cargo_git));
+        assert!(explain.policy.writable_roots.contains(&cargo_git));
+        assert!(explain.policy.readable_roots.contains(&cargo_advisory_db));
+        assert!(explain.policy.writable_roots.contains(&cargo_advisory_db));
+        assert!(explain.policy.readable_roots.contains(&cargo_advisory_dbs));
+        assert!(explain.policy.writable_roots.contains(&cargo_advisory_dbs));
+        assert!(explain.policy.readable_roots.contains(&rustup_toolchains));
+        assert!(explain.policy.executable_roots.contains(&rustup_toolchains));
+        assert!(explain.policy.readable_roots.contains(&rustup_downloads));
+        assert!(explain.policy.writable_roots.contains(&rustup_downloads));
+        assert!(explain.policy.readable_roots.contains(&rustup_tmp));
+        assert!(explain.policy.writable_roots.contains(&rustup_tmp));
+        assert!(
+            explain
+                .policy
+                .readable_roots
+                .contains(&rustup_update_hashes)
+        );
+        assert!(
+            explain
+                .policy
+                .writable_roots
+                .contains(&rustup_update_hashes)
+        );
+        assert!(explain.policy.readable_paths.contains(&cargo_config));
+        assert!(explain.policy.writable_paths.contains(&package_cache));
+        assert!(explain.policy.writable_paths.contains(&rustup_settings));
+        assert!(!explain.policy.readable_paths.contains(&cargo_credentials));
+        assert!(!explain.policy.readable_roots.contains(&cargo_root));
     }
 
     #[test]

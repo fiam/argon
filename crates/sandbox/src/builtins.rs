@@ -21,6 +21,10 @@ static BUILTINS: &[BuiltinModule] = &[
         source: include_str!("../builtins/git/signing.Sandboxfile"),
     },
     BuiltinModule {
+        name: "rust",
+        source: include_str!("../builtins/rust.Sandboxfile"),
+    },
+    BuiltinModule {
         name: "ssh",
         source: include_str!("../builtins/ssh.Sandboxfile"),
     },

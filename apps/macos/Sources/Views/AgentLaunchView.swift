@@ -502,7 +502,7 @@ struct SandboxHelpPopover: View {
             .fontWeight(.semibold)
           SandboxCodeBlock(text: configExample)
           Text(
-            "Use `USE os`, `USE git`, `USE shell`, and `USE agent` to bring in built-in policy modules, then optionally include `./Sandboxfile.local` for local repo overrides."
+            "Use `USE os`, `USE git`, `USE rust`, `USE shell`, and `USE agent` to bring in built-in policy modules, then optionally include `./Sandboxfile.local` for local repo overrides."
           )
           .font(.caption)
           .foregroundStyle(.secondary)
@@ -527,7 +527,7 @@ struct SandboxHelpPopover: View {
             .font(.subheadline)
             .fontWeight(.semibold)
           Text(
-            "`USE os`, `USE git`, `USE shell`, and `USE agent` are built-in modules. `USE shell` and `USE agent` quietly do nothing when they do not apply."
+            "`USE os`, `USE git`, `USE rust`, `USE shell`, and `USE agent` are built-in modules. `USE shell` and `USE agent` quietly do nothing when they do not apply."
           )
           .font(.caption)
           .foregroundStyle(.secondary)
@@ -540,6 +540,12 @@ struct SandboxHelpPopover: View {
           .fixedSize(horizontal: false, vertical: true)
           Text(
             "`USE git` allows `git`, standard git configuration files, and the macOS developer tool roots used by Apple's `/usr/bin/git` launcher. `USE ssh` and `USE gpg` are available for signing, and `USE git/signing` includes both."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+          Text(
+            "`USE rust` allows Cargo, rustc, rustup, common Rust tools, and standard Cargo/rustup caches, but not Cargo credential files."
           )
           .font(.caption)
           .foregroundStyle(.secondary)

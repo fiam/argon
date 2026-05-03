@@ -1,0 +1,87 @@
+ENV ALLOW CARGO_*
+ENV ALLOW RUST*
+
+EXEC ALLOW OPTIONAL cargo
+EXEC ALLOW OPTIONAL cargo-clippy
+EXEC ALLOW OPTIONAL cargo-fmt
+EXEC ALLOW OPTIONAL clippy-driver
+EXEC ALLOW OPTIONAL rust-analyzer
+EXEC ALLOW OPTIONAL rust-gdb
+EXEC ALLOW OPTIONAL rust-gdbgui
+EXEC ALLOW OPTIONAL rust-lldb
+EXEC ALLOW OPTIONAL rustc
+EXEC ALLOW OPTIONAL rustdoc
+EXEC ALLOW OPTIONAL rustfmt
+EXEC ALLOW OPTIONAL rustup
+
+IF TEST -z "$CARGO_HOME"
+IF TEST -n "$HOME"
+SET CARGO_HOME "$HOME/.cargo"
+END
+END
+
+IF TEST -n "$CARGO_HOME"
+IF TEST -d "$CARGO_HOME/bin"
+FS ALLOW READ $CARGO_HOME/bin/
+EXEC ALLOW $CARGO_HOME/bin/
+END
+IF TEST -f "$CARGO_HOME/config.toml"
+FS ALLOW READ $CARGO_HOME/config.toml
+END
+IF TEST -f "$CARGO_HOME/config"
+FS ALLOW READ $CARGO_HOME/config
+END
+IF TEST -d "$CARGO_HOME/registry"
+FS ALLOW READ $CARGO_HOME/registry/
+FS ALLOW WRITE $CARGO_HOME/registry/
+END
+IF TEST -d "$CARGO_HOME/git"
+FS ALLOW READ $CARGO_HOME/git/
+FS ALLOW WRITE $CARGO_HOME/git/
+END
+IF TEST -d "$CARGO_HOME/advisory-db"
+FS ALLOW READ $CARGO_HOME/advisory-db/
+FS ALLOW WRITE $CARGO_HOME/advisory-db/
+END
+IF TEST -d "$CARGO_HOME/advisory-dbs"
+FS ALLOW READ $CARGO_HOME/advisory-dbs/
+FS ALLOW WRITE $CARGO_HOME/advisory-dbs/
+END
+IF TEST -d "$CARGO_HOME"
+FS ALLOW WRITE $CARGO_HOME/.crates.toml
+FS ALLOW WRITE $CARGO_HOME/.crates2.json
+FS ALLOW WRITE $CARGO_HOME/.global-cache
+FS ALLOW WRITE $CARGO_HOME/.package-cache
+FS ALLOW WRITE $CARGO_HOME/.package-cache-mutate
+END
+END
+
+IF TEST -z "$RUSTUP_HOME"
+IF TEST -n "$HOME"
+SET RUSTUP_HOME "$HOME/.rustup"
+END
+END
+
+IF TEST -n "$RUSTUP_HOME"
+IF TEST -d "$RUSTUP_HOME"
+FS ALLOW WRITE $RUSTUP_HOME/settings.toml
+END
+IF TEST -d "$RUSTUP_HOME/toolchains"
+FS ALLOW READ $RUSTUP_HOME/toolchains/
+EXEC ALLOW $RUSTUP_HOME/toolchains/
+END
+IF TEST -d "$RUSTUP_HOME/downloads"
+FS ALLOW READ $RUSTUP_HOME/downloads/
+FS ALLOW WRITE $RUSTUP_HOME/downloads/
+END
+IF TEST -d "$RUSTUP_HOME/tmp"
+FS ALLOW READ $RUSTUP_HOME/tmp/
+FS ALLOW WRITE $RUSTUP_HOME/tmp/
+END
+IF TEST -d "$RUSTUP_HOME/update-hashes"
+FS ALLOW READ $RUSTUP_HOME/update-hashes/
+FS ALLOW WRITE $RUSTUP_HOME/update-hashes/
+END
+END
+
+INFO "USE rust does not allow Cargo credential files; add explicit rules for private registries or cargo publish"

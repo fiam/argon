@@ -375,22 +375,27 @@ Builtins are authored in `Sandboxfile` syntax and compiled into Argon.
 
 Current builtins:
 
+- `agent`
+- `agent/claude`
+- `agent/codex`
+- `agent/gemini`
 - `gpg`
 - `git`
 - `git/signing`
+- `os`
 - `os/macos`
+- `rust`
+- `shell`
 - `shell/bash`
 - `shell/fish`
 - `shell/zsh`
 - `ssh`
-- `agent/claude`
-- `agent/codex`
-- `agent/gemini`
 
 Common entrypoints and includes:
 
 - `USE os`
 - `USE git`
+- `USE rust`
 - `USE shell`
 - `USE agent`
 - `USE ./Sandboxfile.local`
@@ -412,6 +417,15 @@ exist. It also preserves `GIT_*` and `DEVELOPER_DIR` environment variables.
 On macOS it allows the Xcode and Command Line Tools developer roots used by
 Apple's `/usr/bin/git` launcher when they exist. It does not install developer
 tools or enable commit signing helpers by default.
+
+`USE rust` allows common Rust tools from `PATH` when present, including
+`cargo`, `rustc`, `rustdoc`, `rustfmt`, Clippy, `rustup`, `rust-analyzer`,
+and the Rust debugger helpers. It preserves `CARGO_*` and `RUST*`
+environment variables, allows Cargo's bin directory, registry, git, and
+advisory caches under `$CARGO_HOME` or `$HOME/.cargo`, and allows rustup
+toolchains and cache directories under `$RUSTUP_HOME` or `$HOME/.rustup`.
+It does not allow Cargo credential files; add explicit rules for private
+registries or `cargo publish`.
 
 `USE ssh` enables SSH-based signing support by allowing `ssh-keygen`,
 `SSH_AUTH_SOCK`, `$HOME/.ssh/config`, and `$HOME/.ssh/allowed_signers`. It
