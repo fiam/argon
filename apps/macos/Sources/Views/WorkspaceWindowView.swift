@@ -511,6 +511,7 @@ private struct WorkspaceSidebar: View {
           Image(systemName: "plus")
         }
         .help("Create a new worktree")
+        .accessibilityIdentifier("workspace-new-worktree-button")
       }
     }
     .sheet(isPresented: $showNewWorktreeSheet) {
@@ -2917,11 +2918,17 @@ private struct WorkspaceNewWorktreeSheet: View {
   @Environment(WorkspaceState.self) private var workspaceState
   @Binding var isPresented: Bool
 
+  @FocusState private var focusedField: FocusedField?
   @State private var branchName = ""
   @State private var path = ""
   @State private var startPoint = ""
   @State private var lastSuggestedPath = ""
   @State private var hasCustomizedPath = false
+
+  private enum FocusedField: Hashable {
+    case branchName
+    case startPoint
+  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 20) {
@@ -2945,6 +2952,9 @@ private struct WorkspaceNewWorktreeSheet: View {
           TextField("feature/refocus-workspace", text: $branchName)
             .textFieldStyle(.roundedBorder)
             .font(.system(.body, design: .monospaced))
+            .focused($focusedField, equals: .branchName)
+            .disabled(workspaceState.isCreatingWorktree)
+            .accessibilityIdentifier("workspace-new-worktree-branch-name-field")
         }
 
         VStack(alignment: .leading, spacing: 6) {
@@ -2956,6 +2966,7 @@ private struct WorkspaceNewWorktreeSheet: View {
           }
           .frame(height: 22)
           .help(path)
+          .disabled(workspaceState.isCreatingWorktree)
 
           HStack(spacing: 8) {
             Button("Use Suggested") {
@@ -2963,7 +2974,7 @@ private struct WorkspaceNewWorktreeSheet: View {
               hasCustomizedPath = false
             }
             .controlSize(.small)
-            .disabled(path == lastSuggestedPath)
+            .disabled(path == lastSuggestedPath || workspaceState.isCreatingWorktree)
           }
         }
 
@@ -2973,6 +2984,9 @@ private struct WorkspaceNewWorktreeSheet: View {
           TextField("HEAD", text: $startPoint)
             .textFieldStyle(.roundedBorder)
             .font(.system(.body, design: .monospaced))
+            .focused($focusedField, equals: .startPoint)
+            .disabled(workspaceState.isCreatingWorktree)
+            .accessibilityIdentifier("workspace-new-worktree-start-point-field")
 
           Text("Defaults to the inferred base branch for the repository.")
             .font(.caption)
@@ -3004,6 +3018,7 @@ private struct WorkspaceNewWorktreeSheet: View {
         }
         .keyboardShortcut(.defaultAction)
         .disabled(!canCreate)
+        .accessibilityIdentifier("workspace-new-worktree-create-button")
       }
     }
     .padding(24)
@@ -3025,6 +3040,11 @@ private struct WorkspaceNewWorktreeSheet: View {
     .onChange(of: path) { _, newValue in
       hasCustomizedPath = newValue != lastSuggestedPath
     }
+    .onChange(of: workspaceState.isCreatingWorktree) { _, isCreating in
+      if isCreating {
+        clearInputFocus()
+      }
+    }
   }
 
   private var canCreate: Bool {
@@ -3033,7 +3053,11 @@ private struct WorkspaceNewWorktreeSheet: View {
       && !workspaceState.isCreatingWorktree
   }
 
+  @MainActor
   private func createWorktree() {
+    guard canCreate else { return }
+    clearInputFocus()
+
     Task {
       do {
         try await workspaceState.createWorktree(
@@ -3048,7 +3072,10 @@ private struct WorkspaceNewWorktreeSheet: View {
     }
   }
 
+  @MainActor
   private func chooseWorktreeDirectory() {
+    guard !workspaceState.isCreatingWorktree else { return }
+
     let panel = NSOpenPanel()
     panel.title = "Choose Worktree Destination"
     panel.message = "Select or create the destination directory for the new worktree."
@@ -3062,6 +3089,12 @@ private struct WorkspaceNewWorktreeSheet: View {
     guard panel.runModal() == .OK, let url = panel.url else { return }
     path = url.standardizedFileURL.path
     hasCustomizedPath = path != lastSuggestedPath
+  }
+
+  @MainActor
+  private func clearInputFocus() {
+    focusedField = nil
+    _ = NSApp.keyWindow?.makeFirstResponder(nil)
   }
 }
 

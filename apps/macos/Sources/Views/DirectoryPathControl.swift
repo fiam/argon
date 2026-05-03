@@ -2,6 +2,8 @@ import AppKit
 import SwiftUI
 
 struct DirectoryPathControl: NSViewRepresentable {
+  @Environment(\.isEnabled) private var isEnabled
+
   let path: String
   let placeholder: String
   let onChoose: () -> Void
@@ -33,6 +35,7 @@ struct DirectoryPathControl: NSViewRepresentable {
 
   func updateNSView(_ control: NSPathControl, context: Context) {
     context.coordinator.placeholder = placeholder
+    control.isEnabled = isEnabled
     control.pathItems = [context.coordinator.item(for: path)]
   }
 

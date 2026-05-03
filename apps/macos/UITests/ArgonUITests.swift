@@ -318,6 +318,50 @@ final class ArgonUITests: XCTestCase {
   }
 
   @MainActor
+  func testNewWorktreeFieldsDisableWhileCreatingWorktree() throws {
+    let target = try Self.createWorkspaceWithSlowPostCheckoutHook()
+    let app = XCUIApplication()
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.fixtureRoot)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--workspace-repo-root", target.repoRoot,
+      "--workspace-common-dir", target.repoCommonDir,
+      "--selected-worktree-path", target.selectedWorktreePath,
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launchEnvironment[Self.disableCLIInstallPromptEnvironmentKey] = "1"
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+
+    let newWorktreeButton = app.buttons["workspace-new-worktree-button"]
+    XCTAssertTrue(newWorktreeButton.waitForExistence(timeout: 15))
+    newWorktreeButton.click()
+
+    let branchField = app.textFields["workspace-new-worktree-branch-name-field"]
+    let startPointField = app.textFields["workspace-new-worktree-start-point-field"]
+    XCTAssertTrue(branchField.waitForExistence(timeout: 10))
+    XCTAssertTrue(startPointField.waitForExistence(timeout: 10))
+
+    branchField.click()
+    branchField.typeText("feature/loading")
+
+    let createButton = app.buttons["workspace-new-worktree-create-button"]
+    XCTAssertTrue(createButton.waitForExistence(timeout: 10))
+    XCTAssertTrue(createButton.isEnabled)
+    createButton.click()
+
+    XCTAssertTrue(waitForEnabledState(branchField, enabled: false, timeout: 2))
+    XCTAssertTrue(waitForEnabledState(startPointField, enabled: false, timeout: 2))
+    XCTAssertTrue(waitForNonExistence(branchField, timeout: 10))
+  }
+
+  @MainActor
   func testWorkspaceReviewExternalLaunchOpensManualPasteState() throws {
     let target = try Self.createWorkspace()
     let app = XCUIApplication()
@@ -1150,6 +1194,22 @@ final class ArgonUITests: XCTestCase {
       selectedWorktreePath: repoRoot.path,
       argonHome: argonHome.path
     )
+  }
+
+  private static func createWorkspaceWithSlowPostCheckoutHook() throws -> WorkspaceLaunchTarget {
+    let target = try createWorkspace()
+    let hook = URL(fileURLWithPath: target.repoRoot)
+      .appendingPathComponent(".git/hooks/post-checkout")
+    try """
+    #!/bin/sh
+    /bin/sleep 3
+    """
+    .write(to: hook, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o755],
+      ofItemAtPath: hook.path
+    )
+    return target
   }
 
   private static func createLinkedWorkspace() throws -> WorkspaceLaunchTarget {
@@ -2305,6 +2365,16 @@ final class ArgonUITests: XCTestCase {
 
   private func waitForNonExistence(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
     let predicate = NSPredicate(format: "exists == false")
+    let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
+    return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+  }
+
+  private func waitForEnabledState(
+    _ element: XCUIElement,
+    enabled: Bool,
+    timeout: TimeInterval
+  ) -> Bool {
+    let predicate = NSPredicate(format: "enabled == %@", NSNumber(value: enabled))
     let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
     return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
   }
