@@ -1209,8 +1209,11 @@ final class GhosttyTerminalHostView: NSView {
   private func markProcessExited() {
     guard !didMarkProcessExited else { return }
     didMarkProcessExited = true
-    controller.isRunning = false
-    onProcessExit?()
+    if let onProcessExit {
+      onProcessExit()
+    } else {
+      controller.isRunning = false
+    }
   }
 
   private func handleAttention(_ event: TerminalAttentionEvent) {

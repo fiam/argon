@@ -1858,6 +1858,95 @@ struct WorkspaceStateTests {
       state.restorableAgentSessions(savedProfiles: SavedAgentProfiles.builtinDefaults).isEmpty)
   }
 
+  @Test("stopped agent tabs do not hide their resumable session")
+  @MainActor
+  func stoppedAgentTabsDoNotHideTheirResumableSession() throws {
+    let restoreMetadataStore = isolateAgentSessionRestoreMetadataStoreForTest()
+    defer { restoreMetadataStore() }
+
+    AgentHarnesses.resumeSessionRecordsProvider = {
+      [
+        AgentResumeSessionRecord(
+          familyID: .codex,
+          sessionID: "11111111-1111-1111-1111-111111111111",
+          cwd: "/tmp/repo",
+          startedAt: Date(timeIntervalSince1970: 30)
+        )
+      ]
+    }
+    defer {
+      AgentHarnesses.resumeSessionRecordsProvider = nil
+    }
+
+    let state = makeState()
+    let stoppedTab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          agentFamilyID: .codex,
+          sandboxEnabled: true,
+          resumeArgumentTemplate: "resume {{session_id}}",
+          resumeSessionID: "11111111-1111-1111-1111-111111111111"
+        ))
+    )
+    stoppedTab.isRunning = false
+
+    let session = try #require(
+      state.restorableAgentSessions(savedProfiles: SavedAgentProfiles.builtinDefaults).first)
+
+    #expect(session.sessionID == "11111111-1111-1111-1111-111111111111")
+    #expect(session.openStoppedTabID == stoppedTab.id)
+  }
+
+  @Test("restoring a stopped tab session closes the old tab")
+  @MainActor
+  func restoringStoppedTabSessionClosesTheOldTab() throws {
+    let restoreMetadataStore = isolateAgentSessionRestoreMetadataStoreForTest()
+    defer { restoreMetadataStore() }
+
+    AgentHarnesses.resumeSessionRecordsProvider = {
+      [
+        AgentResumeSessionRecord(
+          familyID: .codex,
+          sessionID: "11111111-1111-1111-1111-111111111111",
+          cwd: "/tmp/repo",
+          startedAt: Date(timeIntervalSince1970: 30)
+        )
+      ]
+    }
+    defer {
+      AgentHarnesses.resumeSessionRecordsProvider = nil
+    }
+
+    let state = makeState()
+    let stoppedTab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          agentFamilyID: .codex,
+          sandboxEnabled: true,
+          resumeArgumentTemplate: "resume {{session_id}}",
+          resumeSessionID: "11111111-1111-1111-1111-111111111111"
+        ))
+    )
+    stoppedTab.isRunning = false
+
+    let session = try #require(
+      state.restorableAgentSessions(savedProfiles: SavedAgentProfiles.builtinDefaults).first)
+    let restoredTab = try #require(state.restoreAgentSession(session))
+
+    #expect(!state.allTerminalTabs.contains { $0.id == stoppedTab.id })
+    #expect(state.allTerminalTabs.contains { $0.id == restoredTab.id })
+    #expect(restoredTab.id != stoppedTab.id)
+    #expect(restoredTab.resumeSessionID == "11111111-1111-1111-1111-111111111111")
+    #expect(
+      restoredTab.resumeCommandDescription == "codex resume '11111111-1111-1111-1111-111111111111'")
+  }
+
   @Test("restoring an agent session uses persisted launch modes")
   @MainActor
   func restoringAgentSessionUsesPersistedLaunchModes() throws {
@@ -1979,9 +2068,7 @@ struct WorkspaceStateTests {
     WorkspaceState.terminalSessionReferenceProvider = { _ in
       session
     }
-    WorkspaceState.terminalSessionCommandBuilder = { session, command in
-      "attach \(session.sessionID): \(command)"
-    }
+    WorkspaceState.terminalSessionLaunchBuilder = Self.testTerminalSessionLaunchBuilder
     WorkspaceState.terminalSessionStopper = { session in
       stoppedSessions.append(session)
     }
@@ -1992,9 +2079,7 @@ struct WorkspaceStateTests {
       WorkspaceState.terminalSessionReferenceProvider = { tabID in
         TerminalSessionBackends.reference(for: tabID)
       }
-      WorkspaceState.terminalSessionCommandBuilder = { session, command in
-        TerminalSessionBackends.attachCommand(reference: session, createCommand: command)
-      }
+      WorkspaceState.terminalSessionLaunchBuilder = Self.defaultTerminalSessionLaunchBuilder
       WorkspaceState.terminalSessionStopper = { session in
         TerminalSessionBackends.stop(reference: session)
       }
@@ -2043,7 +2128,7 @@ struct WorkspaceStateTests {
     #expect(stoppedSessions.sessions == [session])
     #expect(tab?.terminalSession == session)
     #expect(tab?.keepsRunningAfterQuit == true)
-    #expect(tab?.launch.processSpec.args.last?.contains("attach restored-session:") == true)
+    #expect(tab?.launch.processSpec.args.last?.contains("restored-session") == true)
     #expect(tab?.launch.processSpec.args.last?.contains("codex --yolo resume") == true)
   }
 
@@ -2061,9 +2146,7 @@ struct WorkspaceStateTests {
     WorkspaceState.terminalSessionReferenceProvider = { _ in
       replacementSession
     }
-    WorkspaceState.terminalSessionCommandBuilder = { session, command in
-      "attach \(session.sessionID): \(command)"
-    }
+    WorkspaceState.terminalSessionLaunchBuilder = Self.testTerminalSessionLaunchBuilder
     WorkspaceState.commandStatusProvider = { commands in
       Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
     }
@@ -2071,9 +2154,7 @@ struct WorkspaceStateTests {
       WorkspaceState.terminalSessionReferenceProvider = { tabID in
         TerminalSessionBackends.reference(for: tabID)
       }
-      WorkspaceState.terminalSessionCommandBuilder = { session, command in
-        TerminalSessionBackends.attachCommand(reference: session, createCommand: command)
-      }
+      WorkspaceState.terminalSessionLaunchBuilder = Self.defaultTerminalSessionLaunchBuilder
       WorkspaceState.commandStatusProvider = nil
     }
 
@@ -2117,7 +2198,7 @@ struct WorkspaceStateTests {
 
     let tab = state.selectedTerminalTabs.first
     #expect(tab?.terminalSession == replacementSession)
-    #expect(tab?.launch.processSpec.args.last?.contains("attach replacement-session:") == true)
+    #expect(tab?.launch.processSpec.args.last?.contains("replacement-session") == true)
   }
 
   @Test("lazy restore replaces unmarked persistent terminal sessions")
@@ -2135,9 +2216,7 @@ struct WorkspaceStateTests {
     WorkspaceState.terminalSessionReferenceProvider = { _ in
       replacementSession
     }
-    WorkspaceState.terminalSessionCommandBuilder = { session, command in
-      "attach \(session.sessionID): \(command)"
-    }
+    WorkspaceState.terminalSessionLaunchBuilder = Self.testTerminalSessionLaunchBuilder
     WorkspaceState.terminalSessionStopper = { session in
       stoppedSessions.append(session)
     }
@@ -2148,9 +2227,7 @@ struct WorkspaceStateTests {
       WorkspaceState.terminalSessionReferenceProvider = { tabID in
         TerminalSessionBackends.reference(for: tabID)
       }
-      WorkspaceState.terminalSessionCommandBuilder = { session, command in
-        TerminalSessionBackends.attachCommand(reference: session, createCommand: command)
-      }
+      WorkspaceState.terminalSessionLaunchBuilder = Self.defaultTerminalSessionLaunchBuilder
       WorkspaceState.terminalSessionStopper = { session in
         TerminalSessionBackends.stop(reference: session)
       }
@@ -2198,7 +2275,7 @@ struct WorkspaceStateTests {
     let tab = state.selectedTerminalTabs.first
     #expect(stoppedSessions.sessions == [staleSession])
     #expect(tab?.terminalSession == replacementSession)
-    #expect(tab?.launch.processSpec.args.last?.contains("attach replacement-session:") == true)
+    #expect(tab?.launch.processSpec.args.last?.contains("replacement-session") == true)
     #expect(tab?.launch.processSpec.args.last?.contains("codex --yolo resume") == true)
   }
 
@@ -2347,16 +2424,12 @@ struct WorkspaceStateTests {
     WorkspaceState.terminalSessionReferenceProvider = { _ in
       session
     }
-    WorkspaceState.terminalSessionCommandBuilder = { session, command in
-      "attach \(session.sessionID): \(command)"
-    }
+    WorkspaceState.terminalSessionLaunchBuilder = Self.testTerminalSessionLaunchBuilder
     defer {
       WorkspaceState.terminalSessionReferenceProvider = { tabID in
         TerminalSessionBackends.reference(for: tabID)
       }
-      WorkspaceState.terminalSessionCommandBuilder = { session, command in
-        TerminalSessionBackends.attachCommand(reference: session, createCommand: command)
-      }
+      WorkspaceState.terminalSessionLaunchBuilder = Self.defaultTerminalSessionLaunchBuilder
     }
 
     let state = makeState()
@@ -2374,9 +2447,39 @@ struct WorkspaceStateTests {
     )
 
     #expect(tab.terminalSession == session)
-    #expect(tab.launch.processSpec.args.last?.contains("attach launch-session:") == true)
+    #expect(tab.launch.processSpec.args.last?.contains("launch-session") == true)
     #expect(tab.launch.processSpec.args.last?.contains("codex --yolo") == true)
     #expect(tab.launch.processSpec.args.last?.contains("--remote") == false)
+  }
+
+  @Test("argon terminal session launch wraps attach in user shell")
+  func argonTerminalSessionLaunchWrapsAttachInUserShell() {
+    let tabID = UUID(uuidString: "8E0C2B1D-0CE1-40C4-8A8E-8F07E75FA597")!
+    let createLaunch = TerminalLaunchConfiguration.command(
+      "codex --yolo",
+      currentDirectory: "/tmp/repo",
+      tabID: tabID,
+      environment: [
+        "PATH": "/usr/bin:/bin",
+        "SHELL": "/bin/zsh",
+      ]
+    )
+
+    let launch = TerminalSessionBackends.attachLaunchConfiguration(
+      reference: TerminalSessionReference(backendID: "argon", sessionID: "argon-direct"),
+      createLaunch: createLaunch
+    )
+
+    #expect(launch.processSpec.executable == "/bin/zsh")
+    #expect(Array(launch.processSpec.args.prefix(3)) == ["-i", "-l", "-c"])
+    let attachCommand = launch.processSpec.args.last ?? ""
+    #expect(attachCommand.contains(ArgonCLI.cliPath()))
+    #expect(attachCommand.contains("'terminal' 'attach'"))
+    #expect(attachCommand.contains("'--session-id' 'argon-direct'"))
+    #expect(attachCommand.contains("'/bin/sh' '-lc'"))
+    #expect(attachCommand.contains("codex --yolo"))
+    #expect(launch.currentDirectory == "/tmp/repo")
+    #expect(launch.environment["ARGON_TERMINAL_TAB_ID"] == tabID.uuidString.lowercased())
   }
 
   @Test("terminal sessions stop unless running persistence is preserved")
@@ -2485,6 +2588,67 @@ struct WorkspaceStateTests {
     regularState.handleTerminalExit(exitTab.id, exitBehavior: .keepOpen)
     #expect(exitTab.terminalSession == nil)
     #expect(stoppedSessions.sessions.map(\.sessionID).contains(exitSession.sessionID))
+  }
+
+  @Test("persistent terminal sessions reattach when the server is still alive")
+  @MainActor
+  func persistentTerminalSessionsReattachWhenServerIsStillAlive() throws {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    defer { restoreExperiment() }
+
+    let session = TerminalSessionReference(backendID: "test", sessionID: "alive")
+    let stoppedSessions = TerminalSessionStopRecorder()
+    WorkspaceState.terminalSessionStopper = { session in
+      stoppedSessions.append(session)
+    }
+    WorkspaceState.terminalSessionRunningChecker = { candidate in
+      candidate == session
+    }
+    defer {
+      WorkspaceState.terminalSessionStopper = { session in
+        TerminalSessionBackends.stop(reference: session)
+      }
+      WorkspaceState.terminalSessionRunningChecker = { session in
+        TerminalSessionBackends.isRunning(reference: session)
+      }
+    }
+
+    let state = makeState()
+    let tab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          agentFamilyID: .codex,
+          sandboxEnabled: true,
+          keepRunningWhileThinking: true
+        ))
+    )
+    tab.terminalSession = session
+    let originalViewIdentity = tab.terminalViewIdentity
+
+    state.handleTerminalExit(tab.id, exitBehavior: .keepOpen)
+
+    #expect(tab.terminalSession == session)
+    #expect(tab.isRunning)
+    #expect(tab.terminalViewIdentity != originalViewIdentity)
+    #expect(tab.terminalSessionReconnectCount == 1)
+    #expect(stoppedSessions.sessions.isEmpty)
+
+    state.handleTerminalExit(tab.id, exitBehavior: .keepOpen)
+    #expect(tab.terminalSession == session)
+    #expect(tab.terminalSessionReconnectCount == 2)
+    #expect(stoppedSessions.sessions.isEmpty)
+
+    let secondReconnectViewIdentity = tab.terminalViewIdentity
+
+    state.handleTerminalExit(tab.id, exitBehavior: .keepOpen)
+    #expect(tab.terminalSession == session)
+    #expect(tab.isRunning)
+    #expect(tab.terminalViewIdentity != secondReconnectViewIdentity)
+    #expect(tab.terminalSessionReconnectCount == 3)
+    #expect(stoppedSessions.sessions.isEmpty)
   }
 
   @Test("stopping thinking agent tabs preserves them for lazy restore")
@@ -2799,6 +2963,32 @@ struct WorkspaceStateTests {
     encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
     let data = try encoder.encode(agentControlResponse)
     try data.write(to: url, options: .atomic)
+  }
+
+  private static func testTerminalSessionLaunchBuilder(
+    session: TerminalSessionReference,
+    createLaunch: TerminalLaunchConfiguration
+  ) -> TerminalLaunchConfiguration {
+    TerminalLaunchConfiguration.command(
+      [
+        "/usr/bin/test-attach",
+        "attach",
+        session.sessionID,
+        createLaunch.shellCommand,
+      ].map(TerminalLaunchConfiguration.shellQuote).joined(separator: " "),
+      currentDirectory: createLaunch.currentDirectory,
+      environment: createLaunch.environment
+    )
+  }
+
+  private static func defaultTerminalSessionLaunchBuilder(
+    session: TerminalSessionReference,
+    createLaunch: TerminalLaunchConfiguration
+  ) -> TerminalLaunchConfiguration {
+    TerminalSessionBackends.attachLaunchConfiguration(
+      reference: session,
+      createLaunch: createLaunch
+    )
   }
 
   private func waitUntil(

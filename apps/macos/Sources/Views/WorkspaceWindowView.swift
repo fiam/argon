@@ -1290,29 +1290,83 @@ private struct WorkspaceAgentSessionRestoreMenu: View {
 
   var body: some View {
     Menu {
-      ForEach(sessions) { session in
-        Button {
-          onRestore(session)
-        } label: {
-          Label(menuTitle(for: session), systemImage: "arrow.clockwise")
+      ForEach(groupedSessions) { group in
+        Section(group.title) {
+          ForEach(group.sessions) { session in
+            Button {
+              onRestore(session)
+            } label: {
+              Label(
+                menuTitle(for: session),
+                systemImage: session.openStoppedTabID == nil
+                  ? "arrow.clockwise" : "arrow.triangle.2.circlepath"
+              )
+            }
+            .help(menuHelp(for: session))
+          }
         }
       }
     } label: {
-      Image(systemName: "ellipsis")
+      Image(systemName: "clock.arrow.circlepath")
         .font(.system(size: 14, weight: .semibold))
         .frame(width: 24, height: 24)
         .contentShape(Rectangle())
     }
     .menuStyle(.borderlessButton)
     .buttonStyle(.plain)
-    .help("Restore an agent session")
+    .help("Resume a recent conversation")
     .accessibilityIdentifier("workspace-agent-session-restore-menu")
   }
 
-  private func menuTitle(for session: WorkspaceRestorableAgentSession) -> String {
-    let timestamp = session.startedAt.formatted(date: .abbreviated, time: .shortened)
-    return "\(session.profileName) - \(timestamp) - \(session.sessionID.prefix(8))"
+  private var groupedSessions: [WorkspaceAgentSessionRestoreGroup] {
+    let calendar = Calendar.current
+    var groups: [WorkspaceAgentSessionRestoreGroup] = []
+    for session in sessions {
+      let title = groupTitle(for: session.startedAt, calendar: calendar)
+      if let lastIndex = groups.indices.last, groups[lastIndex].title == title {
+        groups[lastIndex].sessions.append(session)
+      } else {
+        groups.append(WorkspaceAgentSessionRestoreGroup(title: title, sessions: [session]))
+      }
+    }
+    return groups
   }
+
+  private func menuTitle(for session: WorkspaceRestorableAgentSession) -> String {
+    var parts = [
+      session.profileName,
+      session.startedAt.formatted(date: .omitted, time: .shortened),
+      String(session.sessionID.prefix(8)),
+    ]
+    if session.openStoppedTabID != nil {
+      parts.append("stopped tab")
+    }
+    return parts.joined(separator: " - ")
+  }
+
+  private func menuHelp(for session: WorkspaceRestorableAgentSession) -> String {
+    if session.openStoppedTabID != nil {
+      return "Close the stopped tab and resume this conversation."
+    }
+    return "Resume this conversation."
+  }
+
+  private func groupTitle(for date: Date, calendar: Calendar) -> String {
+    if calendar.isDateInToday(date) {
+      return "Today"
+    }
+    if calendar.isDateInYesterday(date) {
+      return "Yesterday"
+    }
+    return date.formatted(date: .abbreviated, time: .omitted)
+  }
+}
+
+private struct WorkspaceAgentSessionRestoreGroup: Identifiable {
+  let title: String
+  var sessions: [WorkspaceRestorableAgentSession]
+
+  var id: String { title }
 }
 
 private struct WorkspaceTerminalTabItem: View {
@@ -1860,7 +1914,7 @@ private struct WorkspaceTerminalStage: View {
           },
           focusRequestID: isSelected ? workspaceState.selectedTerminalFocusRequestID : nil
         )
-        .id(tab.id)
+        .id(tab.terminalViewIdentity)
         .zIndex(isSelected ? 1 : 0)
         .opacity(isSelected ? 1 : 0)
         .allowsHitTesting(isSelected)
@@ -1902,7 +1956,10 @@ private struct WorkspaceTerminalStage: View {
   }
 
   private func waitAfterCommand(for tab: WorkspaceTerminalTab) -> Bool {
-    selectedFinishedTerminalBehavior == .keepOpen
+    if tab.terminalSession != nil {
+      return false
+    }
+    return selectedFinishedTerminalBehavior == .keepOpen
   }
 
   private func shouldShowExitedShellOverlay(for tab: WorkspaceTerminalTab) -> Bool {

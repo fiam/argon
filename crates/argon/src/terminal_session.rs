@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::ffi::CString;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
 use std::net::Shutdown;
 use std::os::fd::{AsRawFd, RawFd};
@@ -12,10 +12,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
+use serde::Serialize;
 
 const FRAME_OUTPUT: u8 = 1;
 const FRAME_INPUT: u8 = 2;
@@ -34,6 +35,8 @@ pub enum TerminalCommands {
     Attach(TerminalAttachArgs),
     /// Stop a persistent terminal session.
     Stop(TerminalStopArgs),
+    /// Inspect a persistent terminal session.
+    Status(TerminalStatusArgs),
     #[command(hide = true)]
     Server(TerminalServerArgs),
 }
@@ -61,6 +64,16 @@ pub struct TerminalStopArgs {
 }
 
 #[derive(clap::Args, Debug, Clone)]
+pub struct TerminalStatusArgs {
+    #[arg(long)]
+    session_id: String,
+    #[arg(long)]
+    storage_dir: Option<PathBuf>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args, Debug, Clone)]
 pub struct TerminalServerArgs {
     #[arg(long)]
     session_id: String,
@@ -77,6 +90,7 @@ pub fn run_terminal(command: TerminalCommands) -> Result<()> {
     match command {
         TerminalCommands::Attach(args) => run_attach(args),
         TerminalCommands::Stop(args) => run_stop(args),
+        TerminalCommands::Status(args) => run_status(args),
         TerminalCommands::Server(args) => run_server(args),
     }
 }
@@ -84,21 +98,40 @@ pub fn run_terminal(command: TerminalCommands) -> Result<()> {
 fn run_attach(args: TerminalAttachArgs) -> Result<()> {
     let paths = SessionPaths::new(args.storage_dir.clone(), &args.session_id)?;
     ensure_private_dir(&paths.storage_dir)?;
+    terminal_debug_log(
+        &args.session_id,
+        format!(
+            "attach-start no_replay={} command={:?} socket={}",
+            args.no_replay,
+            args.command,
+            paths.socket_path.display()
+        ),
+    );
 
     let mut created_session = false;
     let mut stream = match UnixStream::connect(&paths.socket_path) {
-        Ok(stream) => stream,
+        Ok(stream) => {
+            terminal_debug_log(&args.session_id, "attach-connected-existing");
+            stream
+        }
         Err(_) => {
+            terminal_debug_log(&args.session_id, "attach-create-server");
             stop_recorded_server(&paths);
             start_server(&args, &paths)?;
             created_session = true;
-            connect_with_retry(&paths.socket_path, Duration::from_secs(5))?
+            let stream = connect_with_retry(&paths.socket_path, Duration::from_secs(5))?;
+            terminal_debug_log(&args.session_id, "attach-connected-created");
+            stream
         }
     };
 
-    write_attach_options(&mut stream, AttachOptions::from_args(&args))?;
-
+    let attach_options = if created_session {
+        AttachOptions::for_created_session()
+    } else {
+        AttachOptions::from_args(&args)
+    };
     let raw_mode = RawTerminalMode::enter(io::stdin().as_raw_fd())?;
+    write_attach_options(&mut stream, attach_options)?;
     if args.no_replay && !created_session {
         clear_local_terminal()?;
     }
@@ -108,6 +141,10 @@ fn run_attach(args: TerminalAttachArgs) -> Result<()> {
     start_resize_forwarder(writer);
 
     let exit_code = attach_output_loop(&mut stream)?;
+    terminal_debug_log(
+        &args.session_id,
+        format!("attach-output-loop-ended exit_code={exit_code:?}"),
+    );
     drop(raw_mode);
 
     if let Some(code) = exit_code {
@@ -116,11 +153,43 @@ fn run_attach(args: TerminalAttachArgs) -> Result<()> {
     Ok(())
 }
 
+fn attach_output_loop(stream: &mut UnixStream) -> Result<Option<i32>> {
+    let mut stdout = io::stdout().lock();
+    loop {
+        let frame = match read_frame(stream) {
+            Ok(frame) => frame,
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+
+        match frame.kind {
+            FRAME_OUTPUT => {
+                stdout.write_all(&frame.payload)?;
+                stdout.flush()?;
+            }
+            FRAME_EXIT => {
+                let code = frame
+                    .payload
+                    .get(..4)
+                    .map(i32_from_be_bytes)
+                    .unwrap_or_default();
+                return Ok(Some(code));
+            }
+            _ => {}
+        }
+    }
+}
+
 fn run_stop(args: TerminalStopArgs) -> Result<()> {
     let paths = SessionPaths::new(args.storage_dir, &args.session_id)?;
+    terminal_debug_log(
+        &args.session_id,
+        format!("stop-start socket={}", paths.socket_path.display()),
+    );
     let mut stream = match UnixStream::connect(&paths.socket_path) {
         Ok(stream) => stream,
         Err(_) => {
+            terminal_debug_log(&args.session_id, "stop-no-socket");
             stop_recorded_server(&paths);
             let _ = fs::remove_file(&paths.socket_path);
             return Ok(());
@@ -151,12 +220,40 @@ fn run_stop(args: TerminalStopArgs) -> Result<()> {
         }
     }
     if saw_eof {
+        terminal_debug_log(&args.session_id, "stop-saw-eof");
         wait_for_socket_removal(&paths.socket_path, Duration::from_secs(2));
         if paths.socket_path.exists() || paths.pid_path.exists() {
+            terminal_debug_log(&args.session_id, "stop-forcing-recorded-server-after-eof");
             stop_recorded_server(&paths);
         }
     } else {
+        terminal_debug_log(&args.session_id, "stop-timeout-force-recorded-server");
         stop_recorded_server(&paths);
+    }
+    Ok(())
+}
+
+fn run_status(args: TerminalStatusArgs) -> Result<()> {
+    let paths = SessionPaths::new(args.storage_dir, &args.session_id)?;
+    let pid = read_recorded_pid(&paths);
+    let socket_exists = paths.socket_path.exists();
+    let status = TerminalStatus {
+        session_id: args.session_id,
+        storage_dir: paths.storage_dir.display().to_string(),
+        socket_path: paths.socket_path.display().to_string(),
+        pid_path: paths.pid_path.display().to_string(),
+        socket_exists,
+        pid,
+        server_running: socket_exists && pid.is_some_and(process_exists),
+    };
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&status)?);
+    } else {
+        println!("session: {}", status.session_id);
+        println!("socket: {} ({})", status.socket_path, status.socket_exists);
+        println!("pid: {:?}", status.pid);
+        println!("server running: {}", status.server_running);
     }
     Ok(())
 }
@@ -164,6 +261,15 @@ fn run_stop(args: TerminalStopArgs) -> Result<()> {
 fn run_server(args: TerminalServerArgs) -> Result<()> {
     let paths = SessionPaths::new(args.storage_dir, &args.session_id)?;
     ensure_private_dir(&paths.storage_dir)?;
+    terminal_debug_log(
+        &args.session_id,
+        format!(
+            "server-start pid={} command={:?} socket={}",
+            std::process::id(),
+            args.command,
+            paths.socket_path.display()
+        ),
+    );
     let _ = fs::remove_file(&paths.socket_path);
     let listener = UnixListener::bind(&paths.socket_path).with_context(|| {
         format!(
@@ -185,9 +291,20 @@ fn run_server(args: TerminalServerArgs) -> Result<()> {
     };
     let initial_size = terminal_size(io::stdout().as_raw_fd()).unwrap_or_default();
     let mut child = PtyChild::spawn(&args.command, &cwd, initial_size)?;
-    let result = run_server_loop(&listener, &mut child);
+    terminal_debug_log(
+        &args.session_id,
+        format!("server-child-spawned child_pid={}", child.pid),
+    );
+    let result = run_server_loop(&args.session_id, &listener, &mut child);
     let _ = fs::remove_file(&paths.socket_path);
     let _ = fs::remove_file(&paths.pid_path);
+    terminal_debug_log(
+        &args.session_id,
+        format!(
+            "server-end result={}",
+            result.as_ref().map(|_| "ok").unwrap_or("err")
+        ),
+    );
     result
 }
 
@@ -220,6 +337,10 @@ fn start_server(args: &TerminalAttachArgs, paths: &SessionPaths) -> Result<()> {
     command
         .spawn()
         .context("failed to start terminal session server")?;
+    terminal_debug_log(
+        &args.session_id,
+        format!("attach-started-server-helper command={:?}", command),
+    );
     Ok(())
 }
 
@@ -251,18 +372,30 @@ fn wait_for_socket_removal(socket_path: &Path, timeout: Duration) {
 }
 
 fn stop_recorded_server(paths: &SessionPaths) {
+    let session_id = paths
+        .socket_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("unknown");
     let Ok(pid_text) = fs::read_to_string(&paths.pid_path) else {
+        terminal_debug_log(session_id, "stop-recorded-server-no-pid-file");
         return;
     };
     let Ok(pid) = pid_text.trim().parse::<libc::pid_t>() else {
+        terminal_debug_log(session_id, "stop-recorded-server-invalid-pid");
         let _ = fs::remove_file(&paths.pid_path);
         return;
     };
     if pid <= 0 {
+        terminal_debug_log(
+            session_id,
+            format!("stop-recorded-server-invalid-pid pid={pid}"),
+        );
         let _ = fs::remove_file(&paths.pid_path);
         return;
     }
 
+    terminal_debug_log(session_id, format!("stop-recorded-server-kill pid={pid}"));
     let _ = unsafe { libc::kill(-pid, libc::SIGHUP) };
     let _ = unsafe { libc::kill(pid, libc::SIGHUP) };
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -271,6 +404,7 @@ fn stop_recorded_server(paths: &SessionPaths) {
     }
     let _ = fs::remove_file(&paths.socket_path);
     let _ = fs::remove_file(&paths.pid_path);
+    terminal_debug_log(session_id, "stop-recorded-server-cleaned-files");
 }
 
 fn process_exists(pid: libc::pid_t) -> bool {
@@ -282,33 +416,6 @@ fn process_exists(pid: libc::pid_t) -> bool {
         return true;
     }
     io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
-fn attach_output_loop(stream: &mut UnixStream) -> Result<Option<i32>> {
-    let mut stdout = io::stdout().lock();
-    loop {
-        let frame = match read_frame(stream) {
-            Ok(frame) => frame,
-            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-            Err(error) => return Err(error.into()),
-        };
-
-        match frame.kind {
-            FRAME_OUTPUT => {
-                stdout.write_all(&frame.payload)?;
-                stdout.flush()?;
-            }
-            FRAME_EXIT => {
-                let code = frame
-                    .payload
-                    .get(..4)
-                    .map(i32_from_be_bytes)
-                    .unwrap_or_default();
-                return Ok(Some(code));
-            }
-            _ => {}
-        }
-    }
 }
 
 fn start_stdin_forwarder(writer: Arc<Mutex<UnixStream>>) {
@@ -365,26 +472,68 @@ fn clear_local_terminal() -> io::Result<()> {
     stdout.flush()
 }
 
-fn run_server_loop(listener: &UnixListener, child: &mut PtyChild) -> Result<()> {
+fn drain_available_child_output(
+    session_id: &str,
+    child: &mut PtyChild,
+    output_buffer: &mut OutputBuffer,
+) -> Result<()> {
+    let mut drained = 0usize;
+    loop {
+        let mut poll_fd = libc::pollfd {
+            fd: child.master_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let poll_result = unsafe { libc::poll(&mut poll_fd, 1, 0) };
+        if poll_result == -1 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error).context("terminal session drain poll failed");
+        }
+        if poll_result == 0 || poll_fd.revents & libc::POLLIN == 0 {
+            break;
+        }
+
+        let mut buffer = [0; 8192];
+        let count = unsafe {
+            libc::read(
+                child.master_fd,
+                buffer.as_mut_ptr().cast::<libc::c_void>(),
+                buffer.len(),
+            )
+        };
+        if count <= 0 {
+            break;
+        }
+        let bytes = &buffer[..count as usize];
+        drained += bytes.len();
+        output_buffer.push(bytes);
+    }
+
+    if drained > 0 {
+        terminal_debug_log(
+            session_id,
+            format!("server-drained-before-no-replay bytes={drained}"),
+        );
+    }
+    Ok(())
+}
+
+fn run_server_loop(session_id: &str, listener: &UnixListener, child: &mut PtyChild) -> Result<()> {
     let listener_fd = listener.as_raw_fd();
     let mut client: Option<ServerClient> = None;
     let mut output_buffer = OutputBuffer::new(OUTPUT_BUFFER_LIMIT);
-    let mut child_exit_code: Option<i32> = None;
-    let mut exit_without_client_deadline: Option<Instant> = None;
 
     loop {
         let mut poll_fds = Vec::new();
-        let master_index = if child_exit_code.is_none() {
-            let index = poll_fds.len();
-            poll_fds.push(libc::pollfd {
-                fd: child.master_fd,
-                events: libc::POLLIN,
-                revents: 0,
-            });
-            Some(index)
-        } else {
-            None
-        };
+        let master_index = poll_fds.len();
+        poll_fds.push(libc::pollfd {
+            fd: child.master_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        });
         let listener_index = poll_fds.len();
         poll_fds.push(libc::pollfd {
             fd: listener_fd,
@@ -418,6 +567,16 @@ fn run_server_loop(listener: &UnixListener, child: &mut PtyChild) -> Result<()> 
                     .stream
                     .set_write_timeout(Some(Duration::from_secs(10)));
                 let attach_options = read_attach_options(&mut accepted);
+                terminal_debug_log(
+                    session_id,
+                    format!(
+                        "server-client-accepted replay={}",
+                        attach_options.replay_output
+                    ),
+                );
+                if !attach_options.replay_output {
+                    drain_available_child_output(session_id, child, &mut output_buffer)?;
+                }
                 if attach_options.replay_output
                     && replay_output(
                         &mut accepted.stream,
@@ -427,15 +586,11 @@ fn run_server_loop(listener: &UnixListener, child: &mut PtyChild) -> Result<()> 
                 {
                     continue;
                 }
-                if let Some(exit_code) = child_exit_code {
-                    let payload = exit_code.to_be_bytes();
-                    let _ = write_frame(&mut accepted.stream, FRAME_EXIT, &payload);
-                    return Ok(());
-                }
                 if matches!(
                     process_client_frames(&mut accepted, child)?,
                     ClientReadOutcome::StopRequested
                 ) {
+                    terminal_debug_log(session_id, "server-stop-requested-before-client-active");
                     child.terminate();
                     return Ok(());
                 }
@@ -443,9 +598,7 @@ fn run_server_loop(listener: &UnixListener, child: &mut PtyChild) -> Result<()> 
             }
         }
 
-        if let Some(index) = master_index
-            && poll_fds[index].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0
-        {
+        if poll_fds[master_index].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
             let mut buffer = [0; 8192];
             let count = unsafe {
                 libc::read(
@@ -478,42 +631,87 @@ fn run_server_loop(listener: &UnixListener, child: &mut PtyChild) -> Result<()> 
             match read_client_frames(active_client, child)? {
                 ClientReadOutcome::Continue => {}
                 ClientReadOutcome::Disconnected => {
+                    terminal_debug_log(session_id, "server-client-disconnected");
                     client = None;
                 }
                 ClientReadOutcome::StopRequested => {
+                    terminal_debug_log(session_id, "server-stop-requested");
                     child.terminate();
                     return Ok(());
                 }
             }
         }
 
-        if child_exit_code.is_none()
-            && let Some(exit_code) = child.try_wait()?
-        {
-            child_exit_code = Some(exit_code);
+        if let Some(exit_code) = child.try_wait()? {
+            terminal_debug_log(
+                session_id,
+                format!("server-child-exited exit_code={exit_code}"),
+            );
             if let Some(client) = client.as_mut() {
                 let payload = exit_code.to_be_bytes();
                 let _ = write_frame(&mut client.stream, FRAME_EXIT, &payload);
-                return Ok(());
             }
-            exit_without_client_deadline = Some(Instant::now() + Duration::from_secs(5));
-        }
-
-        if child_exit_code.is_some()
-            && client.is_none()
-            && exit_without_client_deadline.is_some_and(|deadline| Instant::now() >= deadline)
-        {
             return Ok(());
         }
     }
 }
 
+#[derive(Serialize)]
+struct TerminalStatus {
+    session_id: String,
+    storage_dir: String,
+    socket_path: String,
+    pid_path: String,
+    socket_exists: bool,
+    pid: Option<libc::pid_t>,
+    server_running: bool,
+}
+
+fn read_recorded_pid(paths: &SessionPaths) -> Option<libc::pid_t> {
+    let pid_text = fs::read_to_string(&paths.pid_path).ok()?;
+    let pid = pid_text.trim().parse::<libc::pid_t>().ok()?;
+    (pid > 0).then_some(pid)
+}
+
+fn terminal_debug_log(session_id: &str, event: impl AsRef<str>) {
+    if std::env::var_os("ARGON_TERMINAL_LIFECYCLE_LOG").is_none() {
+        return;
+    }
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| format!("{}.{:03}", value.as_secs(), value.subsec_millis()))
+        .unwrap_or_else(|_| "0.000".to_string());
+    let path = default_storage_dir()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!("argon-terminal-lifecycle-{}.log", unsafe {
+            libc::getuid()
+        }));
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
+        return;
+    };
+    let _ = writeln!(
+        file,
+        "{timestamp} pid={} session={} {}",
+        std::process::id(),
+        session_id,
+        event.as_ref()
+    );
+}
+
 fn accept_client(listener: &UnixListener) -> Result<Option<ServerClient>> {
     match listener.accept() {
-        Ok((stream, _)) => Ok(Some(ServerClient {
-            stream,
-            input_buffer: Vec::new(),
-        })),
+        Ok((stream, _)) => {
+            stream
+                .set_nonblocking(false)
+                .context("failed to configure terminal session client socket")?;
+            Ok(Some(ServerClient {
+                stream,
+                input_buffer: Vec::new(),
+            }))
+        }
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
         Err(error) => Err(error).context("failed to accept terminal session client"),
     }
@@ -525,6 +723,12 @@ struct AttachOptions {
 }
 
 impl AttachOptions {
+    fn for_created_session() -> Self {
+        Self {
+            replay_output: true,
+        }
+    }
+
     fn from_args(args: &TerminalAttachArgs) -> Self {
         Self {
             replay_output: !args.no_replay,

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 struct ArgonTerminalSessionBackend: TerminalSessionBackend {
@@ -15,7 +16,10 @@ struct ArgonTerminalSessionBackend: TerminalSessionBackend {
     )
   }
 
-  func attachCommand(reference: TerminalSessionReference, createCommand: String) -> String {
+  func attachLaunchConfiguration(
+    reference: TerminalSessionReference,
+    createLaunch: TerminalLaunchConfiguration
+  ) -> TerminalLaunchConfiguration {
     let cli = ArgonCLI.cliPath()
     let args = [
       cli,
@@ -27,13 +31,21 @@ struct ArgonTerminalSessionBackend: TerminalSessionBackend {
       "--",
       "/bin/sh",
       "-lc",
-      createCommand,
+      createLaunch.shellCommand,
     ]
-    return args.map(Self.shellQuote).joined(separator: " ")
+    TerminalSessionLifecycleLog.record(
+      "attach-launch session=\(reference.sessionID) cwd=\(createLaunch.currentDirectory) command=\(createLaunch.shellCommand)"
+    )
+    return TerminalLaunchConfiguration.command(
+      args.map(TerminalLaunchConfiguration.shellQuote).joined(separator: " "),
+      currentDirectory: createLaunch.currentDirectory,
+      environment: createLaunch.environment
+    )
   }
 
   func stop(reference: TerminalSessionReference) {
     guard reference.backendID == backendID else { return }
+    TerminalSessionLifecycleLog.record("backend-stop session=\(reference.sessionID)")
     let process = Process()
     process.executableURL = URL(fileURLWithPath: ArgonCLI.cliPath())
     process.arguments = [
@@ -48,9 +60,49 @@ struct ArgonTerminalSessionBackend: TerminalSessionBackend {
     process.waitUntilExit()
   }
 
-  private static func shellQuote(_ value: String) -> String {
-    "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
+  func isRunning(reference: TerminalSessionReference) -> Bool {
+    guard reference.backendID == backendID else { return false }
+
+    let paths = sessionPaths(reference: reference)
+    guard FileManager.default.fileExists(atPath: paths.socket.path) else {
+      TerminalSessionLifecycleLog.record(
+        "backend-is-running session=\(reference.sessionID) result=false reason=missing-socket"
+      )
+      return false
+    }
+    guard
+      let pidText = try? String(contentsOf: paths.pid, encoding: .utf8),
+      let parsedPID = Int32(pidText.trimmingCharacters(in: .whitespacesAndNewlines)),
+      parsedPID > 0
+    else {
+      TerminalSessionLifecycleLog.record(
+        "backend-is-running session=\(reference.sessionID) result=false reason=missing-pid"
+      )
+      return false
+    }
+    let pid = pid_t(parsedPID)
+
+    if kill(pid, 0) == 0 {
+      return true
+    }
+    let running = errno == EPERM
+    if !running {
+      TerminalSessionLifecycleLog.record(
+        "backend-is-running session=\(reference.sessionID) result=false reason=dead-pid pid=\(parsedPID)"
+      )
+    }
+    return running
   }
+
+  private func sessionPaths(reference: TerminalSessionReference) -> (socket: URL, pid: URL) {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("argon-terminal-sessions-\(getuid())", isDirectory: true)
+    return (
+      socket: directory.appendingPathComponent("\(reference.sessionID).sock", isDirectory: false),
+      pid: directory.appendingPathComponent("\(reference.sessionID).pid", isDirectory: false)
+    )
+  }
+
 }
 
 struct LegacyScreenTerminalSessionStopper: Sendable {

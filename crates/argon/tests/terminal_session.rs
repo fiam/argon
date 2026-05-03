@@ -36,6 +36,49 @@ fn argon_terminal_attach_with_flags(
     Ok(process)
 }
 
+fn argon_terminal_status(session_id: &str, storage_dir: &Path) -> Result<serde_json::Value> {
+    let output = Command::new(env!("CARGO_BIN_EXE_argon"))
+        .arg("terminal")
+        .arg("status")
+        .arg("--session-id")
+        .arg(session_id)
+        .arg("--storage-dir")
+        .arg(storage_dir)
+        .arg("--json")
+        .output()
+        .context("failed to run terminal status")?;
+    if !output.status.success() {
+        bail!(
+            "terminal status failed (exit {:?})\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    serde_json::from_slice(&output.stdout).context("failed to parse terminal status JSON")
+}
+
+fn argon_terminal_stop(session_id: &str, storage_dir: &Path) -> Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_argon"))
+        .arg("terminal")
+        .arg("stop")
+        .arg("--session-id")
+        .arg(session_id)
+        .arg("--storage-dir")
+        .arg(storage_dir)
+        .output()
+        .context("failed to run terminal stop")?;
+    if !output.status.success() {
+        bail!(
+            "terminal stop failed (exit {:?})\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
 fn wait_for_file_contents_or_child_exit(
     mut child: Child,
     path: &Path,
@@ -129,6 +172,55 @@ fn wait_with_output_timeout(mut child: Child, timeout: Duration) -> Result<Outpu
     }
 }
 
+fn wait_for_file_contents(path: &Path, expected: &str, timeout: Duration) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    let mut last_contents = String::new();
+    loop {
+        match fs::read_to_string(path) {
+            Ok(contents) => {
+                if contents == expected {
+                    return Ok(());
+                }
+                last_contents = contents;
+            }
+            Err(_) => {}
+        }
+
+        if Instant::now() >= deadline {
+            bail!(
+                "timed out waiting for {} to contain {:?}; last contents were {:?}",
+                path.display(),
+                expected,
+                last_contents
+            );
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn wait_for_terminal_status(
+    session_id: &str,
+    storage_dir: &Path,
+    expected_running: bool,
+    timeout: Duration,
+) -> Result<serde_json::Value> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let status = argon_terminal_status(session_id, storage_dir)?;
+        if status["server_running"] == expected_running {
+            return Ok(status);
+        }
+
+        if Instant::now() >= deadline {
+            bail!(
+                "timed out waiting for terminal status server_running={expected_running}; last status was {}",
+                status
+            );
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
 struct TerminalSessionCleanup {
     session_id: String,
     storage_dir: PathBuf,
@@ -145,6 +237,50 @@ impl Drop for TerminalSessionCleanup {
             .arg(&self.storage_dir)
             .status();
     }
+}
+
+#[test]
+fn terminal_session_status_reports_running_server() -> Result<()> {
+    let temp = TempDirBuilder::new()
+        .prefix("argon-ts-status")
+        .tempdir_in("/tmp")?;
+    let storage_dir = temp.path().join("s");
+    let marker = temp.path().join("marker");
+    let process_needle = storage_dir.display().to_string();
+    let session_id = "status";
+    let _cleanup = TerminalSessionCleanup {
+        session_id: session_id.to_string(),
+        storage_dir: storage_dir.clone(),
+    };
+
+    let command = format!("printf started > {}; sleep 30", shell_quote(&marker));
+    let attach = argon_terminal_attach(session_id, &storage_dir, &command)?
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to start status terminal attach")?;
+    let attach = wait_for_file_contents_or_child_exit(
+        attach,
+        &marker,
+        "started",
+        &process_needle,
+        Duration::from_secs(5),
+    )?;
+
+    let status = wait_for_terminal_status(session_id, &storage_dir, true, Duration::from_secs(5))?;
+    assert_eq!(status["session_id"], session_id);
+    assert_eq!(status["socket_exists"], true);
+    assert!(status["pid"].is_number(), "status was {status}");
+
+    argon_terminal_stop(session_id, &storage_dir)?;
+    let stopped_status =
+        wait_for_terminal_status(session_id, &storage_dir, false, Duration::from_secs(5))?;
+    assert_eq!(stopped_status["socket_exists"], false);
+
+    let _ = wait_with_output_timeout(attach, Duration::from_secs(5))?;
+
+    Ok(())
 }
 
 #[test]
@@ -303,6 +439,86 @@ fn terminal_session_can_reattach_without_replaying_buffered_output() -> Result<(
         "reattach should still stream live output; stdout was {stdout:?}"
     );
     assert_eq!(fs::read_to_string(&marker)?, "done");
+
+    Ok(())
+}
+
+#[test]
+fn terminal_session_exits_after_detached_child_exits() -> Result<()> {
+    let temp = TempDirBuilder::new()
+        .prefix("argon-ts-restart-exited")
+        .tempdir_in("/tmp")?;
+    let storage_dir = temp.path().join("s");
+    let marker = temp.path().join("marker");
+    let process_needle = storage_dir.display().to_string();
+    let session_id = "restart-exited";
+    let _cleanup = TerminalSessionCleanup {
+        session_id: session_id.to_string(),
+        storage_dir: storage_dir.clone(),
+    };
+
+    let first_command = format!(
+        "printf 'started\\n'; printf started > {}; sleep 1; printf done > {}; printf 'done\\n'",
+        shell_quote(&marker),
+        shell_quote(&marker)
+    );
+    let first_attach = argon_terminal_attach(session_id, &storage_dir, &first_command)?
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to start first restart-exited attach")?;
+    let mut first_attach = wait_for_file_contents_or_child_exit(
+        first_attach,
+        &marker,
+        "started",
+        &process_needle,
+        Duration::from_secs(5),
+    )?;
+    first_attach
+        .kill()
+        .context("failed to detach first restart-exited attach")?;
+    let _ = first_attach.wait();
+
+    wait_for_file_contents(&marker, "done", Duration::from_secs(5))?;
+    thread::sleep(Duration::from_millis(500));
+
+    let second_command = format!(
+        "printf replacement > {}; printf 'replacement\\n'; sleep 1",
+        shell_quote(&marker)
+    );
+    let second_attach = argon_terminal_attach_with_flags(
+        session_id,
+        &storage_dir,
+        &["--no-replay"],
+        &second_command,
+    )?
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .context("failed to start second exited-child attach")?;
+    let output = wait_with_output_timeout(second_attach, Duration::from_secs(6))?;
+
+    if !output.status.success() {
+        bail!(
+            "second exited-child attach failed (exit {:?})\nstdout: {}\nstderr: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("replacement"),
+        "reattach after child exit should run the replacement command; stdout was {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("done"),
+        "restart should not replay the exited session; stdout was {stdout:?}"
+    );
+    assert_eq!(fs::read_to_string(&marker)?, "replacement");
 
     Ok(())
 }

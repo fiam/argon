@@ -180,6 +180,8 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
   var lastObservedTerminalTitle: String?
   var lastDeselectedAt: Date?
   var suppressAttentionUntil: Date?
+  var terminalViewIdentity: UUID
+  var terminalSessionReconnectCount: Int
 
   init(
     id: UUID = UUID(),
@@ -208,7 +210,9 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
     agentActivityState: WorkspaceAgentActivityState = .idle,
     lastObservedTerminalTitle: String? = nil,
     lastDeselectedAt: Date? = nil,
-    suppressAttentionUntil: Date? = nil
+    suppressAttentionUntil: Date? = nil,
+    terminalViewIdentity: UUID = UUID(),
+    terminalSessionReconnectCount: Int = 0
   ) {
     self.id = id
     self.worktreePath = worktreePath
@@ -237,6 +241,8 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
     self.lastObservedTerminalTitle = lastObservedTerminalTitle
     self.lastDeselectedAt = lastDeselectedAt
     self.suppressAttentionUntil = suppressAttentionUntil
+    self.terminalViewIdentity = terminalViewIdentity
+    self.terminalSessionReconnectCount = terminalSessionReconnectCount
   }
 }
 

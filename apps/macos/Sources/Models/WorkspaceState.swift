@@ -11,13 +11,20 @@ final class WorkspaceState {
     (@Sendable (UUID) -> TerminalSessionReference?) = { tabID in
       TerminalSessionBackends.reference(for: tabID)
     }
-  nonisolated(unsafe) static var terminalSessionCommandBuilder:
-    (@Sendable (TerminalSessionReference, String) -> String) = { session, command in
-      TerminalSessionBackends.attachCommand(reference: session, createCommand: command)
+  nonisolated(unsafe) static var terminalSessionLaunchBuilder:
+    (
+      @Sendable (TerminalSessionReference, TerminalLaunchConfiguration) ->
+        TerminalLaunchConfiguration
+    ) = { session, launch in
+      TerminalSessionBackends.attachLaunchConfiguration(reference: session, createLaunch: launch)
     }
   nonisolated(unsafe) static var terminalSessionStopper:
     (@Sendable (TerminalSessionReference) -> Void) = { session in
       TerminalSessionBackends.stop(reference: session)
+    }
+  nonisolated(unsafe) static var terminalSessionRunningChecker:
+    (@Sendable (TerminalSessionReference) -> Bool) = { session in
+      TerminalSessionBackends.isRunning(reference: session)
     }
   private static let restoredAgentAttentionSuppressionInterval: TimeInterval = 3
   nonisolated(unsafe) static var sandboxfilePromptLoader:
@@ -1036,6 +1043,9 @@ final class WorkspaceState {
       request.keepRunningWhileThinking
       ? Self.terminalSessionReferenceProvider(tabID)
       : nil
+    TerminalSessionLifecycleLog.record(
+      "open-agent-tab tab=\(tabID.uuidString.lowercased()) session=\(terminalSession?.sessionID ?? "none") profile=\(request.displayName) family=\(request.agentFamilyID?.rawValue ?? "none") sandbox=\(request.sandboxEnabled) yolo=\(request.yoloMode) resume=\(request.resumeSessionID ?? "none")"
+    )
     let sandboxAgentFamily =
       request.agentFamilyID.map(AgentHarnesses.sandboxAgentFamily)
       ?? sandboxAgentFamily(from: request.command)
@@ -1057,11 +1067,7 @@ final class WorkspaceState {
       )
     let launch =
       terminalSession.map { session in
-        TerminalLaunchConfiguration.command(
-          Self.terminalSessionCommandBuilder(session, directLaunch.shellCommand),
-          currentDirectory: worktree.path,
-          tabID: tabID
-        )
+        Self.terminalSessionLaunchBuilder(session, directLaunch)
       } ?? directLaunch
     let resumeArgumentTemplate =
       request.isRestorableAfterRelaunch
@@ -1109,8 +1115,9 @@ final class WorkspaceState {
     guard let worktreePath = normalizedSelectedWorktreePath else { return [] }
 
     let profilesByFamily = Self.agentProfilesByFamily(savedProfiles: savedProfiles)
-    let openSessionKeys = Set(
+    let runningSessionKeys = Set(
       selectedTerminalTabs.compactMap { tab -> String? in
+        guard tab.isRunning else { return nil }
         guard let sessionID = tab.resumeSessionID, !sessionID.isEmpty else { return nil }
         let familyID =
           tab.agentFamilyID ?? AgentHarnesses.familyID(matchingCommand: tab.commandDescription)
@@ -1118,6 +1125,17 @@ final class WorkspaceState {
         return Self.agentSessionKey(familyID: familyID, sessionID: sessionID)
       }
     )
+    let stoppedTabIDsBySessionKey = selectedTerminalTabs.reduce(into: [String: UUID]()) {
+      partialResult,
+      tab in
+      guard !tab.isRunning else { return }
+      guard let sessionID = tab.resumeSessionID, !sessionID.isEmpty else { return }
+      let familyID =
+        tab.agentFamilyID ?? AgentHarnesses.familyID(matchingCommand: tab.commandDescription)
+      guard let familyID else { return }
+      let sessionKey = Self.agentSessionKey(familyID: familyID, sessionID: sessionID)
+      partialResult[sessionKey] = tab.id
+    }
 
     var sessionsByKey: [String: WorkspaceRestorableAgentSession] = [:]
     for familyID in AgentFamilyID.allCases {
@@ -1132,7 +1150,7 @@ final class WorkspaceState {
       for record in AgentHarnesses.resumeSessionRecords(for: familyID, notBefore: notBefore) {
         guard normalizedPath(record.cwd) == worktreePath else { continue }
         let sessionKey = Self.agentSessionKey(familyID: familyID, sessionID: record.sessionID)
-        guard !openSessionKeys.contains(sessionKey) else { continue }
+        guard !runningSessionKeys.contains(sessionKey) else { continue }
 
         let metadata = AgentSessionRestoreMetadataStore.metadata(
           familyID: familyID,
@@ -1149,7 +1167,8 @@ final class WorkspaceState {
           cwd: normalizedPath(record.cwd),
           yoloMode: metadata?.yoloMode ?? false,
           sandboxEnabled: metadata?.sandboxEnabled ?? true,
-          startedAt: record.startedAt
+          startedAt: record.startedAt,
+          openStoppedTabID: stoppedTabIDsBySessionKey[sessionKey]
         )
         if let existing = sessionsByKey[sessionKey], existing.startedAt >= session.startedAt {
           continue
@@ -1170,6 +1189,9 @@ final class WorkspaceState {
   func restoreAgentSession(
     _ session: WorkspaceRestorableAgentSession
   ) -> WorkspaceTerminalTab? {
+    TerminalSessionLifecycleLog.record(
+      "restore-agent-session family=\(session.familyID.rawValue) codex-session=\(session.sessionID) cwd=\(session.cwd) sandbox=\(session.sandboxEnabled) stopped-tab=\(session.openStoppedTabID?.uuidString.lowercased() ?? "none")"
+    )
     let command = Self.agentCommand(
       baseCommand: session.command,
       yoloMode: session.yoloMode,
@@ -1185,6 +1207,8 @@ final class WorkspaceState {
       errorMessage = "\(session.profileName) cannot restore this session."
       return nil
     }
+
+    closeStoppedAgentTabs(matching: session)
 
     return openAgentTab(
       WorkspaceAgentLaunchRequest(
@@ -1203,6 +1227,25 @@ final class WorkspaceState {
           AgentTerminalPersistenceExperimentSettings.canUseTerminalSessionPersistence
       )
     )
+  }
+
+  private func closeStoppedAgentTabs(matching session: WorkspaceRestorableAgentSession) {
+    let matchingTabIDs = allTerminalTabs.compactMap { tab -> UUID? in
+      guard !tab.isRunning else { return nil }
+      guard normalizedPath(tab.worktreePath) == normalizedPath(session.cwd) else { return nil }
+      guard tab.resumeSessionID == session.sessionID else { return nil }
+      let familyID =
+        tab.agentFamilyID ?? AgentHarnesses.familyID(matchingCommand: tab.baseCommandDescription)
+      guard familyID == session.familyID else { return nil }
+      return tab.id
+    }
+
+    for tabID in matchingTabIDs {
+      TerminalSessionLifecycleLog.record(
+        "close-stopped-matching-tab tab=\(tabID.uuidString.lowercased()) codex-session=\(session.sessionID)"
+      )
+      closeTerminalTab(tabID)
+    }
   }
 
   @discardableResult
@@ -1322,6 +1365,7 @@ final class WorkspaceState {
 
     guard tab.lastObservedTerminalTitle != normalizedTitle else { return }
     tab.lastObservedTerminalTitle = normalizedTitle
+    tab.terminalSessionReconnectCount = 0
     tab.agentActivityState = .thinking
     scheduleAgentActivityIdle(tabID)
   }
@@ -1402,7 +1446,13 @@ final class WorkspaceState {
       if preserveRestorableAgentSession {
         preserveRestorableAgentTabForLater(closingTab)
       }
+      TerminalSessionLifecycleLog.record(
+        "close-terminal-tab tab=\(tabID.uuidString.lowercased()) preserve=\(preserveRestorableAgentSession) running=\(closingTab.isRunning) session=\(closingTab.terminalSession?.sessionID ?? "none") resume=\(closingTab.resumeSessionID ?? "none")"
+      )
       if let session = closingTab.terminalSession {
+        TerminalSessionLifecycleLog.record(
+          "stop-terminal-session reason=close-terminal-tab tab=\(tabID.uuidString.lowercased()) session=\(session.sessionID)"
+        )
         Self.terminalSessionStopper(session)
         updatedTabs[index].terminalSession = nil
       }
@@ -1426,6 +1476,9 @@ final class WorkspaceState {
 
   func prepareTerminalSessionsForTermination(keepRunningAgentsAlive: Bool) {
     isPreparingForTerminalDetach = true
+    TerminalSessionLifecycleLog.record(
+      "prepare-terminal-sessions keep-running=\(keepRunningAgentsAlive)"
+    )
 
     for tab in allTerminalTabs {
       guard let session = tab.terminalSession else { continue }
@@ -1433,6 +1486,9 @@ final class WorkspaceState {
         keepRunningAgentsAlive && tab.shouldKeepTerminalSessionAliveAcrossQuit
       guard !shouldKeepSessionAlive else { continue }
 
+      TerminalSessionLifecycleLog.record(
+        "stop-terminal-session reason=prepare-termination tab=\(tab.id.uuidString.lowercased()) session=\(session.sessionID) keep-running-agent=\(shouldKeepSessionAlive)"
+      )
       Self.terminalSessionStopper(session)
       tab.terminalSession = nil
     }
@@ -1449,6 +1505,7 @@ final class WorkspaceState {
 
   func finishTerminalDetach() {
     isPreparingForTerminalDetach = false
+    TerminalSessionLifecycleLog.record("finish-terminal-detach")
   }
 
   @discardableResult
@@ -1461,13 +1518,36 @@ final class WorkspaceState {
   func handleTerminalExit(_ tabID: UUID, exitBehavior: WorkspaceFinishedTerminalBehavior) {
     guard let tab = terminalTab(for: tabID) else { return }
     agentActivityIdleTasksByTabID.removeValue(forKey: tabID)?.cancel()
+    TerminalSessionLifecycleLog.record(
+      "handle-terminal-exit tab=\(tabID.uuidString.lowercased()) behavior=\(exitBehavior.rawValue) preparing-detach=\(isPreparingForTerminalDetach) session=\(tab.terminalSession?.sessionID ?? "none") keeps-running=\(tab.keepsRunningAfterQuit)"
+    )
 
     if isPreparingForTerminalDetach {
       tab.isRunning = true
+      TerminalSessionLifecycleLog.record(
+        "handle-terminal-exit-ignored-detach tab=\(tabID.uuidString.lowercased())"
+      )
       return
     }
 
     if let session = tab.terminalSession {
+      let sessionIsRunning = Self.terminalSessionRunningChecker(session)
+      TerminalSessionLifecycleLog.record(
+        "handle-terminal-exit-session-check tab=\(tabID.uuidString.lowercased()) session=\(session.sessionID) running=\(sessionIsRunning)"
+      )
+      if tab.keepsRunningAfterQuit, sessionIsRunning {
+        tab.terminalSessionReconnectCount += 1
+        tab.terminalViewIdentity = UUID()
+        tab.isRunning = true
+        tab.agentActivityState = .idle
+        GhosttyTerminalView.releaseTerminal(tabID)
+        requestTerminalFocus(in: tab.worktreePath)
+        notifyRestorableStateChanged()
+        return
+      }
+      TerminalSessionLifecycleLog.record(
+        "stop-terminal-session reason=handle-terminal-exit tab=\(tabID.uuidString.lowercased()) session=\(session.sessionID)"
+      )
       Self.terminalSessionStopper(session)
       tab.terminalSession = nil
     }
@@ -1742,11 +1822,7 @@ final class WorkspaceState {
     }
     let launch =
       terminalSession.map { session in
-        TerminalLaunchConfiguration.command(
-          Self.terminalSessionCommandBuilder(session, directLaunch.shellCommand),
-          currentDirectory: persistedTab.worktreePath,
-          tabID: persistedTab.id
-        )
+        Self.terminalSessionLaunchBuilder(session, directLaunch)
       } ?? directLaunch
 
     let suppressAttentionUntil: Date?
@@ -1788,6 +1864,9 @@ final class WorkspaceState {
   {
     guard AgentTerminalPersistenceExperimentSettings.canUseTerminalSessionPersistence else {
       if let terminalSession = tab.terminalSession {
+        TerminalSessionLifecycleLog.record(
+          "stop-terminal-session reason=restore-experiment-off tab=\(tab.id.uuidString.lowercased()) session=\(terminalSession.sessionID)"
+        )
         Self.terminalSessionStopper(terminalSession)
       }
       return nil
@@ -1796,6 +1875,9 @@ final class WorkspaceState {
       guard TerminalSessionBackends.wasPreservedForRestore(reference: terminalSession),
         TerminalSessionBackends.canReconnect(reference: terminalSession)
       else {
+        TerminalSessionLifecycleLog.record(
+          "stop-terminal-session reason=restore-unusable-existing tab=\(tab.id.uuidString.lowercased()) session=\(terminalSession.sessionID)"
+        )
         Self.terminalSessionStopper(terminalSession)
         return replacementTerminalSessionForRestore(tab)
       }
@@ -1805,6 +1887,9 @@ final class WorkspaceState {
     if let replacementSession {
       // The replacement ID is deterministic for the restored tab. Clear any stale
       // server so attach recreates it with the hydrated resume command.
+      TerminalSessionLifecycleLog.record(
+        "stop-terminal-session reason=restore-clear-replacement tab=\(tab.id.uuidString.lowercased()) session=\(replacementSession.sessionID)"
+      )
       Self.terminalSessionStopper(replacementSession)
     }
     return replacementSession
@@ -3410,6 +3495,7 @@ struct WorkspaceRestorableAgentSession: Identifiable, Hashable, Sendable {
   let yoloMode: Bool
   let sandboxEnabled: Bool
   let startedAt: Date
+  let openStoppedTabID: UUID?
 
   var id: String {
     "\(familyID.rawValue):\(sessionID):\(cwd)"

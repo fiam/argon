@@ -21,8 +21,8 @@ protocol TerminalSessionBackend: Sendable {
 
   func isAvailable() -> Bool
   func reference(for tabID: UUID) -> TerminalSessionReference?
-  func attachCommand(reference: TerminalSessionReference, createCommand: String) -> String
   func stop(reference: TerminalSessionReference)
+  func isRunning(reference: TerminalSessionReference) -> Bool
 }
 
 enum TerminalSessionBackends {
@@ -39,20 +39,29 @@ enum TerminalSessionBackends {
     return argon.reference(for: tabID)
   }
 
-  static func attachCommand(
+  static func attachLaunchConfiguration(
     reference: TerminalSessionReference,
-    createCommand: String
-  ) -> String {
+    createLaunch: TerminalLaunchConfiguration
+  ) -> TerminalLaunchConfiguration {
     switch reference.backendID {
     case argon.backendID:
-      return argon.attachCommand(reference: reference, createCommand: createCommand)
+      return argon.attachLaunchConfiguration(reference: reference, createLaunch: createLaunch)
     default:
-      return createCommand
+      return createLaunch
     }
   }
 
   static func canReconnect(reference: TerminalSessionReference) -> Bool {
     reference.backendID == argon.backendID && argon.isAvailable()
+  }
+
+  static func isRunning(reference: TerminalSessionReference) -> Bool {
+    switch reference.backendID {
+    case argon.backendID:
+      argon.isRunning(reference: reference)
+    default:
+      false
+    }
   }
 
   static func markPreservedForRestore(
