@@ -955,6 +955,71 @@ struct WorkspaceStateTests {
     #expect(state.worktreeNeedsAttention(for: "/tmp/repo/feature") == true)
   }
 
+  @Test("revealing a worktree selected tab clears attention after dwell")
+  @MainActor
+  func revealingWorktreeSelectedTabClearsAttentionAfterDwell() async throws {
+    let previousDelay = WorkspaceState.terminalAttentionVisibleClearDelay
+    WorkspaceState.terminalAttentionVisibleClearDelay = .milliseconds(40)
+    defer {
+      WorkspaceState.terminalAttentionVisibleClearDelay = previousDelay
+    }
+
+    let state = makeState()
+    state.openShellTab()
+
+    selectFeatureWorktree(in: state)
+    let featureTab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          sandboxEnabled: false
+        ))
+    )
+
+    state.markTerminalNeedsAttention(featureTab.id)
+    state.markAgentWaitingForHuman(featureTab.id)
+    state.selectedWorktreePath = "/tmp/repo"
+
+    #expect(featureTab.hasAttention == true)
+    #expect(state.worktreeNeedsAttention(for: "/tmp/repo/feature") == true)
+
+    selectFeatureWorktree(in: state)
+    #expect(state.selectedTerminalTab?.id == featureTab.id)
+
+    state.beginTerminalAttentionVisibilityDwell(for: featureTab.id)
+
+    #expect(
+      await waitUntil {
+        featureTab.hasAttention == false && featureTab.agentActivityState == .idle
+      })
+    #expect(state.worktreeNeedsAttention(for: "/tmp/repo/feature") == false)
+  }
+
+  @Test("terminal attention dwell requires tab to stay selected")
+  @MainActor
+  func terminalAttentionDwellRequiresTabToStaySelected() async throws {
+    let previousDelay = WorkspaceState.terminalAttentionVisibleClearDelay
+    WorkspaceState.terminalAttentionVisibleClearDelay = .milliseconds(40)
+    defer {
+      WorkspaceState.terminalAttentionVisibleClearDelay = previousDelay
+    }
+
+    let state = makeState()
+    state.openShellTab()
+    let tab = try #require(state.selectedTerminalTab)
+
+    state.markTerminalNeedsAttention(tab.id)
+    state.beginTerminalAttentionVisibilityDwell(for: tab.id)
+    selectFeatureWorktree(in: state)
+
+    try await Task.sleep(for: .milliseconds(100))
+
+    #expect(tab.hasAttention == true)
+    #expect(state.worktreeNeedsAttention(for: "/tmp/repo") == true)
+  }
+
   @Test("flashTerminalBell shows a transient bell indicator")
   @MainActor
   func flashTerminalBellShowsATransientBellIndicator() async throws {

@@ -5,6 +5,7 @@ import Foundation
 final class WorkspaceState {
   nonisolated(unsafe) static var tabRestoreTestDelay: Duration?
   nonisolated(unsafe) static var terminalBellFlashDuration: Duration = .seconds(1)
+  nonisolated(unsafe) static var terminalAttentionVisibleClearDelay: Duration = .seconds(1)
   nonisolated(unsafe) static var agentThinkingIdleTimeout: Duration = .seconds(1)
   nonisolated(unsafe) static var commandStatusProvider: (@Sendable ([String]) -> [String: Bool])?
   nonisolated(unsafe) static var terminalSessionReferenceProvider:
@@ -90,6 +91,7 @@ final class WorkspaceState {
   private var pendingSandboxedShellLaunchCount = 0
   private var isResolvingSandboxedShellLaunch = false
   private var terminalBellTasksByTabID: [UUID: Task<Void, Never>] = [:]
+  private var terminalAttentionVisibleClearTasksByTabID: [UUID: Task<Void, Never>] = [:]
   private var agentActivityIdleTasksByTabID: [UUID: Task<Void, Never>] = [:]
   private var activeAgentControlRequestsByID: [UUID: PendingWorkspaceAgentControlRequest] = [:]
   private var agentControlWatchTasksByRequestID: [UUID: Task<Void, Never>] = [:]
@@ -1344,11 +1346,10 @@ final class WorkspaceState {
 
   func selectTerminalTab(_ tabID: UUID) {
     guard let worktreePath = normalizedSelectedWorktreePath else { return }
-    guard let tab = terminalTabsByWorktreePath[worktreePath]?.first(where: { $0.id == tabID })
+    guard terminalTabsByWorktreePath[worktreePath]?.contains(where: { $0.id == tabID }) == true
     else { return }
     selectedTerminalTabIDsByWorktreePath[worktreePath] = tabID
-    tab.hasAttention = false
-    clearAgentWaitingForHuman(tabID)
+    clearTerminalAttentionState(tabID)
     requestTerminalFocus(in: worktreePath)
     notifyRestorableStateChanged()
   }
@@ -1366,10 +1367,7 @@ final class WorkspaceState {
       selectWorktree(path: normalizedWorktreePath)
     }
     selectedTerminalTabIDsByWorktreePath[normalizedWorktreePath] = tabID
-    if let tab = terminalTab(for: tabID) {
-      tab.hasAttention = false
-    }
-    clearAgentWaitingForHuman(tabID)
+    clearTerminalAttentionState(tabID)
     requestTerminalFocus(in: normalizedWorktreePath)
     notifyRestorableStateChanged()
     return true
@@ -1380,6 +1378,36 @@ final class WorkspaceState {
     guard !tab.hasAttention else { return }
     tab.hasAttention = true
     notifyRestorableStateChanged()
+  }
+
+  func beginTerminalAttentionVisibilityDwell(for tabID: UUID) {
+    guard let tab = terminalTab(for: tabID), tab.hasAttention else { return }
+
+    terminalAttentionVisibleClearTasksByTabID.removeValue(forKey: tabID)?.cancel()
+
+    let worktreePath = tab.worktreePath
+    let delay = Self.terminalAttentionVisibleClearDelay
+    terminalAttentionVisibleClearTasksByTabID[tabID] = Task { @MainActor [weak self] in
+      do {
+        try await Task.sleep(for: delay)
+      } catch {
+        return
+      }
+
+      guard let self else { return }
+      self.terminalAttentionVisibleClearTasksByTabID.removeValue(forKey: tabID)
+      guard self.normalizedSelectedWorktreePath == worktreePath,
+        self.selectedTerminalTab?.id == tabID
+      else {
+        return
+      }
+      guard self.clearTerminalAttentionState(tabID) else { return }
+      self.notifyRestorableStateChanged()
+    }
+  }
+
+  func cancelTerminalAttentionVisibilityDwell(for tabID: UUID) {
+    terminalAttentionVisibleClearTasksByTabID.removeValue(forKey: tabID)?.cancel()
   }
 
   func recordTerminalTitleChange(_ title: String, for tabID: UUID) {
@@ -1452,11 +1480,21 @@ final class WorkspaceState {
     }
   }
 
-  private func clearAgentWaitingForHuman(_ tabID: UUID) {
-    guard let tab = terminalTab(for: tabID), tab.agentActivityState == .waitingForHuman else {
-      return
+  @discardableResult
+  private func clearTerminalAttentionState(_ tabID: UUID) -> Bool {
+    terminalAttentionVisibleClearTasksByTabID.removeValue(forKey: tabID)?.cancel()
+    guard let tab = terminalTab(for: tabID) else { return false }
+
+    var didClear = false
+    if tab.hasAttention {
+      tab.hasAttention = false
+      didClear = true
     }
-    tab.agentActivityState = .idle
+    if tab.agentActivityState == .waitingForHuman {
+      tab.agentActivityState = .idle
+      didClear = true
+    }
+    return didClear
   }
 
   func closeTerminalTab(_ tabID: UUID) {
@@ -1468,6 +1506,7 @@ final class WorkspaceState {
     preserveRestorableAgentSession: Bool
   ) {
     terminalBellTasksByTabID.removeValue(forKey: tabID)?.cancel()
+    terminalAttentionVisibleClearTasksByTabID.removeValue(forKey: tabID)?.cancel()
     agentActivityIdleTasksByTabID.removeValue(forKey: tabID)?.cancel()
 
     for (worktreePath, tabs) in terminalTabsByWorktreePath {
@@ -2557,6 +2596,7 @@ final class WorkspaceState {
     let worktreePath = normalizedPath(worktree.path)
     for tab in terminalTabsByWorktreePath[worktreePath] ?? [] {
       terminalBellTasksByTabID.removeValue(forKey: tab.id)?.cancel()
+      terminalAttentionVisibleClearTasksByTabID.removeValue(forKey: tab.id)?.cancel()
       agentActivityIdleTasksByTabID.removeValue(forKey: tab.id)?.cancel()
       GhosttyTerminalView.releaseTerminal(tab.id)
     }
@@ -2785,6 +2825,7 @@ final class WorkspaceState {
 
     for tabID in removedTabIDs {
       terminalBellTasksByTabID.removeValue(forKey: tabID)?.cancel()
+      terminalAttentionVisibleClearTasksByTabID.removeValue(forKey: tabID)?.cancel()
       agentActivityIdleTasksByTabID.removeValue(forKey: tabID)?.cancel()
       GhosttyTerminalView.releaseTerminal(tabID)
     }

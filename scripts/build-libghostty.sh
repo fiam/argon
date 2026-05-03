@@ -45,6 +45,7 @@ ZIG_BIN=""
 ZIG_ARCH=""
 
 declare -a ZIG_CANDIDATES=()
+declare -a APPLIED_GHOSTTY_PATCHES=()
 
 fail() {
   echo "error: $*" >&2
@@ -212,12 +213,37 @@ apply_argon_patches() {
     if (cd "${GHOSTTY_DIR}" && git apply --check "${patch}" >/dev/null 2>&1); then
       echo "  patch: ${patch_name}"
       (cd "${GHOSTTY_DIR}" && git apply "${patch}")
+      APPLIED_GHOSTTY_PATCHES+=("${patch}")
     elif (cd "${GHOSTTY_DIR}" && git apply --reverse --check "${patch}" >/dev/null 2>&1); then
       echo "  patch: ${patch_name} already applied"
     else
       echo "error: Ghostty patch does not apply cleanly: ${patch}" >&2
       echo "hint: reset the submodule with 'git submodule update --init --checkout third_party/ghostty'" >&2
       exit 1
+    fi
+  done
+}
+
+cleanup_argon_patches() {
+  local patch=""
+  local patch_name=""
+  local index=0
+
+  if [[ ${#APPLIED_GHOSTTY_PATCHES[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  for ((index = ${#APPLIED_GHOSTTY_PATCHES[@]} - 1; index >= 0; index--)); do
+    patch="${APPLIED_GHOSTTY_PATCHES[$index]}"
+    patch_name="$(basename "${patch}")"
+
+    if (cd "${GHOSTTY_DIR}" && git apply --reverse --check "${patch}" >/dev/null 2>&1); then
+      echo "  patch: ${patch_name} reverted"
+      if ! (cd "${GHOSTTY_DIR}" && git apply --reverse "${patch}"); then
+        echo "warning: could not revert Ghostty patch applied by this build: ${patch_name}" >&2
+      fi
+    else
+      echo "warning: could not revert Ghostty patch applied by this build: ${patch_name}" >&2
     fi
   done
 }
@@ -342,7 +368,7 @@ if [[ ! -f "${GHOSTTY_DIR}/build.zig" ]]; then
   exit 1
 fi
 
-if [[ ! -d "${GHOSTTY_DIR}/.git" && ! -f "${REPO_ROOT}/.git/modules/third_party/ghostty/HEAD" ]]; then
+if ! git -C "${GHOSTTY_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
   echo "error: third_party/ghostty is present but the submodule is not initialized" >&2
   echo "hint: run 'git submodule update --init --recursive third_party/ghostty'" >&2
   exit 1
@@ -384,6 +410,7 @@ echo "  output: ${INSTALL_ROOT}"
 echo "  staging: ${STAGING_ROOT}"
 echo "  required zig: ${REQUIRED_ZIG_VERSION}"
 
+trap cleanup_argon_patches EXIT
 apply_argon_patches
 
 if [[ ${CLEAN} -eq 1 ]]; then

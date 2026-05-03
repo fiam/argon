@@ -2019,6 +2019,14 @@ private struct WorkspaceTerminalStage: View {
     }
     .background(Color(nsColor: .textBackgroundColor))
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .onChange(of: visibleAttentionTabID, initial: true) { oldTabID, newTabID in
+      if let oldTabID, oldTabID != newTabID {
+        workspaceState.cancelTerminalAttentionVisibilityDwell(for: oldTabID)
+      }
+      if let newTabID {
+        workspaceState.beginTerminalAttentionVisibilityDwell(for: newTabID)
+      }
+    }
   }
 
   private var selectedFinishedTerminalBehavior: WorkspaceFinishedTerminalBehavior {
@@ -2037,6 +2045,16 @@ private struct WorkspaceTerminalStage: View {
 
   private var selectedTerminalTab: WorkspaceTerminalTab? {
     workspaceState.selectedTerminalTab
+  }
+
+  private var visibleAttentionTabID: UUID? {
+    guard let selectedTerminalTab,
+      selectedTerminalTab.hasAttention,
+      isVisibleTerminal(tabID: selectedTerminalTab.id)
+    else {
+      return nil
+    }
+    return selectedTerminalTab.id
   }
 
   private func waitAfterCommand(for tab: WorkspaceTerminalTab) -> Bool {
