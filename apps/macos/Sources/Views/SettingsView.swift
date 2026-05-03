@@ -82,6 +82,10 @@ struct SettingsView: View {
     AgentTerminalPersistenceExperimentSettings.defaultEnabled
   @AppStorage(AgentSelectionSettings.rememberLastSelectionStorageKey)
   private var rememberLastAgentSelection = AgentSelectionSettings.defaultRememberLastSelection
+  @AppStorage(AgentLaunchSettings.defaultYoloModeStorageKey)
+  private var defaultAgentLaunchYoloMode = AgentLaunchSettings.defaultYoloMode
+  @AppStorage(AgentLaunchSettings.defaultSandboxEnabledStorageKey)
+  private var defaultAgentLaunchSandboxEnabled = AgentLaunchSettings.defaultSandboxEnabled
   @AppStorage(WorktreeMergeStrategySettings.defaultStrategyStorageKey)
   private var defaultWorktreeMergeStrategy = WorktreeMergeStrategy.mergeCommit.rawValue
   @State private var selectedAgentId: String?
@@ -191,6 +195,23 @@ struct SettingsView: View {
             }
           }
         }
+      }
+
+      Section("Agent Launch") {
+        Toggle("Remember last selection", isOn: $rememberLastAgentSelection)
+          .toggleStyle(.switch)
+          .help("Preselect the most recently selected saved agent when opening agent pickers.")
+          .accessibilityIdentifier("agent-settings-remember-last-selection-toggle")
+
+        Toggle("YOLO mode by default", isOn: $defaultAgentLaunchYoloMode)
+          .toggleStyle(.switch)
+          .help("Enable the saved agent's yolo flag when opening agent launch sheets.")
+          .accessibilityIdentifier("agent-settings-default-yolo-mode-toggle")
+
+        Toggle("Sandbox by default", isOn: $defaultAgentLaunchSandboxEnabled)
+          .toggleStyle(.switch)
+          .help("Enable Argon's sandbox when opening agent launch sheets.")
+          .accessibilityIdentifier("agent-settings-default-sandbox-toggle")
       }
     }
     .formStyle(.grouped)
@@ -323,16 +344,6 @@ struct SettingsView: View {
 
   private var agentsTab: some View {
     VStack(spacing: 0) {
-      HStack {
-        Toggle("Remember last selected agent", isOn: $rememberLastAgentSelection)
-          .toggleStyle(.checkbox)
-          .help("Preselect the most recently selected saved agent when opening agent pickers.")
-          .accessibilityIdentifier("agent-settings-remember-last-selection-toggle")
-        Spacer()
-      }
-      .padding(.horizontal, 8)
-      .padding(.vertical, 6)
-
       List(selection: $selectedAgentId) {
         ForEach(savedAgents.profiles) { profile in
           AgentProfileRow(

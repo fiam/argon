@@ -2500,8 +2500,8 @@ private struct WorkspaceAgentTabSheet: View {
   let onDidLaunch: @MainActor () -> Void
 
   @State private var selectedAgentId: String?
-  @State private var yoloMode = true
-  @State private var sandboxEnabled = true
+  @State private var yoloMode = AgentLaunchSettings.isDefaultYoloModeEnabled()
+  @State private var sandboxEnabled = AgentLaunchSettings.isDefaultSandboxEnabled()
   @State private var customCommand = ""
   @State private var useCustom = false
   @State private var isLaunching = false

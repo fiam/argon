@@ -42,8 +42,8 @@ struct AgentLaunchSheet: View {
   @Environment(AgentAvailability.self) private var agentAvailability
   @Binding var isPresented: Bool
   @State private var selectedAgentId: String?
-  @State private var yoloMode = true
-  @State private var sandboxEnabled = true
+  @State private var yoloMode = AgentLaunchSettings.isDefaultYoloModeEnabled()
+  @State private var sandboxEnabled = AgentLaunchSettings.isDefaultSandboxEnabled()
   @State private var showSandboxHelp = false
   @State private var sandboxHelp: SandboxHelpData?
   @State private var sandboxHelpError: String?
@@ -258,10 +258,11 @@ struct AgentLaunchSheet: View {
       )
     } else if let saved = selectedSavedAgent {
       AgentSelectionSettings.recordLastSelectedAgentID(saved.id)
-      let cmd = saved.fullCommand(yolo: yoloMode, sandboxed: sandboxEnabled)
+      let effectiveYoloMode = yoloMode && !saved.yoloFlag.isEmpty
+      let cmd = saved.fullCommand(yolo: effectiveYoloMode, sandboxed: sandboxEnabled)
       profile = AgentProfile(
         id: saved.id,
-        name: yoloMode ? "\(saved.name) (YOLO)" : saved.name,
+        name: effectiveYoloMode ? "\(saved.name) (YOLO)" : saved.name,
         command: cmd,
         icon: saved.icon,
         isDetected: true,
