@@ -534,13 +534,15 @@ private struct WorkspaceSidebarRow: View {
   @State private var isHovering = false
 
   var body: some View {
-    ZStack(alignment: .topTrailing) {
+    ZStack(alignment: .trailing) {
       Button(action: onSelect) {
         VStack(alignment: .leading, spacing: 4) {
           HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(worktree.branchName ?? "Detached HEAD")
               .font(.body.weight(.semibold))
               .lineLimit(1)
+              .truncationMode(.middle)
+              .layoutPriority(1)
 
             if worktree.isBaseWorktree {
               WorkspaceBadge(label: "Base", tint: Color(nsColor: .controlAccentColor))
@@ -550,46 +552,15 @@ private struct WorkspaceSidebarRow: View {
 
             Spacer(minLength: 0)
           }
-          .padding(.trailing, hoverActionsInset)
 
-          HStack(spacing: 10) {
-            WorkspaceCompactDiffSummary(summary: summary)
-
-            if let reviewStatusLabel {
-              WorkspaceSidebarMetadataItem(
-                label: reviewStatusLabel,
-                symbolTint: reviewStatusTint,
-                accessibilityIdentifier: "workspace-sidebar-review-status"
-              )
-            }
-
-            if let waitingForHumanAgentActivity {
-              WorkspaceSidebarAgentActivityIndicator(kind: waitingForHumanAgentActivity)
-            } else if needsAttention {
-              WorkspaceSidebarMetadataItem(
-                label: "Needs attention",
-                symbolTint: .orange,
-                accessibilityIdentifier: "workspace-sidebar-needs-attention"
-              )
-            }
-
-            if hasConflicts {
-              WorkspaceSidebarMetadataItem(
-                label: "Conflicts",
-                symbolTint: .orange,
-                accessibilityIdentifier: "workspace-sidebar-conflicts"
-              )
-            }
-
-            if let workingAgentActivity {
-              WorkspaceSidebarAgentActivityIndicator(kind: workingAgentActivity)
-            }
-
-            Spacer(minLength: 0)
-          }
+          WorkspaceSidebarMetadataLine(
+            summary: summary,
+            tokens: metadataTokens
+          )
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
+        .padding(.trailing, hoverActionsReservedWidth)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
           RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -610,15 +581,15 @@ private struct WorkspaceSidebarRow: View {
         worktree: worktree,
         isVisible: isHovering
       )
-      .padding(8)
+      .padding(.trailing, 8)
     }
     .onHover { hovering in
       isHovering = hovering
     }
   }
 
-  private var hoverActionsInset: CGFloat {
-    worktree.isBaseWorktree ? 28 : 56
+  private var hoverActionsReservedWidth: CGFloat {
+    worktree.isBaseWorktree ? 36 : 68
   }
 
   private var rowBackground: Color {
@@ -649,12 +620,12 @@ private struct WorkspaceSidebarRow: View {
     workspaceState.agentActivitySummary(for: worktree.path)
   }
 
-  private var waitingForHumanAgentActivity: WorkspaceSidebarAgentActivityIndicator.Kind? {
+  private var waitingForHumanAgentActivity: WorkspaceSidebarAgentActivityKind? {
     guard agentActivitySummary.waitingForHumanCount > 0 else { return nil }
     return .needsInput(count: agentActivitySummary.waitingForHumanCount)
   }
 
-  private var workingAgentActivity: WorkspaceSidebarAgentActivityIndicator.Kind? {
+  private var workingAgentActivity: WorkspaceSidebarAgentActivityKind? {
     guard agentActivitySummary.waitingForHumanCount == 0 else { return nil }
     if agentActivitySummary.thinkingCount > 0 {
       return .thinking(count: agentActivitySummary.thinkingCount)
@@ -696,21 +667,189 @@ private struct WorkspaceSidebarRow: View {
       return .secondary
     }
   }
+
+  private var metadataTokens: [WorkspaceSidebarMetadataToken] {
+    var tokens: [WorkspaceSidebarMetadataToken] = []
+
+    if let reviewStatusLabel {
+      tokens.append(
+        WorkspaceSidebarMetadataToken(
+          id: "review-status",
+          label: reviewStatusLabel,
+          compactLabel: reviewStatusCompactLabel,
+          symbolName: nil,
+          tint: reviewStatusTint,
+          accessibilityIdentifier: "workspace-sidebar-review-status"
+        )
+      )
+    }
+
+    if let waitingForHumanAgentActivity {
+      tokens.append(.agent(waitingForHumanAgentActivity))
+    } else if needsAttention {
+      tokens.append(
+        WorkspaceSidebarMetadataToken(
+          id: "needs-attention",
+          label: "needs attention",
+          compactLabel: "attention",
+          symbolName: "exclamationmark.circle.fill",
+          tint: .orange,
+          accessibilityIdentifier: "workspace-sidebar-needs-attention"
+        )
+      )
+    }
+
+    if hasConflicts {
+      tokens.append(
+        WorkspaceSidebarMetadataToken(
+          id: "conflicts",
+          label: "conflicts",
+          compactLabel: "conflict",
+          symbolName: "exclamationmark.triangle.fill",
+          tint: .orange,
+          accessibilityIdentifier: "workspace-sidebar-conflicts"
+        )
+      )
+    }
+
+    if let workingAgentActivity {
+      tokens.append(.agent(workingAgentActivity))
+    }
+
+    return tokens
+  }
+
+  private var reviewStatusCompactLabel: String {
+    guard let reviewSnapshot else { return "" }
+    switch reviewSnapshot.status {
+    case .awaitingReviewer:
+      return "review"
+    case .awaitingAgent:
+      return "agent"
+    case .approved:
+      return "approved"
+    case .closed:
+      return "closed"
+    }
+  }
+}
+
+private struct WorkspaceSidebarMetadataToken: Identifiable {
+  let id: String
+  let label: String
+  let compactLabel: String
+  let symbolName: String?
+  let tint: Color
+  var animatesSymbol = false
+  let accessibilityIdentifier: String
+
+  static func agent(_ kind: WorkspaceSidebarAgentActivityKind)
+    -> WorkspaceSidebarMetadataToken
+  {
+    WorkspaceSidebarMetadataToken(
+      id: kind.accessibilityIdentifier,
+      label: kind.sidebarLabel,
+      compactLabel: kind.compactSidebarLabel,
+      symbolName: kind.symbolName,
+      tint: kind.tint,
+      animatesSymbol: kind.animatesSymbol,
+      accessibilityIdentifier: kind.accessibilityIdentifier
+    )
+  }
+}
+
+private struct WorkspaceSidebarMetadataLine: View {
+  let summary: WorktreeDiffSummary
+  let tokens: [WorkspaceSidebarMetadataToken]
+
+  var body: some View {
+    ViewThatFits(in: .horizontal) {
+      metadataLine(label: \.label)
+      metadataLine(label: \.compactLabel)
+      metadataIconLine
+      summaryLine
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private var summaryLine: some View {
+    HStack(spacing: 8) {
+      WorkspaceCompactDiffSummary(
+        summary: summary,
+        showsBar: false,
+        usesCompactNumbers: true
+      )
+    }
+    .fixedSize(horizontal: true, vertical: true)
+  }
+
+  private func metadataLine(
+    label: KeyPath<WorkspaceSidebarMetadataToken, String>
+  ) -> some View {
+    HStack(spacing: 8) {
+      WorkspaceCompactDiffSummary(
+        summary: summary,
+        showsBar: false,
+        usesCompactNumbers: true
+      )
+      if !tokens.isEmpty {
+        tokenRow(tokens, label: label)
+      }
+    }
+    .fixedSize(horizontal: true, vertical: true)
+  }
+
+  private var metadataIconLine: some View {
+    HStack(spacing: 8) {
+      WorkspaceCompactDiffSummary(
+        summary: summary,
+        showsBar: false,
+        usesCompactNumbers: true
+      )
+      if !tokens.isEmpty {
+        WorkspaceSidebarMetadataIconStrip(tokens: tokens)
+      }
+    }
+    .fixedSize(horizontal: true, vertical: true)
+  }
+
+  private func tokenRow(
+    _ tokens: [WorkspaceSidebarMetadataToken],
+    label: KeyPath<WorkspaceSidebarMetadataToken, String>
+  ) -> some View {
+    HStack(spacing: 8) {
+      ForEach(tokens) { token in
+        WorkspaceSidebarMetadataItem(
+          label: token[keyPath: label],
+          symbolName: token.symbolName,
+          symbolTint: token.tint,
+          animatesSymbol: token.animatesSymbol,
+          accessibilityIdentifier: token.accessibilityIdentifier
+        )
+      }
+    }
+    .fixedSize(horizontal: true, vertical: true)
+  }
 }
 
 private struct WorkspaceSidebarMetadataItem: View {
   let label: String
   var symbolName: String? = nil
   var symbolTint: Color? = nil
+  var animatesSymbol = false
   var accessibilityIdentifier: String? = nil
 
   var body: some View {
     HStack(spacing: 4) {
       if let symbolName {
-        Image(systemName: symbolName)
-          .font(.system(size: 9, weight: .semibold))
-          .foregroundStyle(symbolTint ?? .secondary)
-          .accessibilityHidden(true)
+        WorkspaceSidebarMetadataSymbol(
+          symbolName: symbolName,
+          tint: symbolTint ?? .secondary,
+          animates: animatesSymbol,
+          fontSize: 9,
+          frameSize: 10
+        )
+        .accessibilityHidden(true)
       } else if let symbolTint {
         Circle()
           .fill(symbolTint)
@@ -729,146 +868,140 @@ private struct WorkspaceSidebarMetadataItem: View {
   }
 }
 
-private struct WorkspaceSidebarAgentActivityIndicator: View {
-  enum Kind: Equatable {
-    case needsInput(count: Int)
-    case thinking(count: Int)
-    case active(count: Int)
-
-    var symbolName: String {
-      switch self {
-      case .needsInput:
-        "exclamationmark.circle.fill"
-      case .thinking:
-        "sparkles"
-      case .active:
-        "sparkles.rectangle.stack"
-      }
-    }
-
-    var tint: Color {
-      switch self {
-      case .needsInput:
-        .orange
-      case .thinking:
-        Color(nsColor: .controlAccentColor)
-      case .active:
-        .secondary
-      }
-    }
-
-    var helpLabel: String {
-      switch self {
-      case .needsInput(let count):
-        count == 1 ? "Agent needs input" : "\(count) agents need input"
-      case .thinking(let count):
-        count == 1 ? "Agent thinking" : "\(count) agents thinking"
-      case .active(let count):
-        count == 1 ? "1 agent" : "\(count) agents"
-      }
-    }
-
-    var accessibilityIdentifier: String {
-      switch self {
-      case .needsInput:
-        "workspace-sidebar-agent-needs-input"
-      case .thinking:
-        "workspace-sidebar-agent-thinking"
-      case .active:
-        "workspace-sidebar-agent-active"
-      }
-    }
-  }
-
-  let kind: Kind
-  @State private var isPulsing = false
+private struct WorkspaceSidebarMetadataIconStrip: View {
+  let tokens: [WorkspaceSidebarMetadataToken]
 
   var body: some View {
-    Group {
-      switch kind {
-      case .thinking:
-        WorkspaceSidebarThinkingActivityIndicator(tint: kind.tint)
-      case .needsInput:
-        Image(systemName: kind.symbolName)
-          .scaleEffect(isPulsing ? 1.12 : 0.96)
-          .opacity(isPulsing ? 1 : 0.72)
-      case .active:
-        Image(systemName: kind.symbolName)
+    HStack(spacing: 5) {
+      ForEach(tokens) { token in
+        if let symbolName = token.symbolName {
+          WorkspaceSidebarMetadataSymbol(
+            symbolName: symbolName,
+            tint: token.tint,
+            animates: token.animatesSymbol,
+            fontSize: 9,
+            frameSize: 10
+          )
+          .help(token.label)
+          .accessibilityLabel(Text(token.label))
+          .accessibilityIdentifier(token.accessibilityIdentifier)
+        } else {
+          Circle()
+            .fill(token.tint)
+            .frame(width: 6, height: 6)
+            .frame(width: 10, height: 10)
+            .help(token.label)
+            .accessibilityLabel(Text(token.label))
+            .accessibilityIdentifier(token.accessibilityIdentifier)
+        }
       }
     }
-    .font(.system(size: 10, weight: .semibold))
-    .foregroundStyle(kind.tint)
-    .frame(width: 14, height: 14)
-    .help(kind.helpLabel)
-    .accessibilityLabel(Text(kind.helpLabel))
-    .accessibilityIdentifier(kind.accessibilityIdentifier)
-    .onAppear {
-      updatePulseAnimation()
-    }
-    .onChange(of: kind) { _, _ in
-      updatePulseAnimation()
-    }
-    .animation(pulseAnimation, value: isPulsing)
-  }
-
-  private var pulseAnimation: Animation? {
-    if case .needsInput = kind {
-      return .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
-    }
-    return nil
-  }
-
-  private func updatePulseAnimation() {
-    guard case .needsInput = kind else {
-      isPulsing = false
-      return
-    }
-
-    isPulsing = false
-    DispatchQueue.main.async {
-      isPulsing = true
-    }
+    .fixedSize(horizontal: true, vertical: true)
   }
 }
 
-private struct WorkspaceSidebarThinkingActivityIndicator: View {
+private struct WorkspaceSidebarMetadataSymbol: View {
+  let symbolName: String
   let tint: Color
-
-  private let dotPositions = [
-    CGPoint(x: 3.5, y: 9.5),
-    CGPoint(x: 5.5, y: 4.0),
-    CGPoint(x: 10.5, y: 4.8),
-    CGPoint(x: 10.0, y: 10.0),
-  ]
+  let animates: Bool
+  let fontSize: CGFloat
+  let frameSize: CGFloat
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
-    TimelineView(.animation) { context in
-      ZStack {
-        ForEach(dotPositions.indices, id: \.self) { index in
-          let intensity = dotIntensity(index: index, at: context.date)
-          Circle()
-            .fill(tint)
-            .frame(width: dotSize(intensity), height: dotSize(intensity))
-            .opacity(0.36 + (0.64 * intensity))
-            .position(dotPositions[index])
+    Group {
+      if animates && !reduceMotion {
+        TimelineView(.animation) { context in
+          symbol(intensity: pulseIntensity(at: context.date))
         }
+      } else {
+        symbol(intensity: 1)
       }
-      .frame(width: 14, height: 14)
     }
+    .frame(width: frameSize, height: frameSize)
   }
 
-  private func dotIntensity(index: Int, at date: Date) -> Double {
-    let period = 1.6
+  private func symbol(intensity: Double) -> some View {
+    Image(systemName: symbolName)
+      .font(.system(size: fontSize, weight: .semibold))
+      .foregroundStyle(tint.opacity(0.62 + (0.38 * intensity)))
+      .scaleEffect(0.94 + (0.08 * intensity))
+  }
+
+  private func pulseIntensity(at date: Date) -> Double {
+    let period = 1.8
     let phase =
       date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period)
       / period
-    let offset = Double(index) / Double(dotPositions.count)
-    let wave = cos((phase - offset) * 2 * .pi)
-    return max(0, (wave + 1) / 2)
+    return (sin(phase * 2 * .pi) + 1) / 2
+  }
+}
+
+private enum WorkspaceSidebarAgentActivityKind: Equatable {
+  case needsInput(count: Int)
+  case thinking(count: Int)
+  case active(count: Int)
+
+  var symbolName: String {
+    switch self {
+    case .needsInput:
+      "exclamationmark.circle.fill"
+    case .thinking:
+      "sparkles"
+    case .active:
+      "sparkles.rectangle.stack"
+    }
   }
 
-  private func dotSize(_ intensity: Double) -> CGFloat {
-    CGFloat(2.0 + (2.0 * intensity))
+  var tint: Color {
+    switch self {
+    case .needsInput:
+      .orange
+    case .thinking:
+      Color(nsColor: .controlAccentColor)
+    case .active:
+      .secondary
+    }
+  }
+
+  var sidebarLabel: String {
+    switch self {
+    case .needsInput(let count):
+      count == 1 ? "1 needs input" : "\(count) need input"
+    case .thinking(let count):
+      count == 1 ? "1 thinking" : "\(count) thinking"
+    case .active(let count):
+      count == 1 ? "1 agent" : "\(count) agents"
+    }
+  }
+
+  var compactSidebarLabel: String {
+    switch self {
+    case .needsInput:
+      "input"
+    case .thinking:
+      "thinking"
+    case .active(let count):
+      count == 1 ? "agent" : "\(count) agents"
+    }
+  }
+
+  var animatesSymbol: Bool {
+    if case .thinking = self {
+      return true
+    }
+    return false
+  }
+
+  var accessibilityIdentifier: String {
+    switch self {
+    case .needsInput:
+      "workspace-sidebar-agent-needs-input"
+    case .thinking:
+      "workspace-sidebar-agent-thinking"
+    case .active:
+      "workspace-sidebar-agent-active"
+    }
   }
 }
 
@@ -3415,6 +3548,8 @@ private struct WorkspaceDiffModePicker: View {
 
 private struct WorkspaceCompactDiffSummary: View {
   let summary: WorktreeDiffSummary
+  var showsBar = true
+  var usesCompactNumbers = false
 
   var body: some View {
     Group {
@@ -3434,7 +3569,9 @@ private struct WorkspaceCompactDiffSummary: View {
             .fontWeight(.medium)
             .foregroundStyle(Color(nsColor: .systemRed))
 
-          DiffStatBar(added: summary.addedLineCount, removed: summary.removedLineCount)
+          if showsBar {
+            DiffStatBar(added: summary.addedLineCount, removed: summary.removedLineCount)
+          }
         }
       } else {
         Text("no changes")
@@ -3451,7 +3588,36 @@ private struct WorkspaceCompactDiffSummary: View {
   }
 
   private func formatted(_ value: Int) -> String {
-    WorkspaceCompactDiffSummary.numberFormatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    if usesCompactNumbers {
+      return compactFormatted(value)
+    }
+
+    return WorkspaceCompactDiffSummary.numberFormatter.string(from: NSNumber(value: value))
+      ?? "\(value)"
+  }
+
+  private func compactFormatted(_ value: Int) -> String {
+    let absoluteValue = abs(value)
+
+    if absoluteValue >= 1_000_000 {
+      return "\(formattedCompactDecimal(Double(value) / 1_000_000))m"
+    }
+
+    if absoluteValue >= 10_000 {
+      return "\(formattedCompactDecimal(Double(value) / 1_000))k"
+    }
+
+    return WorkspaceCompactDiffSummary.numberFormatter.string(from: NSNumber(value: value))
+      ?? "\(value)"
+  }
+
+  private func formattedCompactDecimal(_ value: Double) -> String {
+    let rounded = (value * 10).rounded() / 10
+    if rounded.rounded() == rounded {
+      return "\(Int(rounded))"
+    }
+
+    return String(format: "%.1f", rounded)
   }
 
   private static let numberFormatter: NumberFormatter = {
@@ -3601,7 +3767,7 @@ private struct WorkspaceSidebarHoverActions: View {
   let isVisible: Bool
 
   var body: some View {
-    HStack(spacing: 4) {
+    HStack(spacing: 2) {
       WorkspaceRevealInFinderButton(
         worktreePath: worktree.path,
         isVisible: isVisible
@@ -3613,6 +3779,15 @@ private struct WorkspaceSidebarHoverActions: View {
           isVisible: isVisible
         )
       }
+    }
+    .padding(3)
+    .background(
+      Capsule()
+        .fill(Color(nsColor: .controlBackgroundColor).opacity(isVisible ? 0.9 : 0))
+    )
+    .overlay {
+      Capsule()
+        .stroke(Color.primary.opacity(isVisible ? 0.08 : 0), lineWidth: 1)
     }
   }
 }
@@ -3626,13 +3801,13 @@ private struct WorkspaceRevealInFinderButton: View {
       NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: worktreePath)])
     } label: {
       Image(systemName: "magnifyingglass")
-        .font(.system(size: 11, weight: .semibold))
-        .foregroundStyle(.primary)
-        .frame(width: 20, height: 20)
-        .padding(4)
+        .font(.system(size: 10, weight: .semibold))
+        .foregroundStyle(.secondary)
+        .frame(width: 18, height: 18)
+        .padding(3)
         .background(
           Circle()
-            .fill(Color.primary.opacity(showButton ? 0.08 : 0))
+            .fill(Color.primary.opacity(showButton ? 0.06 : 0))
         )
         .contentShape(Circle())
     }
@@ -3663,7 +3838,7 @@ private struct WorkspaceRemoveWorktreeButton: View {
     } label: {
       ZStack {
         Image(systemName: "trash")
-          .font(.system(size: 11, weight: .semibold))
+          .font(.system(size: 10, weight: .semibold))
           .foregroundStyle(Color.red)
           .opacity(isShowingProgress ? 0 : 1)
 
@@ -3672,11 +3847,11 @@ private struct WorkspaceRemoveWorktreeButton: View {
             .controlSize(.small)
         }
       }
-      .frame(width: 20, height: 20)
-      .padding(4)
+      .frame(width: 18, height: 18)
+      .padding(3)
       .background(
         Circle()
-          .fill(Color.red.opacity(showButton ? 0.12 : 0))
+          .fill(Color.red.opacity(showButton ? 0.09 : 0))
       )
       .contentShape(Circle())
     }
