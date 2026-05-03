@@ -178,6 +178,7 @@ private struct WorkspaceContentView: View {
           canRebase: workspaceState.canRebaseSelectedWorktree,
           canMergeBack: workspaceState.canMergeBackSelectedWorktree,
           canOpenPR: workspaceState.canOpenPullRequestForSelectedWorktree,
+          branchTopologyLabel: workspaceState.selectedBranchTopology?.displayLabel,
           onPresentTabCreator: { workspaceState.presentTabCreationSheet() },
           onReview: handleSelectedWorktreeReviewButton,
           onRebase: { workspaceState.beginRebaseFlow() },
@@ -426,12 +427,19 @@ private struct WorkspaceContentView: View {
       return "Choose how to land this worktree on the base branch."
     }
 
+    let topologyPrefix =
+      if let label = topology.displayLabel {
+        "This worktree is \(label). "
+      } else {
+        ""
+      }
+
     if topology.needsRebase {
       return
-        "The base branch has moved ahead. Choose how to land this worktree back onto the updated base branch."
+        "\(topologyPrefix)The base branch has moved ahead. Choose how to land this worktree back onto the updated base branch."
     }
 
-    return "Choose how to land this worktree back onto the base branch."
+    return "\(topologyPrefix)Choose how to land this worktree back onto the base branch."
   }
 }
 
@@ -875,6 +883,7 @@ private struct WorkspaceToolbarItems: ToolbarContent {
   let canRebase: Bool
   let canMergeBack: Bool
   let canOpenPR: Bool
+  let branchTopologyLabel: String?
   let onPresentTabCreator: () -> Void
   let onReview: () -> Void
   let onRebase: () -> Void
@@ -952,7 +961,7 @@ private struct WorkspaceToolbarItems: ToolbarContent {
     if !canMergeBack {
       return "Merge Back is only available when this worktree has commits to land."
     }
-    return "Merge back to base branch"
+    return finalizeHelpText("Merge back to base branch")
   }
 
   private var openPRHelpText: String {
@@ -962,7 +971,12 @@ private struct WorkspaceToolbarItems: ToolbarContent {
     if !canOpenPR {
       return "Open Pull Request is only available when this worktree has commits to propose."
     }
-    return "Open pull request"
+    return finalizeHelpText("Open pull request")
+  }
+
+  private func finalizeHelpText(_ text: String) -> String {
+    guard let branchTopologyLabel else { return text }
+    return "\(text). \(branchTopologyLabel)"
   }
 }
 

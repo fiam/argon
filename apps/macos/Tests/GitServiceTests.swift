@@ -197,6 +197,147 @@ struct GitServiceTests {
     #expect(topology?.canFastForwardBase == false)
   }
 
+  @Test("defaultWorktreeStartPoint prefers local branch for a remote base")
+  func defaultWorktreeStartPointPrefersLocalBranchForRemoteBase() throws {
+    let fixture = try makeFixtureDirectory()
+    defer { try? FileManager.default.removeItem(at: fixture) }
+
+    let remote = fixture.appendingPathComponent("remote.git")
+    try FileManager.default.createDirectory(at: remote, withIntermediateDirectories: true)
+    try git(remote, ["init", "--bare"])
+
+    let repo = fixture.appendingPathComponent("repo")
+    try git(fixture, ["clone", remote.path, repo.path])
+    try git(repo, ["config", "user.name", "Argon Test"])
+    try git(repo, ["config", "user.email", "argon-test@example.com"])
+
+    try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    try git(repo, ["add", "a.txt"])
+    try git(repo, ["commit", "-m", "init"])
+    try git(repo, ["branch", "-M", "main"])
+    try git(repo, ["push", "-u", "origin", "main:main"])
+
+    try git(repo, ["checkout", "-b", "feature/window"])
+    try "one\nfeature\n".write(
+      to: repo.appendingPathComponent("a.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repo, ["commit", "-am", "feature"])
+
+    try git(repo, ["checkout", "main"])
+    try "one\nmain 1\n".write(
+      to: repo.appendingPathComponent("a.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repo, ["commit", "-am", "main 1"])
+    try "one\nmain 1\nmain 2\n".write(
+      to: repo.appendingPathComponent("a.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repo, ["commit", "-am", "main 2"])
+
+    let topology = GitService.branchTopology(
+      repoRoot: repo.path,
+      baseRef: "origin/main",
+      headRef: "feature/window"
+    )
+
+    #expect(topology?.aheadCount == 1)
+    #expect(topology?.behindCount == 0)
+    #expect(
+      GitService.defaultWorktreeStartPoint(
+        repoRoot: repo.path,
+        baseRef: "origin/main"
+      ) == "main"
+    )
+    #expect(
+      GitService.defaultWorktreeStartPoint(
+        repoRoot: repo.path,
+        baseRef: nil
+      ) == "main"
+    )
+    #expect(
+      GitService.branchTopology(
+        repoRoot: repo.path,
+        baseRef: "main",
+        headRef: "feature/window"
+      )?.behindCount == 2
+    )
+    #expect(
+      GitService.defaultWorktreeStartPoint(
+        repoRoot: repo.path,
+        baseRef: "origin/missing"
+      ) == "origin/missing"
+    )
+  }
+
+  @Test("branchTopology keeps local and remote bases distinct")
+  func branchTopologyKeepsLocalAndRemoteBasesDistinct() throws {
+    let fixture = try makeFixtureDirectory()
+    defer { try? FileManager.default.removeItem(at: fixture) }
+
+    let remote = fixture.appendingPathComponent("remote.git")
+    try FileManager.default.createDirectory(at: remote, withIntermediateDirectories: true)
+    try git(remote, ["init", "--bare"])
+
+    let repo = fixture.appendingPathComponent("repo")
+    try git(fixture, ["clone", remote.path, repo.path])
+    try git(repo, ["config", "user.name", "Argon Test"])
+    try git(repo, ["config", "user.email", "argon-test@example.com"])
+
+    try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    try git(repo, ["add", "a.txt"])
+    try git(repo, ["commit", "-m", "init"])
+    try git(repo, ["branch", "-M", "main"])
+    try git(repo, ["push", "-u", "origin", "main:main"])
+
+    try git(repo, ["checkout", "-b", "feature/window"])
+    try "one\nfeature\n".write(
+      to: repo.appendingPathComponent("a.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repo, ["commit", "-am", "feature"])
+
+    try git(repo, ["checkout", "main"])
+    try "one\nmain\n".write(
+      to: repo.appendingPathComponent("a.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repo, ["commit", "-am", "main"])
+
+    let remoteTopology = GitService.branchTopology(
+      repoRoot: repo.path,
+      baseRef: "origin/main",
+      headRef: "feature/window"
+    )
+    let localTopology = GitService.branchTopology(
+      repoRoot: repo.path,
+      baseRef: "main",
+      headRef: "feature/window"
+    )
+
+    #expect(remoteTopology?.aheadCount == 1)
+    #expect(remoteTopology?.behindCount == 0)
+    #expect(localTopology?.aheadCount == 1)
+    #expect(localTopology?.behindCount == 1)
+  }
+
+  @Test("branchTopology display label describes divergence")
+  func branchTopologyDisplayLabelDescribesDivergence() {
+    #expect(BranchTopology(aheadCount: 0, behindCount: 0).displayLabel == nil)
+    #expect(BranchTopology(aheadCount: 1, behindCount: 0).displayLabel == "1 commit ahead")
+    #expect(BranchTopology(aheadCount: 0, behindCount: 2).displayLabel == "2 commits behind")
+    #expect(
+      BranchTopology(aheadCount: 3, behindCount: 1).displayLabel
+        == "3 commits ahead, 1 commit behind"
+    )
+  }
+
   @Test("discoverWorktrees returns base and linked worktrees")
   func discoverWorktreesIncludesBaseAndLinkedWorktrees() throws {
     let fixture = try makeFixtureDirectory()

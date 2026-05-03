@@ -658,9 +658,10 @@ final class WorkspaceState {
   }
 
   func defaultNewWorktreeStartPoint() -> String {
-    selectedReviewTarget?.baseRef
-      ?? GitService.inferBaseRef(repoRoot: target.repoRoot)
-      ?? "HEAD"
+    GitService.defaultWorktreeStartPoint(
+      repoRoot: target.repoRoot,
+      baseRef: selectedReviewTarget?.baseRef
+    )
   }
 
   func suggestedWorktreePath(branchName: String) -> String {

@@ -18,6 +18,23 @@ struct BranchTopology: Hashable, Sendable {
   var canFastForwardBase: Bool {
     aheadCount > 0 && behindCount == 0
   }
+
+  var displayLabel: String? {
+    switch (aheadCount, behindCount) {
+    case (0, 0):
+      nil
+    case (let ahead, 0):
+      "\(ahead) \(Self.commitNoun(for: ahead)) ahead"
+    case (0, let behind):
+      "\(behind) \(Self.commitNoun(for: behind)) behind"
+    case (let ahead, let behind):
+      "\(ahead) \(Self.commitNoun(for: ahead)) ahead, \(behind) \(Self.commitNoun(for: behind)) behind"
+    }
+  }
+
+  private static func commitNoun(for count: Int) -> String {
+    count == 1 ? "commit" : "commits"
+  }
 }
 
 struct DiscoveredWorktree: Identifiable, Hashable, Sendable {
@@ -193,22 +210,10 @@ enum GitService {
     baseRef: String,
     headRef: String
   ) -> BranchTopology? {
-    let output = runGit([
-      "-C", repoRoot,
-      "rev-list", "--left-right", "--count", "\(baseRef)...\(headRef)",
-    ]).trimmingCharacters(in: .whitespacesAndNewlines)
-
-    let parts =
-      output
-      .split(whereSeparator: \.isWhitespace)
-      .map(String.init)
-
-    guard parts.count == 2,
-      let behindCount = Int(parts[0]),
-      let aheadCount = Int(parts[1])
-    else {
-      return nil
-    }
+    guard let mergeBase = mergeBase(repoRoot: repoRoot, a: baseRef, b: headRef),
+      let behindCount = commitCount(repoRoot: repoRoot, range: "\(mergeBase)..\(baseRef)"),
+      let aheadCount = commitCount(repoRoot: repoRoot, range: "\(mergeBase)..\(headRef)")
+    else { return nil }
 
     return BranchTopology(aheadCount: aheadCount, behindCount: behindCount)
   }
@@ -661,6 +666,21 @@ enum GitService {
     return nil
   }
 
+  static func defaultWorktreeStartPoint(repoRoot: String, baseRef: String?) -> String {
+    let trimmedBaseRef = baseRef?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let resolvedBaseRef =
+      if let trimmedBaseRef, !trimmedBaseRef.isEmpty {
+        trimmedBaseRef
+      } else {
+        inferBaseRef(repoRoot: repoRoot)
+      }
+
+    guard let resolvedBaseRef, !resolvedBaseRef.isEmpty else { return "HEAD" }
+
+    return localBranchStartPoint(repoRoot: repoRoot, remoteRef: resolvedBaseRef)
+      ?? resolvedBaseRef
+  }
+
   private static func isHeadDetached(repoRoot: String) -> Bool {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
@@ -680,6 +700,42 @@ enum GitService {
     let output = runGit(["-C", repoRoot, "merge-base", a, b]).trimmingCharacters(
       in: .whitespacesAndNewlines)
     return output.isEmpty ? nil : output
+  }
+
+  private static func commitCount(repoRoot: String, range: String) -> Int? {
+    let output = runGit(["-C", repoRoot, "rev-list", "--count", range])
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return Int(output)
+  }
+
+  private static func localBranchStartPoint(repoRoot: String, remoteRef: String) -> String? {
+    let unqualifiedRemoteRef =
+      if remoteRef.hasPrefix("refs/remotes/") {
+        String(remoteRef.dropFirst("refs/remotes/".count))
+      } else {
+        remoteRef
+      }
+
+    for remoteName in remoteNames(repoRoot: repoRoot) {
+      let prefix = "\(remoteName)/"
+      guard unqualifiedRemoteRef.hasPrefix(prefix) else { continue }
+
+      let localRef = String(unqualifiedRemoteRef.dropFirst(prefix.count))
+      guard !localRef.isEmpty,
+        resolveRef(repoRoot: repoRoot, ref: localRef) != nil
+      else {
+        return nil
+      }
+      return localRef
+    }
+
+    return nil
+  }
+
+  private static func remoteNames(repoRoot: String) -> [String] {
+    runGit(["-C", repoRoot, "remote"])
+      .split(whereSeparator: \.isWhitespace)
+      .map(String.init)
   }
 
   private static func parentCommitOrEmptyTree(repoRoot: String, commitSHA: String) -> String? {
