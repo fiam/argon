@@ -265,6 +265,12 @@ extension WorkspaceTerminalTab {
     shouldKeepRunningAcrossQuit && agentActivityState == .thinking
   }
 
+  var shouldReconnectTerminalSessionAfterAttachExit: Bool {
+    guard case .agent = kind else { return false }
+    return AgentTerminalPersistenceExperimentSettings.canUseTerminalSessionPersistence
+      && terminalSession != nil
+  }
+
   func shouldSuppressAttention(at date: Date = Date()) -> Bool {
     guard let suppressAttentionUntil else { return false }
     guard date < suppressAttentionUntil else {

@@ -388,6 +388,11 @@ struct GhosttyTerminalView: NSViewRepresentable {
   static func releaseTerminal(_ terminalID: UUID) {
     GhosttyHostRegistry.releaseRetainedHost(for: terminalID)?.shutdown()
   }
+
+  @MainActor
+  static func processExited(for terminalID: UUID) -> Bool {
+    GhosttyHostRegistry.host(for: terminalID)?.processExited ?? false
+  }
 }
 
 final class GhosttyTerminalHostView: NSView {
@@ -537,6 +542,14 @@ final class GhosttyTerminalHostView: NSView {
   func updateFocusRequestID(_ focusRequestID: UUID?) {
     pendingFocusRequestID = focusRequestID
     applyPendingFocusRequestIfNeeded()
+  }
+
+  var processExited: Bool {
+    if didMarkProcessExited {
+      return true
+    }
+    guard let surface else { return false }
+    return ghostty_surface_process_exited(surface)
   }
 
   func refreshRenderingSoon() {
@@ -1209,6 +1222,11 @@ final class GhosttyTerminalHostView: NSView {
   private func markProcessExited() {
     guard !didMarkProcessExited else { return }
     didMarkProcessExited = true
+    if let terminalID {
+      TerminalSessionLifecycleLog.record(
+        "ghostty-process-exited tab=\(terminalID.uuidString.lowercased())"
+      )
+    }
     if let onProcessExit {
       onProcessExit()
     } else {

@@ -1915,6 +1915,12 @@ private struct WorkspaceTerminalStage: View {
           focusRequestID: isSelected ? workspaceState.selectedTerminalFocusRequestID : nil
         )
         .id(tab.terminalViewIdentity)
+        .task(id: tab.terminalViewIdentity) {
+          await monitorTerminalAttach(
+            tabID: tab.id,
+            exitBehavior: selectedFinishedTerminalBehavior
+          )
+        }
         .zIndex(isSelected ? 1 : 0)
         .opacity(isSelected ? 1 : 0)
         .allowsHitTesting(isSelected)
@@ -1960,6 +1966,27 @@ private struct WorkspaceTerminalStage: View {
       return false
     }
     return selectedFinishedTerminalBehavior == .keepOpen
+  }
+
+  @MainActor
+  private func monitorTerminalAttach(
+    tabID: UUID,
+    exitBehavior: WorkspaceFinishedTerminalBehavior
+  ) async {
+    while !Task.isCancelled {
+      try? await Task.sleep(for: .seconds(1))
+      guard !Task.isCancelled else { return }
+
+      guard GhosttyTerminalView.processExited(for: tabID) else { continue }
+      let recovered = workspaceState.recoverPersistentTerminalAttachIfExited(
+        tabID,
+        processExited: true
+      )
+      if !recovered {
+        workspaceState.handleTerminalExit(tabID, exitBehavior: exitBehavior)
+      }
+      return
+    }
   }
 
   private func shouldShowExitedShellOverlay(for tab: WorkspaceTerminalTab) -> Bool {

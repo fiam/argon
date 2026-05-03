@@ -2597,12 +2597,13 @@ struct WorkspaceStateTests {
     defer { restoreExperiment() }
 
     let session = TerminalSessionReference(backendID: "test", sessionID: "alive")
+    let legacySession = TerminalSessionReference(backendID: "test", sessionID: "legacy-alive")
     let stoppedSessions = TerminalSessionStopRecorder()
     WorkspaceState.terminalSessionStopper = { session in
       stoppedSessions.append(session)
     }
     WorkspaceState.terminalSessionRunningChecker = { candidate in
-      candidate == session
+      candidate == session || candidate == legacySession
     }
     defer {
       WorkspaceState.terminalSessionStopper = { session in
@@ -2648,6 +2649,87 @@ struct WorkspaceStateTests {
     #expect(tab.isRunning)
     #expect(tab.terminalViewIdentity != secondReconnectViewIdentity)
     #expect(tab.terminalSessionReconnectCount == 3)
+    #expect(stoppedSessions.sessions.isEmpty)
+
+    let legacyTab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          agentFamilyID: .codex,
+          sandboxEnabled: true,
+          keepRunningWhileThinking: false
+        ))
+    )
+    legacyTab.terminalSession = legacySession
+    let legacyOriginalViewIdentity = legacyTab.terminalViewIdentity
+
+    state.handleTerminalExit(legacyTab.id, exitBehavior: .keepOpen)
+
+    #expect(legacyTab.terminalSession == legacySession)
+    #expect(legacyTab.isRunning)
+    #expect(legacyTab.terminalViewIdentity != legacyOriginalViewIdentity)
+    #expect(legacyTab.terminalSessionReconnectCount == 1)
+    #expect(stoppedSessions.sessions.isEmpty)
+  }
+
+  @Test("persistent terminal attach watchdog reattaches exited hosts")
+  @MainActor
+  func persistentTerminalAttachWatchdogReattachesExitedHosts() throws {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    defer { restoreExperiment() }
+
+    let session = TerminalSessionReference(backendID: "test", sessionID: "alive")
+    let stoppedSessions = TerminalSessionStopRecorder()
+    WorkspaceState.terminalSessionStopper = { session in
+      stoppedSessions.append(session)
+    }
+    WorkspaceState.terminalSessionRunningChecker = { candidate in
+      candidate == session
+    }
+    defer {
+      WorkspaceState.terminalSessionStopper = { session in
+        TerminalSessionBackends.stop(reference: session)
+      }
+      WorkspaceState.terminalSessionRunningChecker = { session in
+        TerminalSessionBackends.isRunning(reference: session)
+      }
+    }
+
+    let state = makeState()
+    let tab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          agentFamilyID: .codex,
+          sandboxEnabled: true,
+          keepRunningWhileThinking: true
+        ))
+    )
+    tab.terminalSession = session
+    let originalViewIdentity = tab.terminalViewIdentity
+
+    #expect(
+      !state.recoverPersistentTerminalAttachIfExited(
+        tab.id,
+        processExited: false
+      ))
+    #expect(tab.terminalViewIdentity == originalViewIdentity)
+    #expect(tab.terminalSessionReconnectCount == 0)
+
+    #expect(
+      state.recoverPersistentTerminalAttachIfExited(
+        tab.id,
+        processExited: true
+      ))
+
+    #expect(tab.terminalSession == session)
+    #expect(tab.isRunning)
+    #expect(tab.terminalViewIdentity != originalViewIdentity)
+    #expect(tab.terminalSessionReconnectCount == 1)
     #expect(stoppedSessions.sessions.isEmpty)
   }
 

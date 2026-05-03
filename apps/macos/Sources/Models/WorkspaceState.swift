@@ -1530,21 +1530,11 @@ final class WorkspaceState {
       return
     }
 
+    if reconnectPersistentTerminalSessionIfRunning(tabID, reason: "process-exit") {
+      return
+    }
+
     if let session = tab.terminalSession {
-      let sessionIsRunning = Self.terminalSessionRunningChecker(session)
-      TerminalSessionLifecycleLog.record(
-        "handle-terminal-exit-session-check tab=\(tabID.uuidString.lowercased()) session=\(session.sessionID) running=\(sessionIsRunning)"
-      )
-      if tab.keepsRunningAfterQuit, sessionIsRunning {
-        tab.terminalSessionReconnectCount += 1
-        tab.terminalViewIdentity = UUID()
-        tab.isRunning = true
-        tab.agentActivityState = .idle
-        GhosttyTerminalView.releaseTerminal(tabID)
-        requestTerminalFocus(in: tab.worktreePath)
-        notifyRestorableStateChanged()
-        return
-      }
       TerminalSessionLifecycleLog.record(
         "stop-terminal-session reason=handle-terminal-exit tab=\(tabID.uuidString.lowercased()) session=\(session.sessionID)"
       )
@@ -1560,6 +1550,43 @@ final class WorkspaceState {
     Task { @MainActor [weak self] in
       self?.closeTerminalTab(tabID)
     }
+  }
+
+  @discardableResult
+  func recoverPersistentTerminalAttachIfExited(_ tabID: UUID, processExited: Bool) -> Bool {
+    guard processExited else { return false }
+    return reconnectPersistentTerminalSessionIfRunning(tabID, reason: "attach-watchdog")
+  }
+
+  @discardableResult
+  private func reconnectPersistentTerminalSessionIfRunning(
+    _ tabID: UUID,
+    reason: String
+  ) -> Bool {
+    guard let tab = terminalTab(for: tabID), let session = tab.terminalSession else {
+      return false
+    }
+
+    let sessionIsRunning = Self.terminalSessionRunningChecker(session)
+    TerminalSessionLifecycleLog.record(
+      "terminal-session-reattach-check reason=\(reason) tab=\(tabID.uuidString.lowercased()) session=\(session.sessionID) running=\(sessionIsRunning) allowed=\(tab.shouldReconnectTerminalSessionAfterAttachExit)"
+    )
+    guard tab.shouldReconnectTerminalSessionAfterAttachExit, sessionIsRunning else {
+      return false
+    }
+
+    agentActivityIdleTasksByTabID.removeValue(forKey: tabID)?.cancel()
+    tab.terminalSessionReconnectCount += 1
+    tab.terminalViewIdentity = UUID()
+    tab.isRunning = true
+    tab.agentActivityState = .idle
+    TerminalSessionLifecycleLog.record(
+      "terminal-session-reattach reason=\(reason) tab=\(tabID.uuidString.lowercased()) session=\(session.sessionID) reconnects=\(tab.terminalSessionReconnectCount)"
+    )
+    GhosttyTerminalView.releaseTerminal(tabID)
+    requestTerminalFocus(in: tab.worktreePath)
+    notifyRestorableStateChanged()
+    return true
   }
 
   private func loadSelectedWorktreeDetails(for path: String) {
