@@ -6,7 +6,7 @@ final class WorkspaceState {
   nonisolated(unsafe) static var tabRestoreTestDelay: Duration?
   nonisolated(unsafe) static var terminalBellFlashDuration: Duration = .seconds(1)
   nonisolated(unsafe) static var terminalAttentionVisibleClearDelay: Duration = .seconds(1)
-  nonisolated(unsafe) static var agentThinkingIdleTimeout: Duration = .seconds(1)
+  nonisolated(unsafe) static var agentThinkingIdleTimeout: Duration = .seconds(3)
   nonisolated(unsafe) static var commandStatusProvider: (@Sendable ([String]) -> [String: Bool])?
   nonisolated(unsafe) static var terminalSessionReferenceProvider:
     (@Sendable (UUID) -> TerminalSessionReference?) = { tabID in
@@ -1530,10 +1530,10 @@ final class WorkspaceState {
 
     let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !normalizedTitle.isEmpty else {
-      tab.lastObservedTerminalTitle = nil
-      agentActivityIdleTasksByTabID.removeValue(forKey: tabID)?.cancel()
-      if tab.agentActivityState == .thinking {
-        tab.agentActivityState = .idle
+      if tab.agentActivityState == .thinking,
+        agentActivityIdleTasksByTabID[tabID] == nil
+      {
+        scheduleAgentActivityIdle(tabID)
       }
       return
     }

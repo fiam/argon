@@ -122,6 +122,35 @@ struct WorkspaceStateTests {
     #expect(await waitUntil { tab.agentActivityState == .idle })
   }
 
+  @Test("blank agent title values do not clear thinking immediately")
+  @MainActor
+  func blankAgentTitleValuesDoNotClearThinkingImmediately() async throws {
+    let previousTimeout = WorkspaceState.agentThinkingIdleTimeout
+    WorkspaceState.agentThinkingIdleTimeout = .milliseconds(80)
+    defer {
+      WorkspaceState.agentThinkingIdleTimeout = previousTimeout
+    }
+
+    let state = makeState()
+    let tab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          sandboxEnabled: false
+        ))
+    )
+
+    state.recordTerminalTitleChange("working", for: tab.id)
+    state.recordTerminalTitleChange("  ", for: tab.id)
+
+    #expect(tab.agentActivityState == .thinking)
+    try await Task.sleep(for: .milliseconds(20))
+    #expect(tab.agentActivityState == .thinking)
+    #expect(await waitUntil { tab.agentActivityState == .idle })
+  }
+
   @Test("repeated agent title values do not refresh thinking")
   @MainActor
   func repeatedAgentTitleValuesDoNotRefreshThinking() async throws {
