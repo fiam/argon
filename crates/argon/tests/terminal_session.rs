@@ -365,6 +365,91 @@ fn terminal_session_survives_attach_detach_and_reattach() -> Result<()> {
 }
 
 #[test]
+fn terminal_session_keeps_existing_client_when_another_client_attaches() -> Result<()> {
+    let temp = TempDirBuilder::new()
+        .prefix("argon-ts-multi-client")
+        .tempdir_in("/tmp")?;
+    let storage_dir = temp.path().join("s");
+    let marker = temp.path().join("marker");
+    let process_needle = storage_dir.display().to_string();
+    let session_id = "multi-client";
+    let _cleanup = TerminalSessionCleanup {
+        session_id: session_id.to_string(),
+        storage_dir: storage_dir.clone(),
+    };
+
+    let command = format!("printf started > {}; sleep 30", shell_quote(&marker));
+    let first_attach = argon_terminal_attach(session_id, &storage_dir, &command)?
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to start first multi-client terminal attach")?;
+    let mut first_attach = wait_for_file_contents_or_child_exit(
+        first_attach,
+        &marker,
+        "started",
+        &process_needle,
+        Duration::from_secs(5),
+    )?;
+
+    let mut second_attach = argon_terminal_attach_with_flags(
+        session_id,
+        &storage_dir,
+        &["--no-replay"],
+        "printf replacement",
+    )?
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .context("failed to start second multi-client terminal attach")?;
+
+    thread::sleep(Duration::from_millis(500));
+    if first_attach.try_wait()?.is_some() {
+        let output = first_attach
+            .wait_with_output()
+            .context("failed to collect displaced first attach output")?;
+        bail!(
+            "first terminal attach exited after second attach connected\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    if second_attach.try_wait()?.is_some() {
+        let output = second_attach
+            .wait_with_output()
+            .context("failed to collect early second attach output")?;
+        bail!(
+            "second terminal attach exited while child was still running\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    second_attach
+        .kill()
+        .context("failed to detach second multi-client terminal attach")?;
+    let _ = second_attach.wait();
+    thread::sleep(Duration::from_millis(250));
+    if first_attach.try_wait()?.is_some() {
+        let output = first_attach
+            .wait_with_output()
+            .context("failed to collect first attach output after second detach")?;
+        bail!(
+            "first terminal attach exited after second attach detached\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    argon_terminal_stop(session_id, &storage_dir)?;
+    let _ = wait_with_output_timeout(first_attach, Duration::from_secs(5))?;
+
+    Ok(())
+}
+
+#[test]
 fn terminal_session_can_reattach_without_replaying_buffered_output() -> Result<()> {
     let temp = TempDirBuilder::new()
         .prefix("argon-ts-no-replay")

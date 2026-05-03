@@ -523,7 +523,7 @@ fn drain_available_child_output(
 
 fn run_server_loop(session_id: &str, listener: &UnixListener, child: &mut PtyChild) -> Result<()> {
     let listener_fd = listener.as_raw_fd();
-    let mut client: Option<ServerClient> = None;
+    let mut clients: Vec<ServerClient> = Vec::new();
     let mut output_buffer = OutputBuffer::new(OUTPUT_BUFFER_LIMIT);
 
     loop {
@@ -540,17 +540,19 @@ fn run_server_loop(session_id: &str, listener: &UnixListener, child: &mut PtyChi
             events: libc::POLLIN,
             revents: 0,
         });
-        let client_index = if let Some(client) = client.as_ref() {
-            let index = poll_fds.len();
-            poll_fds.push(libc::pollfd {
-                fd: client.stream.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            });
-            Some(index)
-        } else {
-            None
-        };
+        let client_poll_indexes = clients
+            .iter()
+            .enumerate()
+            .map(|(client_index, client)| {
+                let poll_index = poll_fds.len();
+                poll_fds.push(libc::pollfd {
+                    fd: client.stream.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                });
+                (poll_index, client_index)
+            })
+            .collect::<Vec<_>>();
 
         let poll_result = unsafe { libc::poll(poll_fds.as_mut_ptr(), poll_fds.len() as _, 250) };
         if poll_result == -1 {
@@ -570,8 +572,9 @@ fn run_server_loop(session_id: &str, listener: &UnixListener, child: &mut PtyChi
                 terminal_debug_log(
                     session_id,
                     format!(
-                        "server-client-accepted replay={}",
-                        attach_options.replay_output
+                        "server-client-accepted replay={} active_clients={}",
+                        attach_options.replay_output,
+                        clients.len()
                     ),
                 );
                 if !attach_options.replay_output {
@@ -594,7 +597,7 @@ fn run_server_loop(session_id: &str, listener: &UnixListener, child: &mut PtyChi
                     child.terminate();
                     return Ok(());
                 }
-                client = Some(accepted);
+                clients.push(accepted);
             }
         }
 
@@ -610,11 +613,19 @@ fn run_server_loop(session_id: &str, listener: &UnixListener, child: &mut PtyChi
             if count > 0 {
                 let bytes = &buffer[..count as usize];
                 output_buffer.push(bytes);
-                let should_drop_client = client.as_mut().is_some_and(|client| {
-                    write_frame(&mut client.stream, FRAME_OUTPUT, bytes).is_err()
+                let mut dropped_clients = 0usize;
+                clients.retain_mut(|client| {
+                    let keep = write_frame(&mut client.stream, FRAME_OUTPUT, bytes).is_ok();
+                    if !keep {
+                        dropped_clients += 1;
+                    }
+                    keep
                 });
-                if should_drop_client {
-                    client = None;
+                if dropped_clients > 0 {
+                    terminal_debug_log(
+                        session_id,
+                        format!("server-dropped-output-clients count={dropped_clients}"),
+                    );
                 }
             } else {
                 let error = io::Error::last_os_error();
@@ -624,15 +635,17 @@ fn run_server_loop(session_id: &str, listener: &UnixListener, child: &mut PtyChi
             }
         }
 
-        if let Some(index) = client_index
-            && poll_fds[index].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0
-            && let Some(active_client) = client.as_mut()
-        {
-            match read_client_frames(active_client, child)? {
+        let mut disconnected_clients = Vec::new();
+        for (poll_index, client_index) in client_poll_indexes {
+            if poll_fds[poll_index].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) == 0 {
+                continue;
+            }
+
+            match read_client_frames(&mut clients[client_index], child)? {
                 ClientReadOutcome::Continue => {}
                 ClientReadOutcome::Disconnected => {
                     terminal_debug_log(session_id, "server-client-disconnected");
-                    client = None;
+                    disconnected_clients.push(client_index);
                 }
                 ClientReadOutcome::StopRequested => {
                     terminal_debug_log(session_id, "server-stop-requested");
@@ -641,13 +654,18 @@ fn run_server_loop(session_id: &str, listener: &UnixListener, child: &mut PtyChi
                 }
             }
         }
+        disconnected_clients.sort_unstable();
+        disconnected_clients.dedup();
+        for client_index in disconnected_clients.into_iter().rev() {
+            clients.remove(client_index);
+        }
 
         if let Some(exit_code) = child.try_wait()? {
             terminal_debug_log(
                 session_id,
                 format!("server-child-exited exit_code={exit_code}"),
             );
-            if let Some(client) = client.as_mut() {
+            for client in &mut clients {
                 let payload = exit_code.to_be_bytes();
                 let _ = write_frame(&mut client.stream, FRAME_EXIT, &payload);
             }
