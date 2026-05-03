@@ -148,7 +148,7 @@ struct AgentLaunchSheet: View {
       if let agent = selectedSavedAgent, !agent.yoloFlag.isEmpty {
         Toggle(isOn: $yoloMode) {
           VStack(alignment: .leading, spacing: 1) {
-            Text("Auto-approve mode")
+            Text("Yolo mode")
               .font(.callout)
             Text(yoloSubtitle(for: agent.yoloFlag))
               .font(.caption)
@@ -576,16 +576,27 @@ struct AgentPickerCard: View {
 
   var body: some View {
     Button(action: onSelect) {
-      HStack(spacing: 6) {
-        AgentIconView(icon: profile.icon)
+      HStack(alignment: .center, spacing: 6) {
+        AgentIconView(icon: profile.icon, size: 18)
           .foregroundStyle(isSelected ? .blue : .secondary)
-        Text(profile.name)
-          .fontWeight(isSelected ? .medium : .regular)
-          .lineLimit(1)
+          .frame(width: 20, height: 20)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(profile.name)
+            .fontWeight(isSelected ? .medium : .regular)
+            .lineLimit(1)
+
+          if let customizationSummary = profile.customizationSummary {
+            Text(customizationSummary)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .lineLimit(1)
+          }
+        }
       }
       .font(.callout)
       .padding(.horizontal, 12)
       .padding(.vertical, 8)
+      .frame(minHeight: 38)
       .frame(maxWidth: .infinity, alignment: .leading)
       .background(isSelected ? Color.blue.opacity(0.12) : Color(nsColor: .controlBackgroundColor))
       .foregroundStyle(isSelected ? .blue : status == .available ? .primary : .secondary)

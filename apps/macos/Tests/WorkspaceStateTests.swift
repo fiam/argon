@@ -1858,6 +1858,143 @@ struct WorkspaceStateTests {
       state.restorableAgentSessions(savedProfiles: SavedAgentProfiles.builtinDefaults).isEmpty)
   }
 
+  @Test("restorable sessions without profile metadata use the builtin profile")
+  @MainActor
+  func restorableSessionsWithoutProfileMetadataUseTheBuiltinProfile() throws {
+    let restoreMetadataStore = isolateAgentSessionRestoreMetadataStoreForTest()
+    defer { restoreMetadataStore() }
+
+    AgentHarnesses.resumeSessionRecordsProvider = {
+      [
+        AgentResumeSessionRecord(
+          familyID: .codex,
+          sessionID: "11111111-1111-1111-1111-111111111111",
+          cwd: "/tmp/repo",
+          startedAt: Date(timeIntervalSince1970: 30)
+        )
+      ]
+    }
+    defer {
+      AgentHarnesses.resumeSessionRecordsProvider = nil
+    }
+
+    let codexCopy = SavedAgentProfile(
+      id: "codex-copy",
+      kind: .harnessProfile(.codex),
+      name: "Codex Copy",
+      command: "codex",
+      icon: "codex",
+      parameterValues: ["model": "gpt-5.5", "reasoning": "high"],
+      yoloFlag: "--yolo",
+      resumeArgumentTemplate: "resume {{session_id}}"
+    )
+
+    let state = makeState()
+    let session = try #require(
+      state.restorableAgentSessions(
+        savedProfiles: SavedAgentProfiles.builtinDefaults + [codexCopy]
+      ).first)
+
+    #expect(session.profileID == "codex")
+    #expect(session.profileName == "Codex")
+    #expect(session.command == "codex")
+  }
+
+  @Test("restorable sessions use exact profile metadata when available")
+  @MainActor
+  func restorableSessionsUseExactProfileMetadataWhenAvailable() throws {
+    let restoreMetadataStore = isolateAgentSessionRestoreMetadataStoreForTest()
+    defer { restoreMetadataStore() }
+
+    AgentHarnesses.resumeSessionRecordsProvider = {
+      [
+        AgentResumeSessionRecord(
+          familyID: .codex,
+          sessionID: "22222222-2222-2222-2222-222222222222",
+          cwd: "/tmp/repo",
+          startedAt: Date(timeIntervalSince1970: 30)
+        )
+      ]
+    }
+    defer {
+      AgentHarnesses.resumeSessionRecordsProvider = nil
+    }
+
+    let codexCopy = SavedAgentProfile(
+      id: "codex-copy",
+      kind: .harnessProfile(.codex),
+      name: "Codex Copy",
+      command: "codex",
+      icon: "codex",
+      parameterValues: ["model": "gpt-5.5", "reasoning": "high"],
+      yoloFlag: "--yolo",
+      resumeArgumentTemplate: "resume {{session_id}}"
+    )
+    AgentSessionRestoreMetadataStore.record(
+      AgentSessionRestoreMetadata(
+        familyID: .codex,
+        profileID: "codex-copy",
+        sessionID: "22222222-2222-2222-2222-222222222222",
+        cwd: "/tmp/repo",
+        yoloMode: false,
+        sandboxEnabled: true,
+        updatedAt: Date(timeIntervalSince1970: 40)
+      )
+    )
+
+    let state = makeState()
+    let session = try #require(
+      state.restorableAgentSessions(
+        savedProfiles: SavedAgentProfiles.builtinDefaults + [codexCopy]
+      ).first)
+
+    #expect(session.profileID == "codex-copy")
+    #expect(session.profileName == "Codex Copy")
+    #expect(
+      session.command == "codex -m 'gpt-5.5' -c 'model_reasoning_effort=\"high\"'")
+  }
+
+  @Test("restorable sessions fall back to default when exact profile is missing")
+  @MainActor
+  func restorableSessionsFallBackToDefaultWhenExactProfileIsMissing() throws {
+    let restoreMetadataStore = isolateAgentSessionRestoreMetadataStoreForTest()
+    defer { restoreMetadataStore() }
+
+    AgentHarnesses.resumeSessionRecordsProvider = {
+      [
+        AgentResumeSessionRecord(
+          familyID: .codex,
+          sessionID: "22222222-2222-2222-2222-222222222222",
+          cwd: "/tmp/repo",
+          startedAt: Date(timeIntervalSince1970: 30)
+        )
+      ]
+    }
+    defer {
+      AgentHarnesses.resumeSessionRecordsProvider = nil
+    }
+
+    AgentSessionRestoreMetadataStore.record(
+      AgentSessionRestoreMetadata(
+        familyID: .codex,
+        profileID: "deleted-codex-profile",
+        sessionID: "22222222-2222-2222-2222-222222222222",
+        cwd: "/tmp/repo",
+        yoloMode: false,
+        sandboxEnabled: true,
+        updatedAt: Date(timeIntervalSince1970: 40)
+      )
+    )
+
+    let state = makeState()
+    let session = try #require(
+      state.restorableAgentSessions(savedProfiles: SavedAgentProfiles.builtinDefaults).first)
+
+    #expect(session.profileID == "codex")
+    #expect(session.profileName == "Codex")
+    #expect(session.command == "codex")
+  }
+
   @Test("stopped agent tabs do not hide their resumable session")
   @MainActor
   func stoppedAgentTabsDoNotHideTheirResumableSession() throws {
@@ -2057,6 +2194,53 @@ struct WorkspaceStateTests {
         == "codex --yolo resume '33333333-3333-3333-3333-333333333333'")
   }
 
+  @Test("relaunching an agent tab can change profile")
+  @MainActor
+  func relaunchingAgentTabCanChangeProfile() throws {
+    let restoreMetadataStore = isolateAgentSessionRestoreMetadataStoreForTest()
+    defer { restoreMetadataStore() }
+
+    let state = makeState()
+    let tab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchOptions(
+          source: .savedProfile(AgentFamilyID.codex.defaultProfile, yoloMode: false),
+          sandboxEnabled: true
+        )
+        .buildRequest()
+      )
+    )
+    tab.resumeSessionID = "33333333-3333-3333-3333-333333333333"
+
+    let codexCopy = SavedAgentProfile(
+      id: "codex-copy",
+      kind: .harnessProfile(.codex),
+      name: "Codex Copy",
+      command: "codex",
+      icon: "codex",
+      parameterValues: ["model": "gpt-5.5", "reasoning": "high"],
+      yoloFlag: "--yolo",
+      resumeArgumentTemplate: "resume {{session_id}}"
+    )
+    let relaunched = try #require(state.relaunchAgentTab(tab.id, profile: codexCopy))
+    let metadata = try #require(
+      AgentSessionRestoreMetadataStore.metadata(
+        familyID: .codex,
+        sessionID: "33333333-3333-3333-3333-333333333333",
+        cwd: "/tmp/repo"
+      )
+    )
+
+    #expect(relaunched.profileID == "codex-copy")
+    #expect(relaunched.title == "Codex Copy")
+    #expect(
+      relaunched.commandDescription == "codex -m 'gpt-5.5' -c 'model_reasoning_effort=\"high\"'")
+    #expect(
+      relaunched.baseCommandDescription
+        == "codex -m 'gpt-5.5' -c 'model_reasoning_effort=\"high\"'")
+    #expect(metadata.profileID == "codex-copy")
+  }
+
   @Test("lazy restore reconnects persistent terminal session when requested")
   @MainActor
   func lazyRestoreReconnectsPersistentTerminalSessionWhenRequested() async {
@@ -2199,6 +2383,99 @@ struct WorkspaceStateTests {
     let tab = state.selectedTerminalTabs.first
     #expect(tab?.terminalSession == replacementSession)
     #expect(tab?.launch.processSpec.args.last?.contains("replacement-session") == true)
+  }
+
+  @Test("lazy restore upgrades legacy persistent terminal refs to keep running")
+  @MainActor
+  func lazyRestoreUpgradesLegacyPersistentTerminalRefsToKeepRunning() async throws {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    defer { restoreExperiment() }
+
+    let legacySession = TerminalSessionReference(backendID: "screen", sessionID: "legacy-session")
+    let replacementSession = TerminalSessionReference(
+      backendID: "test",
+      sessionID: "replacement-session"
+    )
+    let stoppedSessions = TerminalSessionStopRecorder()
+    WorkspaceState.terminalSessionReferenceProvider = { _ in
+      replacementSession
+    }
+    WorkspaceState.terminalSessionLaunchBuilder = Self.testTerminalSessionLaunchBuilder
+    WorkspaceState.terminalSessionStopper = { session in
+      stoppedSessions.append(session)
+    }
+    WorkspaceState.terminalSessionRunningChecker = { candidate in
+      candidate == replacementSession
+    }
+    WorkspaceState.commandStatusProvider = { commands in
+      Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
+    }
+    defer {
+      WorkspaceState.terminalSessionReferenceProvider = { tabID in
+        TerminalSessionBackends.reference(for: tabID)
+      }
+      WorkspaceState.terminalSessionLaunchBuilder = Self.defaultTerminalSessionLaunchBuilder
+      WorkspaceState.terminalSessionStopper = { session in
+        TerminalSessionBackends.stop(reference: session)
+      }
+      WorkspaceState.terminalSessionRunningChecker = { session in
+        TerminalSessionBackends.isRunning(reference: session)
+      }
+      WorkspaceState.commandStatusProvider = nil
+    }
+
+    let tabID = UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")!
+    let snapshot = PersistedWorkspaceWindowSnapshot(
+      target: WorkspaceTarget(
+        repoRoot: "/tmp/repo",
+        repoCommonDir: "/tmp/repo/.git",
+        selectedWorktreePath: "/tmp/repo/feature"
+      ),
+      terminalTabsByWorktreePath: [
+        "/tmp/repo/feature": [
+          PersistedWorkspaceTerminalTab(
+            id: tabID,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Codex",
+            commandDescription: "codex --yolo",
+            kind: .agent(profileName: "Codex", icon: "codex"),
+            agentFamilyID: .codex,
+            createdAt: Date(timeIntervalSince1970: 55),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"],
+            resumeArgumentTemplate: "resume {{session_id}}",
+            keepsRunningAfterQuit: false,
+            terminalSession: legacySession,
+            resumeSessionID: "019de52a-af6e-7620-9d04-9c8ccd6158b7",
+            resumeCommandDescription:
+              "codex --yolo resume '019de52a-af6e-7620-9d04-9c8ccd6158b7'"
+          )
+        ]
+      ],
+      selectedTerminalTabIDsByWorktreePath: [
+        "/tmp/repo/feature": tabID
+      ]
+    )
+
+    let state = makeState()
+    state.applyPersistedWindowSnapshot(snapshot)
+    state.prepareSelectionLoading(for: "/tmp/repo/feature")
+    #expect(await waitUntil { state.selectedTerminalTabs.count == 1 })
+
+    let tab = try #require(state.selectedTerminalTabs.first)
+    let originalViewIdentity = tab.terminalViewIdentity
+    #expect(stoppedSessions.sessions == [legacySession])
+    #expect(tab.terminalSession == replacementSession)
+    #expect(tab.keepsRunningAfterQuit == true)
+
+    state.handleTerminalExit(tab.id, exitBehavior: .keepOpen)
+
+    #expect(tab.terminalSession == replacementSession)
+    #expect(tab.isRunning)
+    #expect(tab.terminalViewIdentity != originalViewIdentity)
+    #expect(tab.terminalSessionReconnectCount == 1)
+    #expect(stoppedSessions.sessions == [legacySession])
   }
 
   @Test("lazy restore replaces unmarked persistent terminal sessions")

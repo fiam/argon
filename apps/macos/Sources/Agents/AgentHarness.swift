@@ -10,6 +10,143 @@ enum AgentFamilyID: String, Codable, CaseIterable, Sendable {
   }
 }
 
+enum SavedAgentProfileKind: Codable, Hashable, Sendable {
+  case builtinDefault(AgentFamilyID)
+  case harnessProfile(AgentFamilyID)
+  case customCommand
+
+  private enum CodingKeys: String, CodingKey {
+    case discriminator
+    case familyID
+  }
+
+  private enum Discriminator: String, Codable {
+    case builtinDefault
+    case harnessProfile
+    case customCommand
+  }
+
+  var familyID: AgentFamilyID? {
+    switch self {
+    case .builtinDefault(let familyID), .harnessProfile(let familyID):
+      familyID
+    case .customCommand:
+      nil
+    }
+  }
+
+  var isMutable: Bool {
+    switch self {
+    case .builtinDefault:
+      false
+    case .harnessProfile, .customCommand:
+      true
+    }
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    switch try container.decode(Discriminator.self, forKey: .discriminator) {
+    case .builtinDefault:
+      self = .builtinDefault(try container.decode(AgentFamilyID.self, forKey: .familyID))
+    case .harnessProfile:
+      self = .harnessProfile(try container.decode(AgentFamilyID.self, forKey: .familyID))
+    case .customCommand:
+      self = .customCommand
+    }
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    switch self {
+    case .builtinDefault(let familyID):
+      try container.encode(Discriminator.builtinDefault, forKey: .discriminator)
+      try container.encode(familyID, forKey: .familyID)
+    case .harnessProfile(let familyID):
+      try container.encode(Discriminator.harnessProfile, forKey: .discriminator)
+      try container.encode(familyID, forKey: .familyID)
+    case .customCommand:
+      try container.encode(Discriminator.customCommand, forKey: .discriminator)
+    }
+  }
+}
+
+typealias AgentHarnessParameterValues = [String: String]
+
+struct AgentHarnessParameterChoice: Codable, Hashable, Sendable, Identifiable {
+  let value: String
+  let label: String
+  let help: String?
+
+  var id: String { value }
+
+  init(value: String, label: String? = nil, help: String? = nil) {
+    self.value = value
+    self.label = label ?? value
+    self.help = help
+  }
+}
+
+enum AgentHarnessParameterInput: String, Codable, Hashable, Sendable {
+  case text
+  case choice
+  case boolean
+}
+
+struct AgentHarnessArgumentTemplate: Codable, Hashable, Sendable {
+  enum Style: String, Codable, Hashable, Sendable {
+    case flag
+    case option
+    case codexConfig
+  }
+
+  let style: Style
+  let name: String
+
+  static func flag(_ name: String) -> Self {
+    Self(style: .flag, name: name)
+  }
+
+  static func option(_ name: String) -> Self {
+    Self(style: .option, name: name)
+  }
+
+  static func codexConfig(_ name: String) -> Self {
+    Self(style: .codexConfig, name: name)
+  }
+}
+
+struct AgentHarnessParameterDefinition: Codable, Hashable, Sendable, Identifiable {
+  let id: String
+  let label: String
+  let input: AgentHarnessParameterInput
+  let argument: AgentHarnessArgumentTemplate
+  let choices: [AgentHarnessParameterChoice]
+  let allowsCustomValue: Bool
+  let placeholder: String
+  let help: String?
+
+  init(
+    id: String,
+    label: String,
+    input: AgentHarnessParameterInput,
+    argument: AgentHarnessArgumentTemplate,
+    choices: [AgentHarnessParameterChoice] = [],
+    allowsCustomValue: Bool = false,
+    placeholder: String = "",
+    help: String? = nil
+  ) {
+    self.id = id
+    self.label = label
+    self.input = input
+    self.argument = argument
+    self.choices = choices
+    self.allowsCustomValue = allowsCustomValue
+    self.placeholder = placeholder
+    self.help = help
+  }
+}
+
 struct AgentResumeSessionRecord: Sendable, Equatable {
   let familyID: AgentFamilyID
   let sessionID: String
@@ -26,6 +163,7 @@ struct AgentHarnessDefinition: Sendable {
   let promptArgumentTemplate: String
   let resumeArgumentTemplate: String
   let versionArguments: [String]
+  let parameterDefinitions: [AgentHarnessParameterDefinition]
 
   init(
     familyID: AgentFamilyID,
@@ -35,7 +173,8 @@ struct AgentHarnessDefinition: Sendable {
     yoloFlag: String,
     promptArgumentTemplate: String,
     resumeArgumentTemplate: String,
-    versionArguments: [String]
+    versionArguments: [String],
+    parameterDefinitions: [AgentHarnessParameterDefinition] = []
   ) {
     self.familyID = familyID
     self.name = name
@@ -45,6 +184,7 @@ struct AgentHarnessDefinition: Sendable {
     self.promptArgumentTemplate = promptArgumentTemplate
     self.resumeArgumentTemplate = resumeArgumentTemplate
     self.versionArguments = versionArguments
+    self.parameterDefinitions = parameterDefinitions
   }
 
   var defaultProfile: SavedAgentProfile {
@@ -67,7 +207,7 @@ protocol AgentHarness: Sendable {
 
   func displayVersion(rawOutput: String?) -> String?
   func matchesCommand(_ command: String) -> Bool
-  func migratedProfile(_ profile: SavedAgentProfile) -> SavedAgentProfile
+  func renderedArguments(for values: AgentHarnessParameterValues) -> [String]
   func resumeSessionRecords(notBefore: Date) -> [AgentResumeSessionRecord]
 }
 
@@ -84,8 +224,11 @@ extension AgentHarness {
     commandExecutableName(from: command).lowercased() == definition.command.lowercased()
   }
 
-  func migratedProfile(_ profile: SavedAgentProfile) -> SavedAgentProfile {
-    profile
+  func renderedArguments(for values: AgentHarnessParameterValues) -> [String] {
+    renderedHarnessArguments(
+      definitions: definition.parameterDefinitions,
+      values: values
+    )
   }
 
   func resumeSessionRecords(notBefore: Date) -> [AgentResumeSessionRecord] {
@@ -128,6 +271,41 @@ enum AgentHarnesses {
     harness(for: familyID).displayVersion(rawOutput: rawOutput)
   }
 
+  static func parameterDefinitions(for familyID: AgentFamilyID) -> [AgentHarnessParameterDefinition]
+  {
+    definition(for: familyID).parameterDefinitions
+  }
+
+  static func renderedArguments(
+    for familyID: AgentFamilyID,
+    values: AgentHarnessParameterValues
+  ) -> [String] {
+    harness(for: familyID).renderedArguments(for: values)
+  }
+
+  static func parameterSummary(
+    for familyID: AgentFamilyID,
+    values: AgentHarnessParameterValues
+  ) -> String? {
+    let parts = parameterDefinitions(for: familyID).compactMap { definition -> String? in
+      guard let value = values[definition.id]?.trimmingCharacters(in: .whitespacesAndNewlines),
+        !value.isEmpty
+      else { return nil }
+
+      let displayValue: String
+      if definition.input == .boolean {
+        guard value == "true" else { return nil }
+        displayValue = "On"
+      } else {
+        displayValue = definition.choices.first { $0.value == value }?.label ?? value
+      }
+      return "\(definition.label): \(displayValue)"
+    }
+
+    guard !parts.isEmpty else { return nil }
+    return parts.joined(separator: ", ")
+  }
+
   static func sandboxAgentFamily(for familyID: AgentFamilyID) -> String {
     harness(for: familyID).sandboxAgentFamily
   }
@@ -141,11 +319,6 @@ enum AgentHarnesses {
     return sandboxAgentFamily(for: familyID)
   }
 
-  static func migratedProfile(_ profile: SavedAgentProfile) -> SavedAgentProfile {
-    guard let familyID = profile.familyID else { return profile }
-    return harness(for: familyID).migratedProfile(profile)
-  }
-
   static func resumeSessionRecords(
     for familyID: AgentFamilyID,
     notBefore: Date
@@ -155,5 +328,52 @@ enum AgentHarnesses {
         .filter { $0.familyID == familyID && $0.startedAt >= notBefore }
     }
     return harness(for: familyID).resumeSessionRecords(notBefore: notBefore)
+  }
+}
+
+func renderedHarnessArguments(
+  definitions: [AgentHarnessParameterDefinition],
+  values: AgentHarnessParameterValues
+) -> [String] {
+  var arguments: [String] = []
+
+  for definition in definitions {
+    guard let rawValue = values[definition.id]?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !rawValue.isEmpty
+    else { continue }
+
+    switch definition.input {
+    case .boolean:
+      guard rawValue == "true" else { continue }
+      arguments.append(definition.argument.name)
+    case .text, .choice:
+      guard isAcceptedHarnessValue(rawValue, for: definition) else { continue }
+      arguments.append(contentsOf: renderedHarnessArgument(definition.argument, value: rawValue))
+    }
+  }
+
+  return arguments
+}
+
+private func isAcceptedHarnessValue(
+  _ value: String,
+  for definition: AgentHarnessParameterDefinition
+) -> Bool {
+  guard definition.input == .choice, !definition.allowsCustomValue else { return true }
+  return definition.choices.contains { $0.value == value }
+}
+
+private func renderedHarnessArgument(
+  _ template: AgentHarnessArgumentTemplate,
+  value: String
+) -> [String] {
+  switch template.style {
+  case .flag:
+    return value == "true" ? [template.name] : []
+  case .option:
+    return [template.name, shellQuote(value)]
+  case .codexConfig:
+    let escapedValue = value.replacingOccurrences(of: "\"", with: "\\\"")
+    return ["-c", shellQuote("\(template.name)=\"\(escapedValue)\"")]
   }
 }

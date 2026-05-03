@@ -2,12 +2,13 @@ import Foundation
 
 struct SavedAgentProfile: Codable, Identifiable, Hashable, Sendable {
   var id: String
-  var familyID: AgentFamilyID?
+  var kind: SavedAgentProfileKind
   var name: String
   var command: String
   var icon: String
   var isEnabled: Bool
-  /// Flags appended to the command to enable auto-approve mode.
+  var parameterValues: AgentHarnessParameterValues
+  /// Flags appended to the command to enable yolo mode.
   /// Empty string means the agent doesn't support a yolo mode.
   var yoloFlag: String
   /// Optional command-line template used to pass a quoted prompt.
@@ -21,21 +22,24 @@ struct SavedAgentProfile: Codable, Identifiable, Hashable, Sendable {
 
   init(
     id: String,
+    kind: SavedAgentProfileKind? = nil,
     familyID: AgentFamilyID? = nil,
     name: String,
     command: String,
     icon: String,
     isEnabled: Bool = true,
+    parameterValues: AgentHarnessParameterValues = [:],
     yoloFlag: String,
     promptArgumentTemplate: String = "",
     resumeArgumentTemplate: String = ""
   ) {
     self.id = id
-    self.familyID = familyID
+    self.kind = kind ?? familyID.map { .builtinDefault($0) } ?? .customCommand
     self.name = name
     self.command = command
     self.icon = icon
     self.isEnabled = isEnabled
+    self.parameterValues = parameterValues
     self.yoloFlag = yoloFlag
     self.promptArgumentTemplate = promptArgumentTemplate
     self.resumeArgumentTemplate = resumeArgumentTemplate
@@ -43,11 +47,12 @@ struct SavedAgentProfile: Codable, Identifiable, Hashable, Sendable {
 
   private enum CodingKeys: String, CodingKey {
     case id
-    case familyID
+    case kind
     case name
     case command
     case icon
     case isEnabled
+    case parameterValues
     case yoloFlag
     case promptArgumentTemplate
     case resumeArgumentTemplate
@@ -56,11 +61,13 @@ struct SavedAgentProfile: Codable, Identifiable, Hashable, Sendable {
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     self.id = try container.decode(String.self, forKey: .id)
-    self.familyID = try container.decodeIfPresent(AgentFamilyID.self, forKey: .familyID)
+    self.kind = try container.decode(SavedAgentProfileKind.self, forKey: .kind)
     self.name = try container.decode(String.self, forKey: .name)
     self.command = try container.decode(String.self, forKey: .command)
     self.icon = try container.decode(String.self, forKey: .icon)
     self.isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+    self.parameterValues = try container.decode(
+      AgentHarnessParameterValues.self, forKey: .parameterValues)
     self.yoloFlag = try container.decode(String.self, forKey: .yoloFlag)
     self.promptArgumentTemplate = try container.decode(
       String.self,
@@ -75,18 +82,30 @@ struct SavedAgentProfile: Codable, Identifiable, Hashable, Sendable {
   func encode(to encoder: Encoder) throws {
     var container = encoder.container(keyedBy: CodingKeys.self)
     try container.encode(id, forKey: .id)
-    try container.encodeIfPresent(familyID, forKey: .familyID)
+    try container.encode(kind, forKey: .kind)
     try container.encode(name, forKey: .name)
     try container.encode(command, forKey: .command)
     try container.encode(icon, forKey: .icon)
     try container.encode(isEnabled, forKey: .isEnabled)
+    try container.encode(parameterValues, forKey: .parameterValues)
     try container.encode(yoloFlag, forKey: .yoloFlag)
     try container.encode(promptArgumentTemplate, forKey: .promptArgumentTemplate)
     try container.encode(resumeArgumentTemplate, forKey: .resumeArgumentTemplate)
   }
 
+  var familyID: AgentFamilyID? {
+    kind.familyID
+  }
+
   var isBuiltIn: Bool {
-    familyID != nil
+    if case .builtinDefault = kind {
+      return true
+    }
+    return false
+  }
+
+  var isMutable: Bool {
+    kind.isMutable
   }
 
   var availabilityCommand: String {
@@ -98,6 +117,14 @@ struct SavedAgentProfile: Codable, Identifiable, Hashable, Sendable {
   /// Build the full command, optionally with yolo flags.
   func fullCommand(yolo: Bool, sandboxed: Bool = false, prompt: String? = nil) -> String {
     var components = [command]
+    if case .harnessProfile(let familyID) = kind {
+      components.append(
+        contentsOf: AgentHarnesses.renderedArguments(
+          for: familyID,
+          values: parameterValues
+        )
+      )
+    }
     if yolo && !yoloFlag.isEmpty {
       components.append(yoloFlag)
     }
@@ -124,6 +151,14 @@ struct SavedAgentProfile: Codable, Identifiable, Hashable, Sendable {
     commandExecutableName(from: command)
   }
 
+  var customizationSummary: String? {
+    guard case .harnessProfile(let familyID) = kind else { return nil }
+    return AgentHarnesses.parameterSummary(
+      for: familyID,
+      values: parameterValues
+    )
+  }
+
   func renderedResumeCommand(baseCommand: String, sessionID: String?) -> String? {
     renderAgentResumeCommand(
       baseCommand: baseCommand,
@@ -143,7 +178,10 @@ extension AgentFamilyID {
   }
 
   static func inferred(from profile: SavedAgentProfile) -> AgentFamilyID? {
-    allCases.first { family in
+    if let familyID = profile.familyID {
+      return familyID
+    }
+    return allCases.first { family in
       family.defaultProfileID == profile.id
     }
   }
@@ -180,15 +218,24 @@ final class SavedAgentProfiles {
   }
 
   func add(_ profile: SavedAgentProfile) {
-    profiles.append(profile)
+    profiles.append(Self.normalizedProfile(profile))
     save()
   }
 
   func update(_ profile: SavedAgentProfile) {
     if let idx = profiles.firstIndex(where: { $0.id == profile.id }) {
-      profiles[idx] = Self.migratedProfile(profile)
+      profiles[idx] = Self.normalizedProfile(profile)
       save()
     }
+  }
+
+  @discardableResult
+  func duplicate(id: String) -> SavedAgentProfile? {
+    guard let profile = profiles.first(where: { $0.id == id }) else { return nil }
+    let duplicate = Self.duplicatedProfile(from: profile)
+    profiles.append(duplicate)
+    save()
+    return duplicate
   }
 
   func remove(at offsets: IndexSet) {
@@ -242,9 +289,14 @@ final class SavedAgentProfiles {
   }
 
   private static func reconciledProfiles(from decoded: [SavedAgentProfile]) -> [SavedAgentProfile] {
-    var profiles = decoded.map(Self.migratedProfile)
+    var profiles = decoded.map(Self.normalizedProfile)
     for family in AgentFamilyID.allCases
-    where !profiles.contains(where: { $0.familyID == family }) {
+    where !profiles.contains(where: {
+      if case .builtinDefault(let builtinFamily) = $0.kind {
+        return builtinFamily == family
+      }
+      return false
+    }) {
       var missingProfile = family.defaultProfile
       missingProfile.isEnabled = false
       profiles.append(missingProfile)
@@ -252,19 +304,82 @@ final class SavedAgentProfiles {
     return profiles
   }
 
-  private static func migratedProfile(_ profile: SavedAgentProfile) -> SavedAgentProfile {
-    var migrated = profile
-    if migrated.familyID == nil {
-      migrated.familyID = AgentFamilyID.inferred(from: migrated)
-    }
-    migrated = AgentHarnesses.migratedProfile(migrated)
-    if let familyID = migrated.familyID {
+  private static func normalizedProfile(_ profile: SavedAgentProfile) -> SavedAgentProfile {
+    switch profile.kind {
+    case .builtinDefault(let familyID):
+      var normalized = familyID.defaultProfile
+      normalized.isEnabled = profile.isEnabled
+      return normalized
+    case .harnessProfile(let familyID):
       let defaultProfile = familyID.defaultProfile
-      let isEnabled = migrated.isEnabled
-      migrated = defaultProfile
-      migrated.isEnabled = isEnabled
+      var normalized = profile
+      normalized.kind = .harnessProfile(familyID)
+      normalized.command = defaultProfile.command
+      normalized.icon = defaultProfile.icon
+      normalized.yoloFlag = defaultProfile.yoloFlag
+      normalized.promptArgumentTemplate = defaultProfile.promptArgumentTemplate
+      normalized.resumeArgumentTemplate = defaultProfile.resumeArgumentTemplate
+      normalized.parameterValues = sanitizedParameterValues(
+        profile.parameterValues,
+        for: familyID
+      )
+      return normalized
+    case .customCommand:
+      var normalized = profile
+      normalized.kind = .customCommand
+      normalized.parameterValues = [:]
+      normalized.icon = "agent"
+      normalized.promptArgumentTemplate = ""
+      normalized.resumeArgumentTemplate = ""
+      return normalized
     }
-    return migrated
+  }
+
+  private static func duplicatedProfile(from profile: SavedAgentProfile) -> SavedAgentProfile {
+    if let familyID = profile.familyID {
+      let defaultProfile = familyID.defaultProfile
+      let duplicateName =
+        profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        ? defaultProfile.name
+        : "\(profile.name) Copy"
+      return SavedAgentProfile(
+        id: "profile-\(UUID().uuidString.prefix(8))",
+        kind: .harnessProfile(familyID),
+        name: duplicateName,
+        command: defaultProfile.command,
+        icon: defaultProfile.icon,
+        parameterValues: profile.isBuiltIn ? [:] : profile.parameterValues,
+        yoloFlag: defaultProfile.yoloFlag,
+        promptArgumentTemplate: defaultProfile.promptArgumentTemplate,
+        resumeArgumentTemplate: defaultProfile.resumeArgumentTemplate
+      )
+    }
+
+    var duplicate = profile
+    duplicate.id = "custom-\(UUID().uuidString.prefix(8))"
+    duplicate.name =
+      profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      ? "Custom Agent Copy"
+      : "\(profile.name) Copy"
+    return duplicate
+  }
+
+  private static func sanitizedParameterValues(
+    _ values: AgentHarnessParameterValues,
+    for familyID: AgentFamilyID
+  ) -> AgentHarnessParameterValues {
+    let definitions = AgentHarnesses.parameterDefinitions(for: familyID)
+    let definitionsByID = Dictionary(uniqueKeysWithValues: definitions.map { ($0.id, $0) })
+    return values.reduce(into: [:]) { partialResult, entry in
+      guard let definition = definitionsByID[entry.key] else { return }
+      let value = entry.value.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !value.isEmpty else { return }
+      guard
+        definition.input != .choice || definition.allowsCustomValue
+          || definition.choices.contains(where: { $0.value == value })
+      else { return }
+      partialResult[entry.key] = value
+    }
   }
 }
 
@@ -312,7 +427,7 @@ func renderAgentResumeCommand(
   return "\(baseCommand) \(renderedTemplate)"
 }
 
-private func shellQuote(_ value: String) -> String {
+func shellQuote(_ value: String) -> String {
   let escaped = value.replacingOccurrences(of: "'", with: "'\\''")
   return "'\(escaped)'"
 }

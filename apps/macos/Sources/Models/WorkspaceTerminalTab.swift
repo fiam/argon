@@ -38,6 +38,7 @@ struct WorktreeAgentActivitySummary: Equatable, Sendable {
 }
 
 struct WorkspaceAgentLaunchRequest: Sendable {
+  let profileID: String?
   let displayName: String
   let command: String
   let baseCommandDescription: String
@@ -55,6 +56,7 @@ struct WorkspaceAgentLaunchRequest: Sendable {
   let additionalWritableRoots: [String]
 
   init(
+    profileID: String? = nil,
     displayName: String,
     command: String,
     baseCommandDescription: String? = nil,
@@ -71,6 +73,7 @@ struct WorkspaceAgentLaunchRequest: Sendable {
     isRestorableAfterRelaunch: Bool = true,
     additionalWritableRoots: [String] = []
   ) {
+    self.profileID = profileID
     self.displayName = displayName
     self.command = command
     self.baseCommandDescription = baseCommandDescription ?? command
@@ -105,14 +108,19 @@ struct WorkspaceAgentLaunchOptions: Sendable {
     switch source {
     case .savedProfile(let profile, let yoloMode):
       let effectiveYoloMode = yoloMode && !profile.yoloFlag.isEmpty
+      let baseCommand = profile.fullCommand(
+        yolo: false,
+        sandboxed: sandboxEnabled
+      )
       return WorkspaceAgentLaunchRequest(
+        profileID: profile.id,
         displayName: profile.name,
         command: profile.fullCommand(
           yolo: yoloMode,
           sandboxed: sandboxEnabled,
           prompt: prompt
         ),
-        baseCommandDescription: profile.command,
+        baseCommandDescription: baseCommand,
         icon: profile.icon,
         agentFamilyID: profile.familyID,
         sandboxEnabled: sandboxEnabled,
@@ -154,6 +162,7 @@ struct WorkspaceAgentLaunchOptions: Sendable {
 @Observable
 final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
   let id: UUID
+  let profileID: String?
   let worktreePath: String
   let worktreeLabel: String
   let title: String
@@ -185,6 +194,7 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
 
   init(
     id: UUID = UUID(),
+    profileID: String? = nil,
     worktreePath: String,
     worktreeLabel: String,
     title: String,
@@ -215,6 +225,7 @@ final class WorkspaceTerminalTab: Identifiable, TerminalProcessControlling {
     terminalSessionReconnectCount: Int = 0
   ) {
     self.id = id
+    self.profileID = profileID
     self.worktreePath = worktreePath
     self.worktreeLabel = worktreeLabel
     self.title = title

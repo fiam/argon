@@ -316,7 +316,7 @@ final class WorkspaceState {
   }
 
   func applyPersistedWindowSnapshot(_ snapshot: PersistedWorkspaceWindowSnapshot) {
-    let restoreMetadataByProfileName = Self.restoreMetadataByProfileName(
+    let restoreMetadataByProfileIDOrName = Self.restoreMetadataByProfileIDOrName(
       savedProfiles: SavedAgentProfiles().profiles
     )
 
@@ -329,6 +329,7 @@ final class WorkspaceState {
         Self.persistedTabByResolvingResumeTemplate(
           from: PersistedWorkspaceTerminalTab(
             id: tab.id,
+            profileID: tab.profileID,
             worktreePath: normalizedPath(tab.worktreePath),
             worktreeLabel: tab.worktreeLabel,
             title: tab.title,
@@ -346,7 +347,7 @@ final class WorkspaceState {
             resumeSessionID: tab.resumeSessionID,
             resumeCommandDescription: tab.resumeCommandDescription
           ),
-          using: restoreMetadataByProfileName
+          using: restoreMetadataByProfileIDOrName
         )
       }
     }
@@ -1081,6 +1082,7 @@ final class WorkspaceState {
 
     let tab = WorkspaceTerminalTab(
       id: tabID,
+      profileID: request.profileID,
       worktreePath: worktreePath,
       worktreeLabel: worktree.branchName ?? repoName,
       title: agentTabTitle(for: request, ordinal: ordinal),
@@ -1114,7 +1116,7 @@ final class WorkspaceState {
   ) -> [WorkspaceRestorableAgentSession] {
     guard let worktreePath = normalizedSelectedWorktreePath else { return [] }
 
-    let profilesByFamily = Self.agentProfilesByFamily(savedProfiles: savedProfiles)
+    let profilesByID = Self.agentProfilesByID(savedProfiles: savedProfiles)
     let runningSessionKeys = Set(
       selectedTerminalTabs.compactMap { tab -> String? in
         guard tab.isRunning else { return nil }
@@ -1139,13 +1141,7 @@ final class WorkspaceState {
 
     var sessionsByKey: [String: WorkspaceRestorableAgentSession] = [:]
     for familyID in AgentFamilyID.allCases {
-      let profile = profilesByFamily[familyID] ?? familyID.defaultProfile
-      let resumeArgumentTemplate = Self.sessionSpecificResumeArgumentTemplate(
-        for: familyID,
-        profile: profile
-      )
-      guard !resumeArgumentTemplate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      else { continue }
+      let defaultProfile = profilesByID[familyID.defaultProfileID] ?? familyID.defaultProfile
 
       for record in AgentHarnesses.resumeSessionRecords(for: familyID, notBefore: notBefore) {
         guard normalizedPath(record.cwd) == worktreePath else { continue }
@@ -1157,11 +1153,24 @@ final class WorkspaceState {
           sessionID: record.sessionID,
           cwd: record.cwd
         )
+        let sessionProfile =
+          metadata?.profileID.flatMap { profileID in
+            profilesByID[profileID]
+          }
+          ?? defaultProfile
+        let resumeArgumentTemplate = Self.sessionSpecificResumeArgumentTemplate(
+          for: familyID,
+          profile: sessionProfile
+        )
+        guard !resumeArgumentTemplate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { continue }
+
         let session = WorkspaceRestorableAgentSession(
           familyID: familyID,
-          profileName: profile.name,
-          command: profile.command,
-          icon: profile.icon,
+          profileID: sessionProfile.id,
+          profileName: sessionProfile.name,
+          command: sessionProfile.fullCommand(yolo: false),
+          icon: sessionProfile.icon,
           resumeArgumentTemplate: resumeArgumentTemplate,
           sessionID: record.sessionID,
           cwd: normalizedPath(record.cwd),
@@ -1212,6 +1221,7 @@ final class WorkspaceState {
 
     return openAgentTab(
       WorkspaceAgentLaunchRequest(
+        profileID: session.profileID,
         displayName: session.profileName,
         command: command,
         baseCommandDescription: session.command,
@@ -1252,48 +1262,71 @@ final class WorkspaceState {
   func relaunchAgentTab(
     _ tabID: UUID,
     sandboxEnabled: Bool? = nil,
-    yoloMode: Bool? = nil
+    yoloMode: Bool? = nil,
+    profile: SavedAgentProfile? = nil
   ) -> WorkspaceTerminalTab? {
     guard let tab = terminalTab(for: tabID) else { return nil }
     guard case .agent(let profileName, let icon) = tab.kind else { return nil }
 
     let nextSandboxEnabled = sandboxEnabled ?? tab.isSandboxed
     let nextYoloMode = yoloMode ?? tab.yoloMode
-    guard nextSandboxEnabled != tab.isSandboxed || nextYoloMode != tab.yoloMode else {
+    let nextProfileID = profile?.id ?? tab.profileID
+    let nextProfileName = profile?.name ?? profileName
+    let nextIcon = profile?.icon ?? icon
+    let nextYoloFlag = profile?.yoloFlag ?? tab.yoloFlag
+    let nextResumeArgumentTemplate = profile?.resumeArgumentTemplate ?? tab.resumeArgumentTemplate
+    let nextBaseCommandDescription =
+      profile?.fullCommand(yolo: false, sandboxed: nextSandboxEnabled) ?? tab.baseCommandDescription
+    let nextFamilyID =
+      profile?.familyID
+      ?? tab.agentFamilyID
+      ?? AgentHarnesses.familyID(
+        matchingCommand: nextBaseCommandDescription
+      )
+    guard
+      nextSandboxEnabled != tab.isSandboxed || nextYoloMode != tab.yoloMode
+        || nextProfileID != tab.profileID
+        || nextBaseCommandDescription != tab.baseCommandDescription
+        || nextResumeArgumentTemplate != tab.resumeArgumentTemplate
+    else {
       return tab
     }
 
     let sessionID = tab.resumeSessionID ?? hydrateAgentResumeSessionID(for: tab)
     if let sessionID {
       tab.resumeSessionID = sessionID
-      recordAgentSessionRestoreMetadata(for: tab, sessionID: sessionID)
+      recordAgentSessionRestoreMetadata(
+        for: tab,
+        sessionID: sessionID,
+        profileID: nextProfileID,
+        yoloMode: nextYoloMode,
+        sandboxEnabled: nextSandboxEnabled
+      )
     }
 
     let command = Self.agentCommand(
-      baseCommand: tab.baseCommandDescription,
+      baseCommand: nextBaseCommandDescription,
       yoloMode: nextYoloMode,
-      yoloFlag: tab.yoloFlag
+      yoloFlag: nextYoloFlag
     )
     let launchCommandOverride = renderAgentResumeCommand(
       baseCommand: command,
-      resumeArgumentTemplate: tab.resumeArgumentTemplate,
+      resumeArgumentTemplate: nextResumeArgumentTemplate,
       sessionID: sessionID
     )
     let additionalWritableRoots = tab.writableRoots.filter { $0 != tab.worktreePath }
     let request = WorkspaceAgentLaunchRequest(
-      displayName: profileName,
+      profileID: nextProfileID,
+      displayName: nextProfileName,
       command: command,
-      baseCommandDescription: tab.baseCommandDescription,
+      baseCommandDescription: nextBaseCommandDescription,
       launchCommandOverride: launchCommandOverride,
-      icon: icon,
-      agentFamilyID: tab.agentFamilyID
-        ?? AgentHarnesses.familyID(
-          matchingCommand: tab.baseCommandDescription
-        ),
+      icon: nextIcon,
+      agentFamilyID: nextFamilyID,
       sandboxEnabled: nextSandboxEnabled,
       yoloMode: nextYoloMode,
-      yoloFlag: tab.yoloFlag,
-      resumeArgumentTemplate: tab.resumeArgumentTemplate,
+      yoloFlag: nextYoloFlag,
+      resumeArgumentTemplate: nextResumeArgumentTemplate,
       resumeSessionID: sessionID,
       keepRunningWhileThinking:
         AgentTerminalPersistenceExperimentSettings.canUseTerminalSessionPersistence,
@@ -1863,6 +1896,7 @@ final class WorkspaceState {
 
     return WorkspaceTerminalTab(
       id: persistedTab.id,
+      profileID: persistedTab.profileID,
       worktreePath: persistedTab.worktreePath,
       worktreeLabel: persistedTab.worktreeLabel,
       title: persistedTab.title,
@@ -1878,7 +1912,11 @@ final class WorkspaceState {
       writableRoots: persistedTab.writableRoots,
       isRestorableAfterRelaunch: true,
       resumeArgumentTemplate: persistedTab.resumeArgumentTemplate,
-      keepsRunningAfterQuit: persistedTab.keepsRunningAfterQuit,
+      keepsRunningAfterQuit: Self.restoredKeepsRunningAfterQuit(
+        persistedTab: persistedTab,
+        kind: kind,
+        terminalSession: terminalSession
+      ),
       terminalSession: terminalSession,
       resumeSessionID: persistedTab.resumeSessionID,
       resumeCommandDescription: persistedTab.resumeCommandDescription,
@@ -1928,9 +1966,20 @@ final class WorkspaceState {
     guard AgentTerminalPersistenceExperimentSettings.canUseTerminalSessionPersistence else {
       return nil
     }
-    guard tab.keepsRunningAfterQuit else { return nil }
     guard case .agent = tab.kind else { return nil }
+    guard tab.keepsRunningAfterQuit || tab.terminalSession != nil else { return nil }
     return Self.terminalSessionReferenceProvider(tab.id)
+  }
+
+  private static func restoredKeepsRunningAfterQuit(
+    persistedTab: PersistedWorkspaceTerminalTab,
+    kind: WorkspaceTerminalKind,
+    terminalSession: TerminalSessionReference?
+  ) -> Bool {
+    guard case .agent = kind else {
+      return persistedTab.keepsRunningAfterQuit
+    }
+    return persistedTab.keepsRunningAfterQuit || terminalSession != nil
   }
 
   nonisolated private static func hydratedPersistedAgentResumeMetadata(
@@ -1951,6 +2000,7 @@ final class WorkspaceState {
       else { continue }
       hydratedTabs[index] = PersistedWorkspaceTerminalTab(
         id: tab.id,
+        profileID: tab.profileID,
         worktreePath: tab.worktreePath,
         worktreeLabel: tab.worktreeLabel,
         title: tab.title,
@@ -2041,6 +2091,7 @@ final class WorkspaceState {
           ) {
             hydratedTabs[index] = PersistedWorkspaceTerminalTab(
               id: tab.id,
+              profileID: tab.profileID,
               worktreePath: tab.worktreePath,
               worktreeLabel: tab.worktreeLabel,
               title: tab.title,
@@ -2083,6 +2134,7 @@ final class WorkspaceState {
 
         hydratedTabs[index] = PersistedWorkspaceTerminalTab(
           id: tab.id,
+          profileID: tab.profileID,
           worktreePath: tab.worktreePath,
           worktreeLabel: tab.worktreeLabel,
           title: tab.title,
@@ -2161,6 +2213,7 @@ final class WorkspaceState {
 
     return PersistedWorkspaceTerminalTab(
       id: tab.id,
+      profileID: tab.profileID,
       worktreePath: tab.worktreePath,
       worktreeLabel: tab.worktreeLabel,
       title: tab.title,
@@ -2182,10 +2235,12 @@ final class WorkspaceState {
 
   nonisolated private static func persistedTabByResolvingResumeTemplate(
     from tab: PersistedWorkspaceTerminalTab,
-    using restoreMetadataByProfileName: [String: AgentRestoreProfileMetadata]
+    using restoreMetadataByProfileIDOrName: [String: AgentRestoreProfileMetadata]
   ) -> PersistedWorkspaceTerminalTab {
     guard case .agent(let profileName, _) = tab.kind else { return tab }
-    let metadata = restoreMetadataByProfileName[profileName]
+    let metadata =
+      tab.profileID.flatMap { restoreMetadataByProfileIDOrName[$0] }
+      ?? restoreMetadataByProfileIDOrName[profileName]
     let resumeArgumentTemplate = metadata?.resumeArgumentTemplate ?? ""
     guard
       resumeArgumentTemplate != tab.resumeArgumentTemplate
@@ -2193,6 +2248,7 @@ final class WorkspaceState {
 
     return PersistedWorkspaceTerminalTab(
       id: tab.id,
+      profileID: tab.profileID,
       worktreePath: tab.worktreePath,
       worktreeLabel: tab.worktreeLabel,
       title: tab.title,
@@ -2212,41 +2268,40 @@ final class WorkspaceState {
     )
   }
 
-  private static func restoreMetadataByProfileName(savedProfiles: [SavedAgentProfile])
+  private static func restoreMetadataByProfileIDOrName(savedProfiles: [SavedAgentProfile])
     -> [String: AgentRestoreProfileMetadata]
   {
-    var metadataByProfileName: [String: AgentRestoreProfileMetadata] = [:]
+    var metadataByProfileIDOrName: [String: AgentRestoreProfileMetadata] = [:]
 
     for profile in SavedAgentProfiles.builtinDefaults {
-      metadataByProfileName[profile.name] = AgentRestoreProfileMetadata(profile: profile)
+      let metadata = AgentRestoreProfileMetadata(profile: profile)
+      metadataByProfileIDOrName[profile.id] = metadata
+      metadataByProfileIDOrName[profile.name] = metadata
     }
 
     for profile in savedProfiles {
-      metadataByProfileName[profile.name] = AgentRestoreProfileMetadata(profile: profile)
+      let metadata = AgentRestoreProfileMetadata(profile: profile)
+      metadataByProfileIDOrName[profile.id] = metadata
+      metadataByProfileIDOrName[profile.name] = metadata
     }
 
-    return metadataByProfileName
+    return metadataByProfileIDOrName
   }
 
-  private static func agentProfilesByFamily(savedProfiles: [SavedAgentProfile])
-    -> [AgentFamilyID: SavedAgentProfile]
+  private static func agentProfilesByID(savedProfiles: [SavedAgentProfile])
+    -> [String: SavedAgentProfile]
   {
-    var profilesByFamily = Dictionary(
+    var profilesByID = Dictionary(
       uniqueKeysWithValues: SavedAgentProfiles.builtinDefaults.map { profile in
-        (profile.familyID!, profile)
+        (profile.id, profile)
       }
     )
 
-    for profile in savedProfiles where profile.isEnabled {
-      let familyID =
-        profile.familyID
-        ?? AgentFamilyID.inferred(from: profile)
-        ?? AgentHarnesses.familyID(matchingCommand: profile.command)
-      guard let familyID else { continue }
-      profilesByFamily[familyID] = profile
+    for profile in savedProfiles {
+      profilesByID[profile.id] = profile
     }
 
-    return profilesByFamily
+    return profilesByID
   }
 
   private static func sessionSpecificResumeArgumentTemplate(
@@ -2909,6 +2964,7 @@ final class WorkspaceState {
 
     return PersistedWorkspaceTerminalTab(
       id: tab.id,
+      profileID: tab.profileID,
       worktreePath: tab.worktreePath,
       worktreeLabel: tab.worktreeLabel,
       title: tab.title,
@@ -2969,7 +3025,10 @@ final class WorkspaceState {
 
   private func recordAgentSessionRestoreMetadata(
     for tab: WorkspaceTerminalTab,
-    sessionID: String
+    sessionID: String,
+    profileID: String? = nil,
+    yoloMode: Bool? = nil,
+    sandboxEnabled: Bool? = nil
   ) {
     guard !sessionID.isEmpty else { return }
     guard case .agent = tab.kind else { return }
@@ -2987,10 +3046,11 @@ final class WorkspaceState {
     AgentSessionRestoreMetadataStore.record(
       AgentSessionRestoreMetadata(
         familyID: familyID,
+        profileID: profileID ?? tab.profileID,
         sessionID: sessionID,
         cwd: tab.worktreePath,
-        yoloMode: tab.yoloMode,
-        sandboxEnabled: tab.isSandboxed,
+        yoloMode: yoloMode ?? tab.yoloMode,
+        sandboxEnabled: sandboxEnabled ?? tab.isSandboxed,
         updatedAt: Date()
       )
     )
@@ -3513,6 +3573,7 @@ private struct AgentRestoreProfileMetadata: Sendable {
 
 struct WorkspaceRestorableAgentSession: Identifiable, Hashable, Sendable {
   let familyID: AgentFamilyID
+  let profileID: String
   let profileName: String
   let command: String
   let icon: String

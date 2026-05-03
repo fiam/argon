@@ -348,6 +348,9 @@ struct SettingsView: View {
                 selectedAgentId = nil
               }
             },
+            onDuplicate: {
+              duplicateAgent(profile)
+            },
             onDrag: {
               draggingAgentId = profile.id
               return NSItemProvider(object: profile.id as NSString)
@@ -400,6 +403,19 @@ struct SettingsView: View {
             .frame(height: 16)
 
           Button {
+            duplicateSelectedAgent()
+          } label: {
+            Image(systemName: "plus.square.on.square")
+              .frame(width: 28, height: 22)
+              .contentShape(Rectangle())
+          }
+          .disabled(selectedAgentProfile == nil)
+          .help("Duplicate the selected agent profile.")
+
+          Divider()
+            .frame(height: 16)
+
+          Button {
             disableOrRemoveSelectedAgent()
           } label: {
             Image(systemName: "minus")
@@ -432,6 +448,7 @@ struct SettingsView: View {
       AgentEditorSheet(
         profile: SavedAgentProfile(
           id: "custom-\(UUID().uuidString.prefix(8))",
+          kind: .customCommand,
           name: "",
           command: "",
           icon: "agent",
@@ -471,6 +488,16 @@ struct SettingsView: View {
     if !savedAgents.profiles.contains(where: { $0.id == selectedAgentProfile.id }) {
       selectedAgentId = nil
     }
+  }
+
+  private func duplicateSelectedAgent() {
+    guard let selectedAgentProfile else { return }
+    duplicateAgent(selectedAgentProfile)
+  }
+
+  private func duplicateAgent(_ profile: SavedAgentProfile) {
+    guard let duplicate = savedAgents.duplicate(id: profile.id) else { return }
+    selectedAgentId = duplicate.id
   }
 
   private var sandboxTab: some View {
@@ -1137,6 +1164,7 @@ private struct AgentProfileRow: View {
   let dropPlacement: AgentDropPlacement?
   let onSetEnabled: (Bool) -> Void
   let onDisableOrRemove: () -> Void
+  let onDuplicate: () -> Void
   let onDrag: () -> NSItemProvider
   let onUpdate: (SavedAgentProfile) -> Void
   @State private var showEditor = false
@@ -1219,6 +1247,14 @@ private struct AgentProfileRow: View {
         showEditor = true
       } label: {
         Label("Edit Agent...", systemImage: "pencil")
+      }
+
+      Divider()
+
+      Button {
+        onDuplicate()
+      } label: {
+        Label("Duplicate Agent", systemImage: "plus.square.on.square")
       }
 
       Divider()
@@ -1433,6 +1469,7 @@ private struct AgentEditorSheet: View {
   @State private var editCommand: String
   @State private var editIsEnabled: Bool
   @State private var editYoloFlag: String
+  @State private var editParameterValues: AgentHarnessParameterValues
   @State private var attemptedSave = false
 
   private let labelWidth: CGFloat = 132
@@ -1450,6 +1487,7 @@ private struct AgentEditorSheet: View {
     self._editCommand = State(initialValue: profile.command)
     self._editIsEnabled = State(initialValue: profile.isEnabled)
     self._editYoloFlag = State(initialValue: profile.yoloFlag)
+    self._editParameterValues = State(initialValue: profile.parameterValues)
   }
 
   var body: some View {
@@ -1457,11 +1495,7 @@ private struct AgentEditorSheet: View {
       Text(editorTitle)
         .font(.headline)
 
-      if profile.isBuiltIn {
-        builtInConfigurationFields
-      } else {
-        customAgentFields
-      }
+      profileFields
 
       actionButtons
     }
@@ -1470,9 +1504,6 @@ private struct AgentEditorSheet: View {
   }
 
   private var editorTitle: String {
-    if profile.isBuiltIn {
-      return "Configure Agent"
-    }
     return profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       ? "New Agent" : "Edit Agent"
   }
@@ -1490,33 +1521,46 @@ private struct AgentEditorSheet: View {
   }
 
   private var canSave: Bool {
-    (profile.isBuiltIn || !trimmedName.isEmpty) && !trimmedCommand.isEmpty
+    switch profile.kind {
+    case .builtinDefault:
+      true
+    case .harnessProfile:
+      !trimmedName.isEmpty
+    case .customCommand:
+      !trimmedName.isEmpty && !trimmedCommand.isEmpty
+    }
   }
 
   private func save() {
     guard canSave else { return }
     var updated = profile
-    if let familyID = profile.familyID {
+    switch profile.kind {
+    case .builtinDefault(let familyID):
       let defaultProfile = familyID.defaultProfile
-      updated.familyID = familyID
-      updated.name = defaultProfile.name
+      updated = defaultProfile
+      updated.isEnabled = editIsEnabled
+    case .harnessProfile(let familyID):
+      let defaultProfile = familyID.defaultProfile
+      updated.kind = .harnessProfile(familyID)
+      updated.name = trimmedName
       updated.command = defaultProfile.command
       updated.icon = defaultProfile.icon
       updated.yoloFlag = defaultProfile.yoloFlag
       updated.promptArgumentTemplate = defaultProfile.promptArgumentTemplate
       updated.resumeArgumentTemplate = defaultProfile.resumeArgumentTemplate
-    } else {
+      updated.parameterValues = editParameterValues
+      updated.isEnabled = editIsEnabled
+    case .customCommand:
       updated.name = trimmedName
-      updated.familyID = nil
+      updated.kind = .customCommand
       updated.icon = "agent"
       updated.yoloFlag = trimmedYoloFlag
       updated.promptArgumentTemplate = ""
       updated.resumeArgumentTemplate = ""
-    }
-    if !profile.isBuiltIn {
+      updated.parameterValues = [:]
       updated.command = trimmedCommand
+      updated.isEnabled = editIsEnabled
     }
-    updated.isEnabled = editIsEnabled
     onSave(updated)
     dismiss()
   }
@@ -1526,34 +1570,62 @@ private struct AgentEditorSheet: View {
     HStack {
       Spacer()
 
-      if profile.isBuiltIn {
-        Button("Done") {
-          dismiss()
-        }
-        .keyboardShortcut(.defaultAction)
-      } else {
-        Button("Cancel") {
-          dismiss()
-        }
-        .keyboardShortcut(.cancelAction)
-
-        Button("Save") {
-          attemptedSave = true
-          save()
-        }
-        .keyboardShortcut(.defaultAction)
+      Button("Cancel") {
+        dismiss()
       }
+      .keyboardShortcut(.cancelAction)
+
+      Button("Save") {
+        attemptedSave = true
+        save()
+      }
+      .keyboardShortcut(.defaultAction)
+      .disabled(!canSave)
     }
   }
 
-  private var builtInConfigurationFields: some View {
+  private var profileFields: some View {
     VStack(alignment: .leading, spacing: 10) {
+      editorField(
+        "Name",
+        text: $editName,
+        prompt: profile.familyID?.defaultProfile.name ?? "Agent",
+        isDisabled: !profile.isMutable,
+        help: profile.isMutable ? nil : "Duplicate this built-in profile to rename it.",
+        showsHelpCaption: profile.isMutable,
+        validationMessage: attemptedSave && trimmedName.isEmpty ? "Name is required." : nil
+      )
       toggleField(
         "Enabled",
-        isOn: immediateEnabledBinding,
+        isOn: $editIsEnabled,
         help: "Show this agent in launch pickers."
       )
-      staticField("Command", value: familyDefaultCommand, isMonospaced: true)
+      editorField(
+        "Command",
+        text: $editCommand,
+        prompt: commandPrompt,
+        isMonospaced: true,
+        isDisabled: !canEditCommand,
+        help: commandHelpText,
+        showsHelpCaption: canEditCommand,
+        validationMessage: attemptedSave && trimmedCommand.isEmpty ? "Command is required." : nil
+      )
+      editorField(
+        "Yolo flag",
+        text: $editYoloFlag,
+        prompt: "--yolo",
+        isMonospaced: true,
+        isDisabled: !canEditCommand,
+        help: canEditCommand
+          ? "Optional flag appended when yolo mode is enabled."
+          : "Yolo mode is defined by the harness for built-in harness profiles.",
+        showsHelpCaption: canEditCommand
+      )
+
+      ForEach(harnessParameterDefinitions) { definition in
+        harnessParameterField(definition)
+      }
+
       staticField("Status", value: availabilityLabel)
       if let version = availability.version {
         staticField("Version", value: version)
@@ -1561,65 +1633,51 @@ private struct AgentEditorSheet: View {
     }
   }
 
-  private var customAgentFields: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      editorField(
-        "Name",
-        text: $editName,
-        prompt: "Codex",
-        validationMessage: attemptedSave && trimmedName.isEmpty ? "Name is required." : nil
-      )
-      toggleField("Enabled", isOn: $editIsEnabled, help: "Show this agent in launch pickers.")
-      editorField(
-        "Command",
-        text: $editCommand,
-        prompt: "codex",
-        isMonospaced: true,
-        validationMessage: attemptedSave && trimmedCommand.isEmpty ? "Command is required." : nil
-      )
-      editorField(
-        "Auto-approve",
-        text: $editYoloFlag,
-        prompt: "--yolo",
-        isMonospaced: true,
-        help: "Optional flag appended when auto-approve mode is enabled."
-      )
+  private var commandPrompt: String {
+    profile.familyID?.defaultProfile.command ?? "agent"
+  }
+
+  private var commandHelpText: String? {
+    guard !canEditCommand else { return nil }
+    if profile.isBuiltIn {
+      return "Duplicate this built-in profile to customize launch arguments."
     }
+    return "Harness profiles use the built-in command. Change model or reasoning below."
   }
 
-  private var familyDefaultCommand: String {
-    profile.familyID?.defaultProfile.command ?? "codex"
+  private var availabilityCommandName: String {
+    profile.familyID?.defaultProfile.command ?? profile.baseCommand
   }
 
-  private var immediateEnabledBinding: Binding<Bool> {
+  private var canEditCommand: Bool {
+    profile.kind == .customCommand
+  }
+
+  private var harnessParameterDefinitions: [AgentHarnessParameterDefinition] {
+    guard let familyID = profile.familyID else { return [] }
+    return AgentHarnesses.parameterDefinitions(for: familyID)
+  }
+
+  private func parameterValueBinding(
+    for definition: AgentHarnessParameterDefinition
+  ) -> Binding<String> {
     Binding(
-      get: { editIsEnabled },
-      set: { isEnabled in
-        editIsEnabled = isEnabled
-        saveBuiltInConfiguration()
+      get: { editParameterValues[definition.id] ?? "" },
+      set: { value in
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+          editParameterValues.removeValue(forKey: definition.id)
+        } else {
+          editParameterValues[definition.id] = trimmed
+        }
       }
     )
-  }
-
-  private func saveBuiltInConfiguration() {
-    guard let familyID = profile.familyID else { return }
-    let defaultProfile = familyID.defaultProfile
-    var updated = profile
-    updated.familyID = familyID
-    updated.name = defaultProfile.name
-    updated.command = defaultProfile.command
-    updated.icon = defaultProfile.icon
-    updated.yoloFlag = defaultProfile.yoloFlag
-    updated.promptArgumentTemplate = defaultProfile.promptArgumentTemplate
-    updated.resumeArgumentTemplate = defaultProfile.resumeArgumentTemplate
-    updated.isEnabled = editIsEnabled
-    onSave(updated)
   }
 
   private var availabilityLabel: String {
     switch availability.status {
     case .checking:
-      "Checking for \(familyDefaultCommand)..."
+      "Checking for \(availabilityCommandName)..."
     case .available:
       if let resolvedPath = availability.resolvedPath {
         "Installed at \(resolvedPath)"
@@ -1627,7 +1685,7 @@ private struct AgentEditorSheet: View {
         "Installed"
       }
     case .unavailable:
-      "\(familyDefaultCommand) not found"
+      "\(availabilityCommandName) not found"
     }
   }
 
@@ -1695,12 +1753,89 @@ private struct AgentEditorSheet: View {
   }
 
   @ViewBuilder
+  private func harnessParameterField(
+    _ definition: AgentHarnessParameterDefinition
+  ) -> some View {
+    switch definition.input {
+    case .choice where !definition.allowsCustomValue:
+      HStack(alignment: .firstTextBaseline, spacing: 12) {
+        Text(definition.label)
+          .frame(width: labelWidth, alignment: .trailing)
+          .foregroundStyle(.secondary)
+
+        Picker("", selection: parameterValueBinding(for: definition)) {
+          Text("Default")
+            .tag("")
+          ForEach(definition.choices) { choice in
+            Text(choice.label)
+              .tag(choice.value)
+          }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .frame(width: fieldWidth, alignment: .leading)
+        .disabled(!profile.isMutable)
+        .help(harnessParameterHelpText(for: definition))
+      }
+    case .boolean:
+      toggleField(
+        definition.label,
+        isOn: booleanParameterBinding(for: definition),
+        help: harnessParameterHelpText(for: definition)
+      )
+      .disabled(!profile.isMutable)
+    case .text, .choice:
+      editorField(
+        definition.label,
+        text: parameterValueBinding(for: definition),
+        prompt: definition.placeholder,
+        isMonospaced: true,
+        isDisabled: !profile.isMutable,
+        help: harnessParameterHelpText(for: definition),
+        showsHelpCaption: profile.isMutable
+      )
+    }
+  }
+
+  private func harnessParameterHelpText(for definition: AgentHarnessParameterDefinition) -> String {
+    if profile.isMutable {
+      return parameterHelpText(for: definition) ?? ""
+    }
+    return "Duplicate this built-in profile to change \(definition.label.lowercased())."
+  }
+
+  private func booleanParameterBinding(
+    for definition: AgentHarnessParameterDefinition
+  ) -> Binding<Bool> {
+    Binding(
+      get: { editParameterValues[definition.id] == "true" },
+      set: { isEnabled in
+        if isEnabled {
+          editParameterValues[definition.id] = "true"
+        } else {
+          editParameterValues.removeValue(forKey: definition.id)
+        }
+      }
+    )
+  }
+
+  private func parameterHelpText(for definition: AgentHarnessParameterDefinition) -> String? {
+    let suggestions = definition.choices.map(\.label)
+    guard !suggestions.isEmpty else { return definition.help }
+    let suggestionText = "Suggested: \(suggestions.joined(separator: ", "))."
+    guard let help = definition.help, !help.isEmpty else { return suggestionText }
+    return "\(help) \(suggestionText)"
+  }
+
+  @ViewBuilder
   private func editorField(
     _ label: String,
     text: Binding<String>,
     prompt: String,
     isMonospaced: Bool = false,
+    isDisabled: Bool = false,
     help: String? = nil,
+    showsHelpCaption: Bool = true,
     validationMessage: String? = nil
   ) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -1714,6 +1849,7 @@ private struct AgentEditorSheet: View {
           .font(fieldFont(isMonospaced: isMonospaced))
           .frame(width: fieldWidth)
           .accessibilityLabel(label)
+          .disabled(isDisabled)
           .help(help ?? "")
 
         if let validationMessage {
@@ -1721,7 +1857,7 @@ private struct AgentEditorSheet: View {
             .font(.caption)
             .foregroundStyle(.red)
             .frame(width: fieldWidth, alignment: .leading)
-        } else if let help {
+        } else if let help, showsHelpCaption {
           Text(help)
             .font(.caption)
             .foregroundStyle(.secondary)

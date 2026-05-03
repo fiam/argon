@@ -1208,6 +1208,7 @@ private struct WorkspaceTerminalChromeBar: View {
           ForEach(workspaceState.selectedTerminalTabs) { tab in
             WorkspaceTerminalTabItem(
               tab: tab,
+              agentProfiles: agentProfiles(for: tab),
               isSelected: workspaceState.selectedTerminalTab?.id == tab.id
             ) {
               workspaceState.selectTerminalTab(tab.id)
@@ -1219,6 +1220,8 @@ private struct WorkspaceTerminalChromeBar: View {
                 sandboxEnabled: sandboxEnabled,
                 yoloMode: yoloMode
               )
+            } onChangeProfile: { profile in
+              changeAgentTabProfile(tab, profile: profile)
             }
           }
         }
@@ -1261,7 +1264,13 @@ private struct WorkspaceTerminalChromeBar: View {
     let nextYoloMode = yoloMode ?? tab.yoloMode
     guard nextSandboxEnabled != tab.isSandboxed || nextYoloMode != tab.yoloMode else { return }
 
-    if tab.agentActivityState == .thinking, !confirmThinkingAgentModeChange(tab) {
+    if tab.agentActivityState == .thinking,
+      !confirmThinkingAgentRelaunch(
+        tab,
+        actionDescription: "Changing modes",
+        confirmButtonTitle: "Change Mode"
+      )
+    {
       return
     }
 
@@ -1272,12 +1281,60 @@ private struct WorkspaceTerminalChromeBar: View {
     )
   }
 
-  private func confirmThinkingAgentModeChange(_ tab: WorkspaceTerminalTab) -> Bool {
+  private func changeAgentTabProfile(
+    _ tab: WorkspaceTerminalTab,
+    profile: SavedAgentProfile
+  ) {
+    guard
+      profile.id != tab.profileID || profile.fullCommand(yolo: false) != tab.baseCommandDescription
+    else { return }
+
+    if tab.agentActivityState == .thinking,
+      !confirmThinkingAgentRelaunch(
+        tab,
+        actionDescription: "Changing model or reasoning",
+        confirmButtonTitle: "Change Profile"
+      )
+    {
+      return
+    }
+
+    workspaceState.relaunchAgentTab(
+      tab.id,
+      profile: profile
+    )
+  }
+
+  private func agentProfiles(for tab: WorkspaceTerminalTab) -> [SavedAgentProfile] {
+    guard case .agent = tab.kind else { return [] }
+    guard
+      let familyID =
+        tab.agentFamilyID
+        ?? AgentHarnesses.familyID(matchingCommand: tab.baseCommandDescription)
+    else { return [] }
+
+    var profiles = savedAgents.profiles.filter { profile in
+      profile.isEnabled && profile.familyID == familyID
+    }
+    if let profileID = tab.profileID,
+      let currentProfile = savedAgents.profiles.first(where: { $0.id == profileID }),
+      !profiles.contains(where: { $0.id == profileID })
+    {
+      profiles.insert(currentProfile, at: 0)
+    }
+    return profiles
+  }
+
+  private func confirmThinkingAgentRelaunch(
+    _ tab: WorkspaceTerminalTab,
+    actionDescription: String,
+    confirmButtonTitle: String
+  ) -> Bool {
     let alert = NSAlert()
     alert.messageText = "Interrupt Agent?"
     alert.informativeText =
-      "Changing modes will close and reopen \(tab.title), interrupting its current task."
-    alert.addButton(withTitle: "Change Mode")
+      "\(actionDescription) will close and reopen \(tab.title), interrupting its current task."
+    alert.addButton(withTitle: confirmButtonTitle)
     alert.addButton(withTitle: "Cancel")
     alert.alertStyle = .warning
     return alert.runModal() == .alertFirstButtonReturn
@@ -1371,10 +1428,12 @@ private struct WorkspaceAgentSessionRestoreGroup: Identifiable {
 
 private struct WorkspaceTerminalTabItem: View {
   let tab: WorkspaceTerminalTab
+  let agentProfiles: [SavedAgentProfile]
   let isSelected: Bool
   let onSelect: () -> Void
   let onClose: () -> Void
   let onChangeMode: (_ sandboxEnabled: Bool?, _ yoloMode: Bool?) -> Void
+  let onChangeProfile: (SavedAgentProfile) -> Void
   @State private var isHovering = false
 
   var body: some View {
@@ -1434,6 +1493,25 @@ private struct WorkspaceTerminalTabItem: View {
     .contentShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
     .contextMenu {
       if case .agent = tab.kind {
+        if !agentProfiles.isEmpty {
+          Menu {
+            ForEach(agentProfiles) { profile in
+              Button {
+                onChangeProfile(profile)
+              } label: {
+                Label(
+                  profile.name,
+                  systemImage: profile.id == tab.profileID ? "checkmark" : "slider.horizontal.3"
+                )
+              }
+            }
+          } label: {
+            Label("Model / Reasoning", systemImage: "slider.horizontal.3")
+          }
+
+          Divider()
+        }
+
         if !tab.yoloFlag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
           Button {
             onChangeMode(nil, !tab.yoloMode)
@@ -2117,8 +2195,7 @@ private struct WorkspaceTabCreationSheet: View {
         WorkspaceTabTypeCard(
           icon: "sparkles.rectangle.stack",
           title: "Agent Tab",
-          description:
-            "Launch a saved coding agent with sandbox and approval options.",
+          description: "Launch a saved coding agent in yolo mode.",
           shortcut: "⌘T",
           action: { select(onNewAgent) }
         )
@@ -2341,7 +2418,7 @@ private struct WorkspaceAgentTabSheet: View {
       if let selectedSavedAgent, !selectedSavedAgent.yoloFlag.isEmpty {
         Toggle(isOn: $yoloMode) {
           VStack(alignment: .leading, spacing: 1) {
-            Text("Auto-approve mode")
+            Text("Yolo mode")
               .font(.callout)
             Text(yoloSubtitle(for: selectedSavedAgent.yoloFlag))
               .font(.caption)

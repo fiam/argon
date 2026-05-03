@@ -8,6 +8,13 @@ TARGET_REPO="${1:-.}"
 if [[ "$TARGET_REPO" != /* ]]; then
     TARGET_REPO="$(cd "$TARGET_REPO" && pwd)"
 fi
+TARGET_WORKTREE="$(git -C "$TARGET_REPO" rev-parse --show-toplevel)"
+TARGET_COMMON_DIR="$(git -C "$TARGET_REPO" rev-parse --path-format=absolute --git-common-dir)"
+if [[ "$(basename "$TARGET_COMMON_DIR")" == ".git" ]]; then
+    TARGET_REPO_ROOT="$(dirname "$TARGET_COMMON_DIR")"
+else
+    TARGET_REPO_ROOT="$TARGET_WORKTREE"
+fi
 
 echo "==> Building argon CLI..."
 cargo build --manifest-path "$REPO_ROOT/Cargo.toml" --bin argon --release 2>&1
@@ -22,47 +29,139 @@ fi
 echo "==> Generating Xcode project..."
 (cd "$REPO_ROOT/apps/macos" && xcodegen generate 2>&1)
 
+DERIVED_DATA_PATH="$REPO_ROOT/target/xcode-derived-data"
+
 echo "==> Building Argon.app..."
 xcodebuild \
     -project "$REPO_ROOT/apps/macos/Argon.xcodeproj" \
     -scheme Argon \
     -configuration Debug \
+    -derivedDataPath "$DERIVED_DATA_PATH" \
     build 2>&1
 
-# Find the built app
-APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData/Argon-*/Build/Products/Debug -name "Argon.app" -type d 2>/dev/null | head -1)
-if [[ -z "$APP_PATH" ]]; then
-    echo "error: Argon.app not found in DerivedData" >&2
+APP_PATH="$DERIVED_DATA_PATH/Build/Products/Debug/Argon.app"
+if [[ ! -x "$APP_PATH/Contents/MacOS/Argon" ]]; then
+    echo "error: runnable Argon.app not found at $APP_PATH" >&2
     exit 1
 fi
 
+all_running_argon_pids() {
+    local pids=""
+
+    if command -v osascript >/dev/null 2>&1; then
+        pids="$(
+            osascript \
+                -e 'tell application "System Events" to get unix id of every process whose bundle identifier is "dev.argonapp.macos"' \
+                2>/dev/null \
+                | tr ',' '\n' \
+                | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+                | grep -E '^[0-9]+$' \
+                || true
+        )"
+    fi
+
+    if [[ -z "$pids" ]]; then
+        pids="$(pgrep -f "$APP_PATH/Contents/MacOS/Argon" 2>/dev/null || true)"
+    fi
+
+    printf '%s\n' "$pids" | awk 'NF && !seen[$0]++'
+}
+
+target_argon_pids() {
+    local pid command
+    while IFS= read -r pid; do
+        if [[ -z "$pid" ]]; then
+            continue
+        fi
+
+        command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+        if [[ "$command" == *"--selected-worktree-path $TARGET_WORKTREE" ]]; then
+            echo "$pid"
+        fi
+    done < <(all_running_argon_pids)
+}
+
+pids_are_running() {
+    local pid
+    for pid in "$@"; do
+        if kill -0 "$pid" >/dev/null 2>&1; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+quit_argon_pid() {
+    local pid="$1"
+    if command -v osascript >/dev/null 2>&1; then
+        osascript \
+            -e "tell application \"System Events\" to tell (first application process whose unix id is $pid) to quit" \
+            >/dev/null 2>&1 \
+            && return
+    fi
+
+    kill "$pid" 2>/dev/null || true
+}
+
+wait_for_pids_to_exit() {
+    local -a pids=("$@")
+    for _ in {1..50}; do
+        if ! pids_are_running "${pids[@]}"; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    return 1
+}
+
 quit_running_argon() {
-    if ! pgrep -x Argon >/dev/null 2>&1; then
+    local -a pids
+    local pid
+    while IFS= read -r pid; do
+        if [[ -n "$pid" ]]; then
+            pids+=("$pid")
+        fi
+    done < <(target_argon_pids)
+    if [[ "${#pids[@]}" -eq 0 ]]; then
         return
     fi
 
-    echo "==> Quitting running Argon..."
-    osascript -e 'tell application id "dev.argonapp.macos" to quit' >/dev/null 2>&1 &
-
-    for _ in {1..50}; do
-        if ! pgrep -x Argon >/dev/null 2>&1; then
-            return
-        fi
-        sleep 0.1
+    echo "==> Quitting Argon for $TARGET_WORKTREE (${pids[*]})..."
+    for pid in "${pids[@]}"; do
+        quit_argon_pid "$pid"
     done
+
+    if wait_for_pids_to_exit "${pids[@]}"; then
+        return
+    fi
 
     echo "==> Force stopping unresponsive Argon..."
-    pkill -x Argon 2>/dev/null || true
-    for _ in {1..20}; do
-        if ! pgrep -x Argon >/dev/null 2>&1; then
-            return
-        fi
-        sleep 0.1
-    done
+    kill "${pids[@]}" 2>/dev/null || true
+    wait_for_pids_to_exit "${pids[@]}" || true
 }
 
 quit_running_argon
 
 echo "==> Launching workspace for $TARGET_REPO"
-ARGON_APP="$APP_PATH" "$REPO_ROOT/target/release/argon" \
-    "$TARGET_REPO"
+open -n -a "$APP_PATH" --args \
+    --workspace-repo-root "$TARGET_REPO_ROOT" \
+    --workspace-common-dir "$TARGET_COMMON_DIR" \
+    --selected-worktree-path "$TARGET_WORKTREE"
+
+echo "workspace: $TARGET_REPO_ROOT"
+echo "common-dir: $TARGET_COMMON_DIR"
+echo "selected-worktree: $TARGET_WORKTREE"
+
+for _ in {1..50}; do
+    launched_pids=()
+    while IFS= read -r pid; do
+        if [[ -n "$pid" ]]; then
+            launched_pids+=("$pid")
+        fi
+    done < <(target_argon_pids)
+    if [[ "${#launched_pids[@]}" -gt 0 ]]; then
+        echo "==> Running Argon (${launched_pids[*]})"
+        break
+    fi
+    sleep 0.1
+done

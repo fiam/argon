@@ -54,8 +54,8 @@ struct SavedAgentProfilesTests {
     )
   }
 
-  @Test("saved profiles require explicit prompt and resume templates when decoding")
-  func savedProfilesRequireExplicitPromptAndResumeTemplatesWhenDecoding() {
+  @Test("saved profiles require explicit profile kind when decoding")
+  func savedProfilesRequireExplicitProfileKindWhenDecoding() {
     let data = """
       [
         {
@@ -122,35 +122,131 @@ struct SavedAgentProfilesTests {
     #expect(AgentHarnesses.displayVersion(for: .gemini, rawOutput: "0.38.2") == "0.38.2")
   }
 
-  @Test("stale builtin Codex full-auto flag migrates")
+  @Test("builtin defaults are immutable and render no harness parameters")
+  func builtinDefaultsAreImmutableAndRenderNoHarnessParameters() {
+    var profile = AgentFamilyID.codex.defaultProfile
+    #expect(profile.parameterValues.isEmpty)
+
+    profile.parameterValues = [
+      "model": "gpt-5.5",
+      "reasoning": "high",
+    ]
+
+    #expect(profile.kind == .builtinDefault(.codex))
+    #expect(profile.isMutable == false)
+    #expect(profile.fullCommand(yolo: false) == "codex")
+    #expect(profile.fullCommand(yolo: true) == "codex --yolo")
+  }
+
+  @Test("duplicating a builtin creates a mutable harness profile")
   @MainActor
-  func staleBuiltinCodexFullAutoFlagMigrates() {
-    let suiteName = "SavedAgentProfilesTests.migrate.\(UUID().uuidString)"
+  func duplicatingBuiltinCreatesMutableHarnessProfile() throws {
+    let suiteName = "SavedAgentProfilesTests.duplicate.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suiteName)!
     defaults.removePersistentDomain(forName: suiteName)
     defer { defaults.removePersistentDomain(forName: suiteName) }
 
-    let staleProfiles = [
-      SavedAgentProfile(
-        id: "codex",
-        name: "Codex",
-        command: "codex",
-        icon: "codex",
-        yoloFlag: "--full-auto",
-        resumeArgumentTemplate: "resume {{session_id}}"
-      )
-    ]
-    let data = try! JSONEncoder().encode(staleProfiles)
-    defaults.set(data, forKey: suiteName)
-
     let profiles = SavedAgentProfiles(userDefaults: defaults, storageKey: suiteName)
+    let duplicate = try #require(profiles.duplicate(id: "codex"))
 
-    #expect(profiles.profiles.first?.yoloFlag == "--yolo")
+    #expect(duplicate.kind == .harnessProfile(.codex))
+    #expect(duplicate.isMutable)
+    #expect(duplicate.name == "Codex Copy")
+    #expect(duplicate.parameterValues.isEmpty)
+    #expect(duplicate.fullCommand(yolo: false) == "codex")
+
+    var edited = duplicate
+    edited.parameterValues = [
+      "model": "gpt-5.5",
+      "reasoning": "high",
+    ]
+    profiles.update(edited)
+
+    let saved = try #require(profiles.profiles.first { $0.id == duplicate.id })
+    #expect(
+      saved.fullCommand(yolo: false)
+        == "codex -m 'gpt-5.5' -c 'model_reasoning_effort=\"high\"'"
+    )
+    #expect(
+      saved.fullCommand(yolo: true)
+        == "codex -m 'gpt-5.5' -c 'model_reasoning_effort=\"high\"' --yolo"
+    )
+    #expect(saved.customizationSummary == "Model: GPT-5.5, Reasoning: High")
   }
 
-  @Test("saved builtins use harness defaults but keep user settings")
+  @Test("profile customization summaries are only shown for harness parameter overrides")
+  func profileCustomizationSummariesDescribeHarnessParameters() {
+    var builtIn = AgentFamilyID.codex.defaultProfile
+    builtIn.parameterValues = ["model": "gpt-5.5"]
+    #expect(builtIn.customizationSummary == nil)
+
+    let custom = SavedAgentProfile(
+      id: "custom-agent",
+      name: "Custom Agent",
+      command: "agent --model x",
+      icon: "agent",
+      yoloFlag: ""
+    )
+    #expect(custom.customizationSummary == nil)
+
+    let harnessProfile = SavedAgentProfile(
+      id: "codex-high",
+      kind: .harnessProfile(.codex),
+      name: "Codex High",
+      command: "codex",
+      icon: "codex",
+      parameterValues: ["model": "unlisted-model", "reasoning": "xhigh"],
+      yoloFlag: "--yolo"
+    )
+
+    #expect(
+      harnessProfile.customizationSummary
+        == "Model: unlisted-model, Reasoning: X High"
+    )
+  }
+
+  @Test("harness profiles sanitize parameters through harness definitions")
   @MainActor
-  func savedBuiltinsUseHarnessDefaultsButKeepUserSettings() {
+  func harnessProfilesSanitizeParametersThroughHarnessDefinitions() throws {
+    let suiteName = "SavedAgentProfilesTests.params.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defaults.removePersistentDomain(forName: suiteName)
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    let profiles = SavedAgentProfiles(userDefaults: defaults, storageKey: suiteName)
+    profiles.add(
+      SavedAgentProfile(
+        id: "codex-gpt",
+        kind: .harnessProfile(.codex),
+        name: "Codex GPT",
+        command: "ignored",
+        icon: "agent",
+        parameterValues: [
+          "model": "custom-codex-model",
+          "reasoning": "ultra",
+          "unknown": "drop",
+        ],
+        yoloFlag: "--ignored",
+        promptArgumentTemplate: "--ignored {{prompt}}",
+        resumeArgumentTemplate: "--ignored"
+      )
+    )
+
+    let saved = try #require(profiles.profiles.first { $0.id == "codex-gpt" })
+
+    #expect(saved.kind == .harnessProfile(.codex))
+    #expect(saved.command == "codex")
+    #expect(saved.icon == "codex")
+    #expect(saved.yoloFlag == "--yolo")
+    #expect(saved.promptArgumentTemplate == "")
+    #expect(saved.resumeArgumentTemplate == "resume {{session_id}}")
+    #expect(saved.parameterValues == ["model": "custom-codex-model"])
+    #expect(saved.fullCommand(yolo: false) == "codex -m 'custom-codex-model'")
+  }
+
+  @Test("saved builtins use harness defaults but keep enabled state")
+  @MainActor
+  func savedBuiltinsUseHarnessDefaultsButKeepEnabledState() {
     let suiteName = "SavedAgentProfilesTests.defaults.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suiteName)!
     defaults.removePersistentDomain(forName: suiteName)
@@ -164,6 +260,7 @@ struct SavedAgentProfilesTests {
         command: "codex-nightly",
         icon: "agent",
         isEnabled: false,
+        parameterValues: ["model": "gpt-5.5"],
         yoloFlag: "--full-auto",
         promptArgumentTemplate: "--prompt {{prompt}}",
         resumeArgumentTemplate: "--resume latest"
@@ -176,19 +273,21 @@ struct SavedAgentProfilesTests {
     let codex = profiles.profiles.first { $0.familyID == .codex }
 
     #expect(codex?.id == "codex")
+    #expect(codex?.kind == .builtinDefault(.codex))
     #expect(codex?.name == "Codex")
     #expect(codex?.command == "codex")
     #expect(codex?.icon == "codex")
     #expect(codex?.isEnabled == false)
+    #expect(codex?.parameterValues == [:])
     #expect(codex?.yoloFlag == "--yolo")
     #expect(codex?.promptArgumentTemplate == "")
     #expect(codex?.resumeArgumentTemplate == "resume {{session_id}}")
   }
 
-  @Test("legacy profile terminal persistence settings are ignored")
+  @Test("unreadable profile payload resets to current defaults")
   @MainActor
-  func legacyProfileTerminalPersistenceSettingsAreIgnored() throws {
-    let suiteName = "SavedAgentProfilesTests.keepalive.\(UUID().uuidString)"
+  func unreadableProfilePayloadResetsToCurrentDefaults() throws {
+    let suiteName = "SavedAgentProfilesTests.unreadable.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suiteName)!
     defaults.removePersistentDomain(forName: suiteName)
     defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -212,43 +311,11 @@ struct SavedAgentProfilesTests {
     defaults.set(Data(legacyJSON.utf8), forKey: suiteName)
 
     let profiles = SavedAgentProfiles(userDefaults: defaults, storageKey: suiteName)
-    let codex = try #require(profiles.profiles.first { $0.familyID == .codex })
     let savedData = try #require(defaults.data(forKey: suiteName))
     let savedJSON = String(decoding: savedData, as: UTF8.self)
 
-    #expect(codex.command == "codex")
+    #expect(profiles.profiles == SavedAgentProfiles.builtinDefaults)
     #expect(!savedJSON.contains("\"keepRunningWhileThinking\""))
-  }
-
-  @Test("older saved builtins infer family and enabled state")
-  @MainActor
-  func olderSavedBuiltinsInferFamilyAndEnabledState() {
-    let suiteName = "SavedAgentProfilesTests.family.\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suiteName)!
-    defaults.removePersistentDomain(forName: suiteName)
-    defer { defaults.removePersistentDomain(forName: suiteName) }
-
-    let data = """
-      [
-        {
-          "id": "codex",
-          "name": "Codex",
-          "command": "codex",
-          "icon": "codex",
-          "yoloFlag": "--yolo",
-          "promptArgumentTemplate": "",
-          "resumeArgumentTemplate": "resume {{session_id}}"
-        }
-      ]
-      """.data(using: .utf8)!
-    defaults.set(data, forKey: suiteName)
-
-    let profiles = SavedAgentProfiles(userDefaults: defaults, storageKey: suiteName)
-    let codex = profiles.profiles.first { $0.id == "codex" }
-
-    #expect(codex?.familyID == .codex)
-    #expect(codex?.isEnabled == true)
-    #expect(codex?.yoloFlag == "--yolo")
   }
 
   @Test("missing builtins are restored disabled")

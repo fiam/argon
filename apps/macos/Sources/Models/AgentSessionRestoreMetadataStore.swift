@@ -2,11 +2,30 @@ import Foundation
 
 struct AgentSessionRestoreMetadata: Codable, Equatable, Sendable {
   let familyID: AgentFamilyID
+  let profileID: String?
   let sessionID: String
   let cwd: String
   let yoloMode: Bool
   let sandboxEnabled: Bool
   let updatedAt: Date
+
+  init(
+    familyID: AgentFamilyID,
+    profileID: String? = nil,
+    sessionID: String,
+    cwd: String,
+    yoloMode: Bool,
+    sandboxEnabled: Bool,
+    updatedAt: Date
+  ) {
+    self.familyID = familyID
+    self.profileID = profileID
+    self.sessionID = sessionID
+    self.cwd = cwd
+    self.yoloMode = yoloMode
+    self.sandboxEnabled = sandboxEnabled
+    self.updatedAt = updatedAt
+  }
 
   var key: String {
     Self.key(familyID: familyID, sessionID: sessionID, cwd: cwd)

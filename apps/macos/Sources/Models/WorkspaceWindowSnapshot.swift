@@ -87,6 +87,7 @@ enum PersistedWorkspaceTerminalTabKind: Codable, Equatable {
 
 struct PersistedWorkspaceTerminalTab: Codable, Equatable {
   let id: UUID
+  let profileID: String?
   let worktreePath: String
   let worktreeLabel: String
   let title: String
@@ -106,6 +107,7 @@ struct PersistedWorkspaceTerminalTab: Codable, Equatable {
 
   private enum CodingKeys: String, CodingKey {
     case id
+    case profileID
     case worktreePath
     case worktreeLabel
     case title
@@ -126,6 +128,7 @@ struct PersistedWorkspaceTerminalTab: Codable, Equatable {
 
   init(
     id: UUID,
+    profileID: String? = nil,
     worktreePath: String,
     worktreeLabel: String,
     title: String,
@@ -144,6 +147,7 @@ struct PersistedWorkspaceTerminalTab: Codable, Equatable {
     resumeCommandDescription: String? = nil
   ) {
     self.id = id
+    self.profileID = profileID
     self.worktreePath = worktreePath
     self.worktreeLabel = worktreeLabel
     self.title = title
@@ -165,6 +169,7 @@ struct PersistedWorkspaceTerminalTab: Codable, Equatable {
   init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     id = try container.decode(UUID.self, forKey: .id)
+    profileID = try container.decodeIfPresent(String.self, forKey: .profileID)
     worktreePath = try container.decode(String.self, forKey: .worktreePath)
     worktreeLabel = try container.decode(String.self, forKey: .worktreeLabel)
     title = try container.decode(String.self, forKey: .title)
@@ -196,6 +201,7 @@ struct PersistedWorkspaceTerminalTab: Codable, Equatable {
   func encode(to encoder: any Encoder) throws {
     var container = encoder.container(keyedBy: CodingKeys.self)
     try container.encode(id, forKey: .id)
+    try container.encodeIfPresent(profileID, forKey: .profileID)
     try container.encode(worktreePath, forKey: .worktreePath)
     try container.encode(worktreeLabel, forKey: .worktreeLabel)
     try container.encode(title, forKey: .title)
