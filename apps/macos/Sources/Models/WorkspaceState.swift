@@ -1916,6 +1916,7 @@ final class WorkspaceState {
         || currentWorktree.headSHA != discoveredWorktree.headSHA
         || currentWorktree.isBaseWorktree != discoveredWorktree.isBaseWorktree
         || currentWorktree.isDetached != discoveredWorktree.isDetached
+        || currentWorktree.createdAt != discoveredWorktree.createdAt
       {
         return true
       }

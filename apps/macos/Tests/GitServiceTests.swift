@@ -394,6 +394,45 @@ struct GitServiceTests {
     #expect(discovered.contains { $0.path == worktree.path && $0.branchName == "feature/refocus" })
   }
 
+  @Test("parseWorktreeList orders linked worktrees by creation timestamp")
+  func parseWorktreeListOrdersLinkedWorktreesByCreationTimestamp() {
+    let repoPath = "/tmp/repo"
+    let agentPath = "/tmp/repo-worktrees/agent-creation-perf"
+    let startupPath = "/tmp/repo-worktrees/startup"
+    let repoCreatedAt = Date(timeIntervalSince1970: 1)
+    let startupCreatedAt = Date(timeIntervalSince1970: 2)
+    let agentCreatedAt = Date(timeIntervalSince1970: 3)
+    let createdAtByPath = [
+      repoPath: repoCreatedAt,
+      agentPath: agentCreatedAt,
+      startupPath: startupCreatedAt,
+    ]
+    let output = """
+      worktree \(repoPath)
+      HEAD abc123
+      branch refs/heads/main
+
+      worktree \(agentPath)
+      HEAD def456
+      branch refs/heads/agent-creation-perf
+
+      worktree \(startupPath)
+      HEAD ghi789
+      branch refs/heads/startup
+
+      """
+
+    let discovered = GitService.parseWorktreeList(
+      output,
+      baseWorktreePath: repoPath
+    ) { path in
+      createdAtByPath[path]
+    }
+
+    #expect(discovered.map(\.path) == [repoPath, startupPath, agentPath])
+    #expect(discovered.map(\.createdAt) == [repoCreatedAt, startupCreatedAt, agentCreatedAt])
+  }
+
   @Test("createWorktree creates and discovers a new linked worktree")
   func createWorktreeCreatesAndDiscoversNewLinkedWorktree() throws {
     let fixture = try makeFixtureDirectory()

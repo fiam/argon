@@ -45,6 +45,23 @@ struct DiscoveredWorktree: Identifiable, Hashable, Sendable {
   let headSHA: String?
   let isBaseWorktree: Bool
   let isDetached: Bool
+  let createdAt: Date?
+
+  init(
+    path: String,
+    branchName: String?,
+    headSHA: String?,
+    isBaseWorktree: Bool,
+    isDetached: Bool,
+    createdAt: Date? = nil
+  ) {
+    self.path = path
+    self.branchName = branchName
+    self.headSHA = headSHA
+    self.isBaseWorktree = isBaseWorktree
+    self.isDetached = isDetached
+    self.createdAt = createdAt
+  }
 }
 
 struct WorktreeDiffSummary: Hashable, Sendable {
@@ -130,7 +147,8 @@ enum GitService {
     ])
     return parseWorktreeList(
       output,
-      baseWorktreePath: baseWorktreePath(repoCommonDir: repoCommonDir) ?? repoRoot
+      baseWorktreePath: baseWorktreePath(repoCommonDir: repoCommonDir) ?? repoRoot,
+      createdAtProvider: worktreeCreatedAt
     )
   }
 
@@ -1184,9 +1202,10 @@ enum GitService {
     return lines
   }
 
-  private static func parseWorktreeList(
+  static func parseWorktreeList(
     _ output: String,
-    baseWorktreePath: String
+    baseWorktreePath: String,
+    createdAtProvider: (String) -> Date?
   ) -> [DiscoveredWorktree] {
     let normalizedBasePath = normalizePath(baseWorktreePath)
     var worktrees: [DiscoveredWorktree] = []
@@ -1205,7 +1224,8 @@ enum GitService {
           branchName: currentBranch,
           headSHA: currentHeadSHA,
           isBaseWorktree: normalizedPath == normalizedBasePath,
-          isDetached: isDetached
+          isDetached: isDetached,
+          createdAt: createdAtProvider(normalizedPath)
         ))
       currentPath = nil
       currentBranch = nil
@@ -1247,10 +1267,50 @@ enum GitService {
       if lhs.isBaseWorktree != rhs.isBaseWorktree {
         return lhs.isBaseWorktree && !rhs.isBaseWorktree
       }
-      let lhsBranch = lhs.branchName ?? lhs.path
-      let rhsBranch = rhs.branchName ?? rhs.path
-      return lhsBranch.localizedStandardCompare(rhsBranch) == .orderedAscending
+
+      switch (lhs.createdAt, rhs.createdAt) {
+      case (.some(let lhsCreatedAt), .some(let rhsCreatedAt))
+      where lhsCreatedAt != rhsCreatedAt:
+        return lhsCreatedAt < rhsCreatedAt
+      case (.some, .none):
+        return true
+      case (.none, .some):
+        return false
+      default:
+        return compareWorktreeNames(lhs, rhs)
+      }
     }
+  }
+
+  private static func compareWorktreeNames(
+    _ lhs: DiscoveredWorktree,
+    _ rhs: DiscoveredWorktree
+  ) -> Bool {
+    let lhsName = lhs.branchName ?? lhs.path
+    let rhsName = rhs.branchName ?? rhs.path
+    let nameComparison = lhsName.localizedStandardCompare(rhsName)
+    if nameComparison != .orderedSame {
+      return nameComparison == .orderedAscending
+    }
+
+    return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
+  }
+
+  private static func worktreeCreatedAt(path: String) -> Date? {
+    let worktreeURL = URL(fileURLWithPath: path, isDirectory: true)
+    let gitMetadataURL = worktreeURL.appendingPathComponent(".git")
+
+    return fileCreatedAt(gitMetadataURL) ?? fileCreatedAt(worktreeURL)
+  }
+
+  private static func fileCreatedAt(_ url: URL) -> Date? {
+    guard
+      let values = try? url.resourceValues(forKeys: [.creationDateKey])
+    else {
+      return nil
+    }
+
+    return values.creationDate
   }
 
   private static func baseWorktreePath(repoCommonDir: String) -> String? {
