@@ -30,8 +30,7 @@ pub use protocol::{
 pub use store::{SessionStore, StoreError};
 pub use target::{
     ResolvedReviewTarget, TargetError, auto_detect_review_target, current_branch_name, git_capture,
-    infer_base_ref, resolve_branch_target, resolve_commit_target, resolve_ref,
-    resolve_uncommitted_target,
+    infer_base_ref, resolve_branch_target, resolve_ref, resolve_uncommitted_target,
 };
 pub use workspace::{
     BranchTopology, MergeabilityStatus, WorkspaceError, WorktreeMergeability, branch_topology,

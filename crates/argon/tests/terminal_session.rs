@@ -89,14 +89,11 @@ fn wait_for_file_contents_or_child_exit(
     let deadline = Instant::now() + timeout;
     let mut last_contents = String::new();
     loop {
-        match fs::read_to_string(path) {
-            Ok(contents) => {
-                if contents == expected {
-                    return Ok(child);
-                }
-                last_contents = contents;
+        if let Ok(contents) = fs::read_to_string(path) {
+            if contents == expected {
+                return Ok(child);
             }
-            Err(_) => {}
+            last_contents = contents;
         }
 
         if child.try_wait()?.is_some() {
@@ -176,14 +173,11 @@ fn wait_for_file_contents(path: &Path, expected: &str, timeout: Duration) -> Res
     let deadline = Instant::now() + timeout;
     let mut last_contents = String::new();
     loop {
-        match fs::read_to_string(path) {
-            Ok(contents) => {
-                if contents == expected {
-                    return Ok(());
-                }
-                last_contents = contents;
+        if let Ok(contents) = fs::read_to_string(path) {
+            if contents == expected {
+                return Ok(());
             }
-            Err(_) => {}
+            last_contents = contents;
         }
 
         if Instant::now() >= deadline {

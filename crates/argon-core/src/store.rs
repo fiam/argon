@@ -922,11 +922,17 @@ mod tests {
         assert!(session.decision.is_some());
 
         let session = store
-            .update_session_target(session.id, ReviewMode::Commit, "abc123", "def456", "abc123")
+            .update_session_target(
+                session.id,
+                ReviewMode::Uncommitted,
+                "HEAD",
+                "WORKTREE",
+                "abc123",
+            )
             .expect("switch target");
-        assert_eq!(session.mode, ReviewMode::Commit);
-        assert_eq!(session.base_ref, "abc123");
-        assert_eq!(session.head_ref, "def456");
+        assert_eq!(session.mode, ReviewMode::Uncommitted);
+        assert_eq!(session.base_ref, "HEAD");
+        assert_eq!(session.head_ref, "WORKTREE");
         assert_eq!(session.status, SessionStatus::AwaitingReviewer);
         assert!(session.threads.is_empty());
         assert!(session.decision.is_none());
@@ -1246,7 +1252,13 @@ mod tests {
         assert!(store.draft_review_path(session.id).exists());
 
         store
-            .update_session_target(session.id, ReviewMode::Commit, "abc123", "def456", "abc123")
+            .update_session_target(
+                session.id,
+                ReviewMode::Uncommitted,
+                "HEAD",
+                "WORKTREE",
+                "abc123",
+            )
             .expect("switch target");
 
         assert!(!store.draft_review_path(session.id).exists());

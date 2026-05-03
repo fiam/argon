@@ -299,13 +299,7 @@ struct ModePicker: View {
       } label: {
         Label(branchLabel, systemImage: "arrow.triangle.branch")
       }
-      .disabled(appState.detectedBaseRef == nil)
-
-      Button {
-        appState.requestModeSwitch(.commit)
-      } label: {
-        Label("Latest commit", systemImage: "clock.arrow.circlepath")
-      }
+      .disabled(appState.detectedBaseRef == nil || appState.detectedHeadRef == nil)
 
       Button {
         appState.requestModeSwitch(.uncommitted)
@@ -361,17 +355,13 @@ struct ModePicker: View {
       switch appState.activeMode {
       case .branch:
         "\(shorten(appState.activeBaseRef))...\(shorten(appState.activeHeadRef))"
-      case .commit:
-        "commit \(shorten(appState.activeHeadRef))"
       case .uncommitted:
         "uncommitted changes"
       }
     case .compact, .minimal:
       switch appState.activeMode {
       case .branch:
-        "branch"
-      case .commit:
-        "commit"
+        "all changes"
       case .uncommitted:
         "uncommitted"
       }
@@ -381,16 +371,15 @@ struct ModePicker: View {
   private var activeModeIcon: String {
     switch appState.activeMode {
     case .branch: "arrow.triangle.branch"
-    case .commit: "clock.arrow.circlepath"
     case .uncommitted: "pencil.and.outline"
     }
   }
 
   private var branchLabel: String {
     if let base = appState.detectedBaseRef, let head = appState.detectedHeadRef {
-      return "\(shorten(base))...\(shorten(head))"
+      return "All changes (\(shorten(base))...\(shorten(head)))"
     }
-    return "Branch (not available)"
+    return "All changes (not available)"
   }
 
   private func shorten(_ ref: String) -> String {

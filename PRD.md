@@ -348,13 +348,18 @@ interrupting normal agent work.
 
 #### FR-6 Diff Inspector
 
-The right pane must show diff information for the selected worktree
-relative to its configured base branch.
+The right pane must show diff information for the selected worktree. It
+supports two scopes:
+
+- all branch changes from the current merge-base of the configured base /
+  parent ref to the worktree
+- uncommitted changes from `HEAD` to the worktree
 
 It must include:
 
 - total added / removed counts
 - file count
+- the active diff scope
 - full `git diff --stat` style summary
 - review session status if a review exists
 - last updated timestamp or refresh state
@@ -519,6 +524,14 @@ Argon must persist enough workspace state to restore:
 - review summaries
 - known PR metadata
 - conflict status cache
+
+When showing all branch changes, Argon must record the resolved
+merge-base used for that diff target. If the parent/base ref moves, the
+workspace may refresh to a newer merge-base; an active review keeps its
+recorded merge-base until the review target is explicitly refreshed.
+Argon should prefer Git-owned branch relationships for the parent/base ref:
+the branch upstream first, then nearby linked worktree branches, then the
+repository's configured/default base branch.
 
 Terminal scrollback persistence is optional in the first milestone.
 

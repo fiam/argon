@@ -86,6 +86,25 @@ fn agent_start_uncommitted_mode() -> Result<()> {
 }
 
 #[test]
+fn agent_start_branch_mode_infers_git_parent() -> Result<()> {
+    let repo = setup_git_repo()?;
+    git(&repo, &["branch", "-M", "main"])?;
+    git(&repo, &["checkout", "-b", "feature/inferred"])?;
+    std::fs::write(repo.path().join("README.md"), "# Hello\nfeature\n")?;
+    git(&repo, &["commit", "-am", "feature"])?;
+
+    let out = run_argon(&repo, &["agent", "start", "--mode", "branch", "--json"])?;
+    let v: Value = serde_json::from_str(&out)?;
+    let session = &v["session"];
+
+    assert_eq!(session["mode"].as_str().unwrap(), "branch");
+    assert_eq!(session["base_ref"].as_str().unwrap(), "main");
+    assert_eq!(session["head_ref"].as_str().unwrap(), "feature/inferred");
+    assert!(!session["merge_base_sha"].as_str().unwrap().is_empty());
+    Ok(())
+}
+
+#[test]
 fn review_uncommitted_shows_staged_and_unstaged_changes() -> Result<()> {
     let repo = setup_git_repo()?;
 

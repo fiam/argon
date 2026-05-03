@@ -15,7 +15,6 @@ pub enum SessionStatus {
 #[serde(rename_all = "snake_case")]
 pub enum ReviewMode {
     Branch,
-    Commit,
     Uncommitted,
 }
 

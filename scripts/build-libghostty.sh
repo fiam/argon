@@ -368,7 +368,7 @@ if [[ ! -f "${GHOSTTY_DIR}/build.zig" ]]; then
   exit 1
 fi
 
-if ! git -C "${GHOSTTY_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
+if ! git -C "${GHOSTTY_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "error: third_party/ghostty is present but the submodule is not initialized" >&2
   echo "hint: run 'git submodule update --init --recursive third_party/ghostty'" >&2
   exit 1

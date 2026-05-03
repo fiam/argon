@@ -317,7 +317,7 @@ struct DiffDocumentTests {
     ReviewSession(
       id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEE4")!,
       repoRoot: "/tmp/repo",
-      mode: .commit,
+      mode: .uncommitted,
       baseRef: "HEAD",
       headRef: "WORKTREE",
       mergeBaseSha: "deadbeef",

@@ -9,7 +9,6 @@ enum SessionStatus: String, Codable, Sendable {
 
 enum ReviewMode: String, Codable, Sendable {
   case branch
-  case commit
   case uncommitted
 }
 

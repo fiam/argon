@@ -42,6 +42,7 @@ final class WorkspaceState {
   var worktrees: [DiscoveredWorktree] = []
   var worktreeSummaries: [String: WorktreeDiffSummary] = [:]
   var reviewTargetsByWorktreePath: [String: ResolvedTarget?] = [:]
+  var diffModesByWorktreePath: [String: WorkspaceDiffMode] = [:]
   var reviewSnapshotsByWorktreePath: [String: WorkspaceReviewSnapshot] = [:]
   var reviewSummaryDraftsByWorktreePath: [String: WorkspaceReviewSummaryDraft] = [:]
   var conflictStatesByWorktreePath: [String: Bool] = [:]
@@ -218,6 +219,20 @@ final class WorkspaceState {
     return selectedReviewTarget?.mode == .branch
   }
 
+  var selectedDiffMode: WorkspaceDiffMode {
+    guard let selectedWorktree else { return .uncommitted }
+    let mode = effectiveDiffMode(for: selectedWorktree)
+    if mode == .allChanges, selectedReviewTarget?.mode == .uncommitted {
+      return .uncommitted
+    }
+    return mode
+  }
+
+  var selectedWorktreeSupportsAllChanges: Bool {
+    guard let selectedWorktree else { return false }
+    return Self.supportsAllChangesDiff(for: selectedWorktree)
+  }
+
   var canRebaseSelectedWorktree: Bool {
     canFinalizeSelectedWorktree && (selectedBranchTopology?.needsRebase ?? false)
   }
@@ -228,6 +243,45 @@ final class WorkspaceState {
 
   var canOpenPullRequestForSelectedWorktree: Bool {
     canFinalizeSelectedWorktree && ((selectedBranchTopology?.aheadCount ?? 0) > 0)
+  }
+
+  func selectDiffMode(_ mode: WorkspaceDiffMode) {
+    guard let selectedWorktree else { return }
+    let path = normalizedPath(selectedWorktree.path)
+    let effectiveMode = Self.effectiveDiffMode(for: selectedWorktree, requested: mode)
+    guard selectedDiffMode != effectiveMode else { return }
+
+    diffModesByWorktreePath[path] = effectiveMode
+    prepareSelectionLoading(for: path)
+    loadSelectedWorktreeDetails(for: path)
+  }
+
+  private func requestedDiffMode(for path: String) -> WorkspaceDiffMode {
+    diffModesByWorktreePath[normalizedPath(path)] ?? .allChanges
+  }
+
+  private func effectiveDiffMode(for worktree: DiscoveredWorktree) -> WorkspaceDiffMode {
+    Self.effectiveDiffMode(for: worktree, requested: requestedDiffMode(for: worktree.path))
+  }
+
+  private func effectiveDiffMode(for path: String) -> WorkspaceDiffMode {
+    guard let worktree = worktrees.first(where: { normalizedPath($0.path) == normalizedPath(path) })
+    else {
+      return requestedDiffMode(for: path)
+    }
+    return effectiveDiffMode(for: worktree)
+  }
+
+  nonisolated private static func supportsAllChangesDiff(for worktree: DiscoveredWorktree) -> Bool {
+    guard !worktree.isBaseWorktree, !worktree.isDetached else { return false }
+    return !(worktree.branchName ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  nonisolated private static func effectiveDiffMode(
+    for worktree: DiscoveredWorktree,
+    requested: WorkspaceDiffMode
+  ) -> WorkspaceDiffMode {
+    supportsAllChangesDiff(for: worktree) ? requested : .uncommitted
   }
 
   var selectedTerminalTab: WorkspaceTerminalTab? {
@@ -267,6 +321,7 @@ final class WorkspaceState {
     worktrees.isEmpty
       && worktreeSummaries.isEmpty
       && reviewTargetsByWorktreePath.isEmpty
+      && diffModesByWorktreePath.isEmpty
       && reviewSnapshotsByWorktreePath.isEmpty
       && reviewSummaryDraftsByWorktreePath.isEmpty
       && conflictStatesByWorktreePath.isEmpty
@@ -383,9 +438,14 @@ final class WorkspaceState {
     isLoading = true
 
     let target = self.target
+    let diffModesByWorktreePath = self.diffModesByWorktreePath
     Task {
       let result = await Task.detached {
-        try Self.loadWorkspace(target: target, requestedSelection: requestedSelection)
+        try Self.loadWorkspace(
+          target: target,
+          requestedSelection: requestedSelection,
+          diffModesByWorktreePath: diffModesByWorktreePath
+        )
       }.result
 
       switch result {
@@ -449,8 +509,21 @@ final class WorkspaceState {
     isLaunchingReview = true
     defer { isLaunchingReview = false }
     let worktreePath = normalizedPath(selectedWorktree.path)
+    let diffMode = selectedDiffMode
+    let sessionTarget: ResolvedTarget?
+    if let selectedReviewTarget {
+      sessionTarget = selectedReviewTarget
+    } else {
+      sessionTarget = await Task.detached {
+        GitService.resolveWorkspaceTarget(repoRoot: selectedWorktree.path, diffMode: diffMode)
+      }.value
+    }
     var reviewTarget = try await Task.detached {
-      try ArgonCLI.createSession(repoRoot: selectedWorktree.path, changeSummary: changeSummary)
+      try ArgonCLI.createSession(
+        repoRoot: selectedWorktree.path,
+        target: sessionTarget,
+        changeSummary: changeSummary
+      )
     }.value
     reviewTarget = ReviewTarget(
       sessionId: reviewTarget.sessionId,
@@ -497,7 +570,11 @@ final class WorkspaceState {
     }.value
 
     let loadedWorkspace = try await Task.detached {
-      try Self.loadWorkspace(target: target, requestedSelection: normalizedPath)
+      try Self.loadWorkspace(
+        target: target,
+        requestedSelection: normalizedPath,
+        diffModesByWorktreePath: [:]
+      )
     }.value
 
     applyLoadedWorkspace(loadedWorkspace)
@@ -1701,10 +1778,11 @@ final class WorkspaceState {
   private func loadSelectedWorktreeDetails(for path: String) {
     let requestID = UUID()
     selectionLoadRequestID = requestID
+    let diffMode = effectiveDiffMode(for: path)
 
     Task {
       let result = await Task.detached {
-        Self.loadSelectionDetails(for: path)
+        Self.loadSelectionDetails(for: path, diffMode: diffMode)
       }.result
 
       switch result {
@@ -1733,20 +1811,32 @@ final class WorkspaceState {
 
   nonisolated private static func loadWorkspace(
     target: WorkspaceTarget,
-    requestedSelection: String
+    requestedSelection: String,
+    diffModesByWorktreePath: [String: WorkspaceDiffMode]
   ) throws -> LoadedWorkspace {
     let worktrees = try loadDiscoveredWorktrees(target: target)
     let normalizedPaths = Set(worktrees.map { normalizedPath($0.path) })
     let worktreeSummaries = Dictionary(
       uniqueKeysWithValues: worktrees.map { worktree in
         let normalized = normalizedPath(worktree.path)
-        return (normalized, GitService.diffSummary(repoRoot: worktree.path))
+        let diffMode = effectiveDiffMode(
+          for: worktree,
+          requested: diffModesByWorktreePath[normalized] ?? .allChanges
+        )
+        return (normalized, GitService.diffSummary(repoRoot: worktree.path, diffMode: diffMode))
       }
     )
     let reviewTargetsByWorktreePath = Dictionary(
       uniqueKeysWithValues: worktrees.map { worktree in
         let normalized = normalizedPath(worktree.path)
-        return (normalized, GitService.autoDetectTarget(repoRoot: worktree.path))
+        let diffMode = effectiveDiffMode(
+          for: worktree,
+          requested: diffModesByWorktreePath[normalized] ?? .allChanges
+        )
+        return (
+          normalized,
+          GitService.resolveWorkspaceTarget(repoRoot: worktree.path, diffMode: diffMode)
+        )
       }
     )
     let reviewSnapshotsByWorktreePath = SessionLoader.latestReviewSnapshots(
@@ -1761,8 +1851,19 @@ final class WorkspaceState {
       worktrees.first(where: { normalizedPath($0.path) == requestedSelection })?.path
       ?? worktrees.first?.path
       ?? target.repoRoot
+    let selectedWorktree = worktrees.first {
+      normalizedPath($0.path) == normalizedPath(selectedWorktreePath)
+    }
+    let selectedDiffMode =
+      selectedWorktree.map {
+        effectiveDiffMode(
+          for: $0,
+          requested: diffModesByWorktreePath[normalizedPath($0.path)] ?? .allChanges
+        )
+      } ?? .uncommitted
     let details = loadSelectionDetails(
       for: selectedWorktreePath,
+      diffMode: selectedDiffMode,
       summary: worktreeSummaries[normalizedPath(selectedWorktreePath)]
     )
 
@@ -1825,10 +1926,11 @@ final class WorkspaceState {
 
   nonisolated private static func loadSelectionDetails(
     for path: String,
+    diffMode: WorkspaceDiffMode,
     summary: WorktreeDiffSummary? = nil
   ) -> SelectionDetails {
-    let files = GitService.diffFiles(repoRoot: path)
-    let reviewTarget = GitService.autoDetectTarget(repoRoot: path)
+    let files = GitService.diffFiles(repoRoot: path, diffMode: diffMode)
+    let reviewTarget = GitService.resolveWorkspaceTarget(repoRoot: path, diffMode: diffMode)
     let resolvedSummary =
       summary
       ?? (files.isEmpty
@@ -1863,8 +1965,11 @@ final class WorkspaceState {
     )
   }
 
-  nonisolated private static func loadRefreshedWorktree(for path: String) -> RefreshedWorktree {
-    let details = loadSelectionDetails(for: path)
+  nonisolated private static func loadRefreshedWorktree(
+    for path: String,
+    diffMode: WorkspaceDiffMode
+  ) -> RefreshedWorktree {
+    let details = loadSelectionDetails(for: path, diffMode: diffMode)
     return RefreshedWorktree(
       summary: details.summary,
       files: details.files,
@@ -2896,6 +3001,9 @@ final class WorkspaceState {
     reviewTargetsByWorktreePath =
       reviewTargetsByWorktreePath
       .filter { validPaths.contains($0.key) }
+    diffModesByWorktreePath =
+      diffModesByWorktreePath
+      .filter { validPaths.contains($0.key) }
     reviewSnapshotsByWorktreePath =
       reviewSnapshotsByWorktreePath
       .filter { validPaths.contains($0.key) }
@@ -2979,8 +3087,9 @@ final class WorkspaceState {
   }
 
   private func refreshWorktree(path: String) async {
+    let diffMode = effectiveDiffMode(for: path)
     let result = await Task.detached {
-      Self.loadRefreshedWorktree(for: path)
+      Self.loadRefreshedWorktree(for: path, diffMode: diffMode)
     }.result
 
     switch result {

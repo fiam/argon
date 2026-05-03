@@ -66,8 +66,12 @@ struct SubmoduleUnpushedCommits: Identifiable, Hashable, Sendable {
   let commitCount: Int?
 }
 
+enum WorkspaceDiffMode: String, CaseIterable, Hashable, Sendable {
+  case allChanges
+  case uncommitted
+}
+
 enum GitService {
-  private static let emptyTreeSHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
   nonisolated(unsafe) static var commandRunner:
     (
       @Sendable (
@@ -169,6 +173,18 @@ enum GitService {
       normalizedWorktreePath,
       trimmedStartPoint.isEmpty ? "HEAD" : trimmedStartPoint,
     ])
+
+    if let upstream = branchNameForStartPoint(
+      repoRoot: repoRoot,
+      startPoint: trimmedStartPoint.isEmpty ? "HEAD" : trimmedStartPoint
+    ),
+      upstream != trimmedBranchName
+    {
+      _ = runGit([
+        "-C", repoRoot,
+        "branch", "--set-upstream-to", upstream, trimmedBranchName,
+      ])
+    }
   }
 
   static func hasUncommittedChanges(repoRoot: String) -> Bool {
@@ -329,8 +345,11 @@ enum GitService {
     ])
   }
 
-  static func diffSummary(repoRoot: String) -> WorktreeDiffSummary {
-    let files = diffFiles(repoRoot: repoRoot)
+  static func diffSummary(
+    repoRoot: String,
+    diffMode: WorkspaceDiffMode = .allChanges
+  ) -> WorktreeDiffSummary {
+    let files = diffFiles(repoRoot: repoRoot, diffMode: diffMode)
     guard !files.isEmpty else {
       return .empty
     }
@@ -342,12 +361,18 @@ enum GitService {
     )
   }
 
-  static func diffStat(repoRoot: String) -> String {
-    formatDiffStat(files: diffFiles(repoRoot: repoRoot))
+  static func diffStat(
+    repoRoot: String,
+    diffMode: WorkspaceDiffMode = .allChanges
+  ) -> String {
+    formatDiffStat(files: diffFiles(repoRoot: repoRoot, diffMode: diffMode))
   }
 
-  static func diffFiles(repoRoot: String) -> [FileDiff] {
-    guard let target = autoDetectTarget(repoRoot: repoRoot) else {
+  static func diffFiles(
+    repoRoot: String,
+    diffMode: WorkspaceDiffMode = .allChanges
+  ) -> [FileDiff] {
+    guard let target = resolveWorkspaceTarget(repoRoot: repoRoot, diffMode: diffMode) else {
       return []
     }
 
@@ -453,6 +478,7 @@ enum GitService {
   ) -> String {
     // Tracked changes stat
     var args = ["-C", repoRoot, "diff", "--stat", "--no-color"]
+    var includeUntracked = true
     switch mode {
     case .branch:
       args.append(mergeBaseSha)
@@ -461,18 +487,15 @@ enum GitService {
         currentHead != targetHead
       {
         args.append(headRef)
+        includeUntracked = false
       }
-    case .commit:
-      args.append(baseRef)
-      args.append(headRef)
     case .uncommitted:
       args.append("HEAD")
     }
     var result = runGit(args)
 
     // Untracked files with sizes (so content changes are detected)
-    let shouldIncludeUntracked = mode != .commit
-    let untrackedList = shouldIncludeUntracked ? untrackedFiles(repoRoot: repoRoot) : []
+    let untrackedList = includeUntracked ? untrackedFiles(repoRoot: repoRoot) : []
     if !untrackedList.isEmpty {
       result += "\n__untracked__"
       let fm = FileManager.default
@@ -492,6 +515,7 @@ enum GitService {
     repoRoot: String, mode: ReviewMode, baseRef: String, headRef: String, mergeBaseSha: String
   ) -> String {
     var args = ["-C", repoRoot, "diff", "--no-color", "--unified=3", "--no-ext-diff"]
+    var includeUntracked = true
 
     switch mode {
     case .branch:
@@ -501,10 +525,8 @@ enum GitService {
         currentHead != targetHead
       {
         args.append(headRef)
+        includeUntracked = false
       }
-    case .commit:
-      args.append(baseRef)
-      args.append(headRef)
     case .uncommitted:
       args.append("HEAD")
     }
@@ -512,14 +534,17 @@ enum GitService {
     var result = runGit(args)
 
     // Append untracked (non-ignored) files as diffs against /dev/null
-    let untrackedFiles = mode == .commit ? [] : untrackedFiles(repoRoot: repoRoot)
+    let untrackedFiles = includeUntracked ? untrackedFiles(repoRoot: repoRoot) : []
     for file in untrackedFiles {
       let fileDiff = runGit([
         "-C", repoRoot, "diff", "--no-color", "--unified=3", "--no-ext-diff",
         "--no-index", "/dev/null", file,
       ])
       if !fileDiff.isEmpty {
-        result += "\n" + fileDiff
+        if !result.isEmpty && !result.hasSuffix("\n") {
+          result += "\n"
+        }
+        result += fileDiff
       }
     }
 
@@ -663,7 +688,6 @@ enum GitService {
         for: file,
         repoRoot: repoRoot,
         mode: mode,
-        baseRef: baseRef,
         headRef: headRef,
         mergeBaseSha: mergeBaseSha,
         isHeadCheckedOut: isHeadCheckedOut
@@ -679,8 +703,15 @@ enum GitService {
 
   /// Auto-detect the best review mode for the repo.
   static func autoDetectTarget(repoRoot: String) -> ResolvedTarget? {
-    if isHeadDetached(repoRoot: repoRoot) {
-      return resolveCommitTarget(repoRoot: repoRoot)
+    resolveWorkspaceTarget(repoRoot: repoRoot, diffMode: .allChanges)
+  }
+
+  static func resolveWorkspaceTarget(
+    repoRoot: String,
+    diffMode: WorkspaceDiffMode
+  ) -> ResolvedTarget? {
+    if diffMode == .uncommitted || isHeadDetached(repoRoot: repoRoot) {
+      return resolveUncommittedTarget(repoRoot: repoRoot)
     }
 
     guard let currentBranch = currentBranchName(repoRoot: repoRoot),
@@ -708,13 +739,6 @@ enum GitService {
       mode: .branch, baseRef: baseRef, headRef: headRef, mergeBaseSha: mergeBase)
   }
 
-  static func resolveCommitTarget(repoRoot: String, commitRef: String = "HEAD") -> ResolvedTarget? {
-    guard let sha = resolveRef(repoRoot: repoRoot, ref: commitRef),
-      let base = parentCommitOrEmptyTree(repoRoot: repoRoot, commitSHA: sha)
-    else { return nil }
-    return ResolvedTarget(mode: .commit, baseRef: base, headRef: sha, mergeBaseSha: sha)
-  }
-
   static func resolveUncommittedTarget(repoRoot: String) -> ResolvedTarget? {
     guard let sha = resolveRef(repoRoot: repoRoot, ref: "HEAD") else { return nil }
     return ResolvedTarget(
@@ -730,7 +754,33 @@ enum GitService {
     return output
   }
 
+  private static func branchNameForStartPoint(repoRoot: String, startPoint: String) -> String? {
+    if startPoint == "HEAD" {
+      return currentBranchName(repoRoot: repoRoot)
+    }
+
+    let output = runGit([
+      "-C", repoRoot, "rev-parse", "--abbrev-ref", "--symbolic-full-name", startPoint,
+    ]).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !output.isEmpty, output != "HEAD", resolveRef(repoRoot: repoRoot, ref: output) != nil
+    else {
+      return nil
+    }
+    return output
+  }
+
   static func inferBaseRef(repoRoot: String) -> String? {
+    if let currentBranch = currentBranchName(repoRoot: repoRoot) {
+      if let upstream = upstreamRef(repoRoot: repoRoot), githubBranchName(upstream) != currentBranch
+      {
+        return upstream
+      }
+
+      if let baseRef = nearestWorktreeBranchBase(repoRoot: repoRoot, currentBranch: currentBranch) {
+        return baseRef
+      }
+    }
+
     // Try origin/HEAD
     let originHead = runGit([
       "-C", repoRoot, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD",
@@ -758,6 +808,76 @@ enum GitService {
 
     return localBranchStartPoint(repoRoot: repoRoot, remoteRef: resolvedBaseRef)
       ?? resolvedBaseRef
+  }
+
+  private static func nearestWorktreeBranchBase(
+    repoRoot: String,
+    currentBranch: String
+  ) -> String? {
+    let output = runGit(["-C", repoRoot, "worktree", "list", "--porcelain"])
+    let candidates = Set(
+      output
+        .split(separator: "\n")
+        .compactMap { line -> String? in
+          let prefix = "branch refs/heads/"
+          guard line.hasPrefix(prefix) else { return nil }
+          let branch = String(line.dropFirst(prefix.count))
+          return branch == currentBranch ? nil : branch
+        }
+    ).sorted()
+
+    var best: (tier: Int, distance: Int, ref: String)?
+    for candidate in candidates {
+      if isAncestor(repoRoot: repoRoot, ancestor: currentBranch, descendant: candidate) {
+        continue
+      }
+
+      let mergeBase = runGit(["-C", repoRoot, "merge-base", currentBranch, candidate])
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !mergeBase.isEmpty else { continue }
+
+      let distanceOutput = runGit([
+        "-C", repoRoot, "rev-list", "--count", "\(mergeBase)..\(currentBranch)",
+      ])
+      guard let distance = Int(distanceOutput.trimmingCharacters(in: .whitespacesAndNewlines))
+      else {
+        continue
+      }
+      let tier =
+        isAncestor(repoRoot: repoRoot, ancestor: candidate, descendant: currentBranch) ? 0 : 1
+
+      if let currentBest = best {
+        let candidateIsBetter =
+          tier < currentBest.tier
+          || (tier == currentBest.tier && distance < currentBest.distance)
+          || (tier == currentBest.tier && distance == currentBest.distance
+            && candidate < currentBest.ref)
+        if !candidateIsBetter {
+          continue
+        }
+      }
+      best = (tier, distance, candidate)
+    }
+
+    return best?.ref
+  }
+
+  private static func upstreamRef(repoRoot: String) -> String? {
+    let output = runGit([
+      "-C", repoRoot, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}",
+    ]).trimmingCharacters(in: .whitespacesAndNewlines)
+    return output.isEmpty ? nil : output
+  }
+
+  private static func isAncestor(
+    repoRoot: String,
+    ancestor: String,
+    descendant: String
+  ) -> Bool {
+    runCommand(
+      executable: "/usr/bin/git",
+      arguments: ["-C", repoRoot, "merge-base", "--is-ancestor", ancestor, descendant]
+    ).terminationStatus == 0
   }
 
   private static func isHeadDetached(repoRoot: String) -> Bool {
@@ -964,12 +1084,6 @@ enum GitService {
       .map(String.init)
   }
 
-  private static func parentCommitOrEmptyTree(repoRoot: String, commitSHA: String) -> String? {
-    let output = runGit(["-C", repoRoot, "rev-parse", "--verify", "\(commitSHA)^"])
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-    return output.isEmpty ? emptyTreeSHA : output
-  }
-
   static func resolveRef(repoRoot: String, ref: String) -> String? {
     let output = runGit(["-C", repoRoot, "rev-parse", "--verify", "\(ref)^{commit}"])
       .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -980,7 +1094,6 @@ enum GitService {
     for file: FileDiff,
     repoRoot: String,
     mode: ReviewMode,
-    baseRef: String,
     headRef: String,
     mergeBaseSha: String,
     isHeadCheckedOut: Bool
@@ -1002,7 +1115,6 @@ enum GitService {
         repoRoot: repoRoot,
         filePath: file.oldPath,
         mode: mode,
-        baseRef: baseRef,
         mergeBaseSha: mergeBaseSha
       )
     {
@@ -1028,8 +1140,6 @@ enum GitService {
       } else {
         blobLines(repoRoot: repoRoot, ref: headRef, filePath: filePath)
       }
-    case .commit:
-      blobLines(repoRoot: repoRoot, ref: headRef, filePath: filePath)
     }
   }
 
@@ -1037,15 +1147,12 @@ enum GitService {
     repoRoot: String,
     filePath: String,
     mode: ReviewMode,
-    baseRef: String,
     mergeBaseSha: String
   ) -> [String]? {
     let ref: String =
       switch mode {
       case .branch:
         mergeBaseSha
-      case .commit:
-        baseRef
       case .uncommitted:
         "HEAD"
       }

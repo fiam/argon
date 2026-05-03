@@ -78,7 +78,7 @@ fn dev_update_target_switches_mode() -> Result<()> {
     // Verify initial mode is branch
     assert_eq!(create_v["session"]["mode"].as_str().unwrap(), "branch");
 
-    // Now update target to commit mode
+    // Now update target to uncommitted mode.
     let update_out = run_argon(
         &repo,
         &[
@@ -88,13 +88,13 @@ fn dev_update_target_switches_mode() -> Result<()> {
             "--session",
             session_id,
             "--mode",
-            "commit",
+            "uncommitted",
             "--base-ref",
-            "HEAD~1",
-            "--head-ref",
             "HEAD",
+            "--head-ref",
+            "WORKTREE",
             "--merge-base-sha",
-            &base_sha,
+            &head_sha,
             "--json",
         ],
     )?;
@@ -103,12 +103,12 @@ fn dev_update_target_switches_mode() -> Result<()> {
 
     assert_eq!(
         session["mode"].as_str().unwrap(),
-        "commit",
-        "mode should have changed to commit"
+        "uncommitted",
+        "mode should have changed to uncommitted"
     );
-    assert_eq!(session["base_ref"].as_str().unwrap(), "HEAD~1");
-    assert_eq!(session["head_ref"].as_str().unwrap(), "HEAD");
-    assert_eq!(session["merge_base_sha"].as_str().unwrap(), &base_sha);
+    assert_eq!(session["base_ref"].as_str().unwrap(), "HEAD");
+    assert_eq!(session["head_ref"].as_str().unwrap(), "WORKTREE");
+    assert_eq!(session["merge_base_sha"].as_str().unwrap(), &head_sha);
 
     // Verify the session ID is unchanged
     assert_eq!(session["id"].as_str().unwrap(), session_id);

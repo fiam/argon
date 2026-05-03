@@ -1085,6 +1085,35 @@ struct WorkspaceStateTests {
     #expect(state.windowTitle == "Argon — repo — feature/window")
   }
 
+  @Test("diff mode selector is forced to uncommitted for the base worktree")
+  @MainActor
+  func diffModeSelectorIsForcedToUncommittedForBaseWorktree() {
+    let state = makeState()
+
+    #expect(state.selectedDiffMode == .uncommitted)
+    #expect(state.selectedWorktreeSupportsAllChanges == false)
+
+    state.selectDiffMode(.allChanges)
+
+    #expect(state.selectedDiffMode == .uncommitted)
+    #expect(state.isLoadingSelectionDetails == false)
+  }
+
+  @Test("diff mode selector can switch feature worktrees to uncommitted")
+  @MainActor
+  func diffModeSelectorCanSwitchFeatureWorktreesToUncommitted() {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+
+    #expect(state.selectedDiffMode == .allChanges)
+    #expect(state.selectedWorktreeSupportsAllChanges == true)
+
+    state.selectDiffMode(.uncommitted)
+
+    #expect(state.selectedDiffMode == .uncommitted)
+    #expect(state.selectedReviewTarget == nil)
+  }
+
   @Test("persisted snapshots restore tabs lazily for the selected worktree")
   @MainActor
   func persistedSnapshotsRestoreTabsLazilyForSelectedWorktree() async throws {

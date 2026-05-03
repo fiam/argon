@@ -27,15 +27,13 @@ pub enum TargetError {
     InvalidRef(String),
     #[error("could not infer base ref; pass --base or use --pr")]
     MissingBaseRef,
-    #[error("detached HEAD requires commit mode")]
+    #[error("detached HEAD cannot infer a branch target")]
     DetachedHead,
 }
 
-const EMPTY_TREE_SHA: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-
 pub fn auto_detect_review_target(repo_root: &Path) -> Result<ResolvedReviewTarget, TargetError> {
     if is_head_detached(repo_root)? {
-        return resolve_commit_target(repo_root, None);
+        return resolve_uncommitted_target(repo_root);
     }
 
     let current_branch = current_branch_name(repo_root)?;
@@ -72,22 +70,6 @@ pub fn resolve_branch_target(
     })
 }
 
-pub fn resolve_commit_target(
-    repo_root: &Path,
-    commit_input: Option<&str>,
-) -> Result<ResolvedReviewTarget, TargetError> {
-    let commit_ref = commit_input.unwrap_or("HEAD");
-    let commit_sha = verify_commit_ref(repo_root, commit_ref)?;
-    let base_ref = parent_commit_or_empty_tree(repo_root, &commit_sha)?;
-
-    Ok(ResolvedReviewTarget {
-        mode: ReviewMode::Commit,
-        base_ref,
-        head_ref: commit_sha.clone(),
-        merge_base_sha: commit_sha,
-    })
-}
-
 pub fn resolve_uncommitted_target(repo_root: &Path) -> Result<ResolvedReviewTarget, TargetError> {
     let merge_base_sha = verify_commit_ref(repo_root, "HEAD")?;
 
@@ -100,6 +82,20 @@ pub fn resolve_uncommitted_target(repo_root: &Path) -> Result<ResolvedReviewTarg
 }
 
 pub fn infer_base_ref(repo_root: &Path) -> Result<String, TargetError> {
+    let current_branch = current_branch_name(repo_root).ok();
+
+    if let Some(current_branch) = current_branch.as_deref() {
+        if let Some(upstream) = upstream_ref(repo_root)?
+            && shorten_ref(&upstream) != current_branch
+        {
+            return Ok(upstream);
+        }
+
+        if let Some(base_ref) = nearest_worktree_branch_base(repo_root, current_branch)? {
+            return Ok(base_ref);
+        }
+    }
+
     if let Ok(origin_head) = git_capture(
         repo_root,
         &[
@@ -119,6 +115,72 @@ pub fn infer_base_ref(repo_root: &Path) -> Result<String, TargetError> {
     }
 
     Err(TargetError::MissingBaseRef)
+}
+
+fn nearest_worktree_branch_base(
+    repo_root: &Path,
+    current_branch: &str,
+) -> Result<Option<String>, TargetError> {
+    let output = git_capture(repo_root, &["worktree", "list", "--porcelain"])?;
+    let mut candidates = output
+        .lines()
+        .filter_map(|line| line.strip_prefix("branch "))
+        .filter_map(|branch| branch.strip_prefix("refs/heads/"))
+        .filter(|branch| *branch != current_branch)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.dedup();
+
+    let mut best: Option<(u8, u32, String)> = None;
+    for candidate in candidates {
+        if is_ancestor(repo_root, current_branch, &candidate)? {
+            continue;
+        }
+
+        let merge_base = match git_capture(repo_root, &["merge-base", current_branch, &candidate]) {
+            Ok(merge_base) => merge_base,
+            Err(TargetError::Git(_)) => continue,
+            Err(error) => return Err(error),
+        };
+        let distance = git_capture(
+            repo_root,
+            &[
+                "rev-list",
+                "--count",
+                &format!("{merge_base}..{current_branch}"),
+            ],
+        )?;
+        let Ok(distance) = distance.parse::<u32>() else {
+            continue;
+        };
+        let tier = if is_ancestor(repo_root, &candidate, current_branch)? {
+            0
+        } else {
+            1
+        };
+
+        match best.as_ref() {
+            Some((best_tier, best_distance, best_ref))
+                if (*best_tier, *best_distance, best_ref.as_str())
+                    <= (tier, distance, candidate.as_str()) => {}
+            _ => best = Some((tier, distance, candidate)),
+        }
+    }
+
+    Ok(best.map(|(_, _, reference)| reference))
+}
+
+fn upstream_ref(repo_root: &Path) -> Result<Option<String>, TargetError> {
+    match git_capture(
+        repo_root,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    ) {
+        Ok(upstream) if !upstream.is_empty() => Ok(Some(upstream)),
+        Ok(_) => Ok(None),
+        Err(TargetError::Git(_)) => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 pub fn current_branch_name(repo_root: &Path) -> Result<String, TargetError> {
@@ -168,17 +230,6 @@ fn verify_commit_ref(repo_root: &Path, reference: &str) -> Result<String, Target
         .map_err(|_| TargetError::InvalidRef(reference.to_string()))
 }
 
-fn parent_commit_or_empty_tree(repo_root: &Path, commit_sha: &str) -> Result<String, TargetError> {
-    match git_capture(
-        repo_root,
-        &["rev-parse", "--verify", &format!("{commit_sha}^")],
-    ) {
-        Ok(parent) => Ok(parent),
-        Err(TargetError::Git(_)) => Ok(EMPTY_TREE_SHA.to_string()),
-        Err(error) => Err(error),
-    }
-}
-
 fn is_head_detached(repo_root: &Path) -> Result<bool, TargetError> {
     let output = Command::new("git")
         .arg("-C")
@@ -186,6 +237,24 @@ fn is_head_detached(repo_root: &Path) -> Result<bool, TargetError> {
         .args(["symbolic-ref", "--quiet", "--short", "HEAD"])
         .output()?;
     Ok(!output.status.success())
+}
+
+fn is_ancestor(repo_root: &Path, ancestor: &str, descendant: &str) -> Result<bool, TargetError> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["merge-base", "--is-ancestor", ancestor, descendant])
+        .output()?;
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            Err(TargetError::Git(format!(
+                "git merge-base --is-ancestor failed: {stderr}"
+            )))
+        }
+    }
 }
 
 fn shorten_ref(reference: &str) -> &str {
@@ -203,8 +272,12 @@ mod tests {
     use super::*;
 
     fn git(repo: &TempDir, args: &[&str]) -> Result<String> {
+        git_path(repo.path(), args)
+    }
+
+    fn git_path(repo: &std::path::Path, args: &[&str]) -> Result<String> {
         let output = Command::new("git")
-            .current_dir(repo.path())
+            .current_dir(repo)
             .args(args)
             .output()
             .with_context(|| format!("failed to execute git {}", args.join(" ")))?;
@@ -300,55 +373,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_commit_uses_latest_commit_parent_and_head() -> Result<()> {
-        let (repo, _remote) = setup_repo_with_feature_branch()?;
-        let expected_base = git(&repo, &["rev-parse", "HEAD^"])?;
-        let expected_head = git(&repo, &["rev-parse", "HEAD"])?;
-
-        let target = resolve_commit_target(repo.path(), None)?;
-        assert_eq!(target.mode, ReviewMode::Commit);
-        assert_eq!(target.base_ref, expected_base);
-        assert_eq!(target.head_ref, expected_head);
-        assert_eq!(target.merge_base_sha, expected_head);
-        Ok(())
-    }
-
-    #[test]
-    fn resolve_commit_with_explicit_ref_uses_parent_and_commit_sha() -> Result<()> {
-        let (repo, _remote) = setup_repo_with_feature_branch()?;
-        let expected_head = git(&repo, &["rev-parse", "HEAD~1"])?;
-
-        let target = resolve_commit_target(repo.path(), Some("HEAD~1"))?;
-        assert_eq!(target.mode, ReviewMode::Commit);
-        assert_eq!(target.base_ref, EMPTY_TREE_SHA);
-        assert_eq!(target.head_ref, expected_head);
-        assert_eq!(target.merge_base_sha, expected_head);
-        Ok(())
-    }
-
-    #[test]
-    fn resolve_commit_for_root_commit_uses_empty_tree_base() -> Result<()> {
-        let repo = TempDir::new().context("create repo")?;
-
-        git(&repo, &["init"])?;
-        git(&repo, &["config", "user.name", "Argon Test"])?;
-        git(&repo, &["config", "user.email", "argon-test@example.com"])?;
-
-        fs::write(repo.path().join("README.md"), "hello\n").context("write readme")?;
-        git(&repo, &["add", "README.md"])?;
-        git(&repo, &["commit", "-m", "init"])?;
-
-        let expected_head = git(&repo, &["rev-parse", "HEAD"])?;
-        let target = resolve_commit_target(repo.path(), None)?;
-
-        assert_eq!(target.mode, ReviewMode::Commit);
-        assert_eq!(target.base_ref, EMPTY_TREE_SHA);
-        assert_eq!(target.head_ref, expected_head);
-        assert_eq!(target.merge_base_sha, expected_head);
-        Ok(())
-    }
-
-    #[test]
     fn resolve_uncommitted_uses_head_to_worktree() -> Result<()> {
         let (repo, _remote) = setup_repo_with_feature_branch()?;
         let expected_head = git(&repo, &["rev-parse", "HEAD"])?;
@@ -358,6 +382,69 @@ mod tests {
         assert_eq!(target.base_ref, "HEAD");
         assert_eq!(target.head_ref, "WORKTREE");
         assert_eq!(target.merge_base_sha, expected_head);
+        Ok(())
+    }
+
+    #[test]
+    fn auto_detect_uses_uncommitted_mode_for_detached_head() -> Result<()> {
+        let (repo, _remote) = setup_repo_with_feature_branch()?;
+        let expected_head = git(&repo, &["rev-parse", "HEAD"])?;
+        git(&repo, &["checkout", "--detach", "HEAD"])?;
+
+        let target = auto_detect_review_target(repo.path())?;
+        assert_eq!(target.mode, ReviewMode::Uncommitted);
+        assert_eq!(target.base_ref, "HEAD");
+        assert_eq!(target.head_ref, "WORKTREE");
+        assert_eq!(target.merge_base_sha, expected_head);
+        Ok(())
+    }
+
+    #[test]
+    fn infer_base_prefers_nearest_parent_worktree_branch() -> Result<()> {
+        let fixture = TempDir::new().context("create fixture")?;
+        let repo = fixture.path().join("repo");
+        let parent = fixture.path().join("parent");
+        let child = fixture.path().join("child");
+        fs::create_dir_all(&repo).context("create repo")?;
+
+        git_path(&repo, &["init"])?;
+        git_path(&repo, &["config", "user.name", "Argon Test"])?;
+        git_path(&repo, &["config", "user.email", "argon-test@example.com"])?;
+
+        fs::write(repo.join("README.md"), "base\n").context("write readme")?;
+        git_path(&repo, &["add", "README.md"])?;
+        git_path(&repo, &["commit", "-m", "init"])?;
+        git_path(&repo, &["branch", "-M", "main"])?;
+
+        git_path(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "parent/topic",
+                parent.to_str().unwrap(),
+                "HEAD",
+            ],
+        )?;
+        fs::write(parent.join("README.md"), "base\nparent\n").context("write parent")?;
+        git_path(&parent, &["commit", "-am", "parent"])?;
+
+        git_path(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "child/topic",
+                child.to_str().unwrap(),
+                "parent/topic",
+            ],
+        )?;
+        fs::write(child.join("README.md"), "base\nparent\nchild\n").context("write child")?;
+        git_path(&child, &["commit", "-am", "child"])?;
+
+        assert_eq!(infer_base_ref(&child)?, "parent/topic");
         Ok(())
     }
 }

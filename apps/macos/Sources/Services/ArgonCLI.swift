@@ -114,12 +114,19 @@ enum ArgonCLI {
   /// Returns the session ID and repo root from the CLI output.
   static func createSession(
     repoRoot: String,
+    target: ResolvedTarget? = nil,
     changeSummary: String? = nil
   ) throws -> ReviewTarget {
     let cli = findCLI()
     let process = Process()
     process.executableURL = URL(fileURLWithPath: cli)
     var arguments = ["review", "--repo", repoRoot]
+    if let target {
+      arguments += ["--mode", target.mode.rawValue]
+      if target.mode == .branch {
+        arguments += ["--base", target.baseRef, "--head", target.headRef]
+      }
+    }
     if let changeSummary, !changeSummary.isEmpty {
       arguments += ["--description", changeSummary]
     }

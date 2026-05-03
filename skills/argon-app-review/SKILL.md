@@ -36,17 +36,16 @@ absolute `.app` path or `ARGON_CLI` to the absolute bundled CLI path.
 ### 1. Start a session and open the review UI
 
 ```bash
-argon agent start --repo <directory> --mode <branch|commit|uncommitted> \
-  [--base <branch>] [--head <branch>] [--commit <sha>] \
+argon agent start --repo <directory> --mode <branch|uncommitted> \
+  [--base <branch>] [--head <branch>] \
   --description "<planned changes>" --wait --json
 ```
 
 You **must** provide:
 - `--repo <directory>` — the working directory to review.
 - `--mode` — one of:
-  - `branch` — diff from merge-base of `--base` to working tree.
-  - `commit` — diff from `--commit` (default `HEAD`) to working tree.
-  - `uncommitted` — `HEAD` to working tree (staged + unstaged only).
+  - `branch` — all branch changes from the inferred or supplied merge-base to working tree.
+  - `uncommitted` — `HEAD` to working tree (staged, unstaged, and non-ignored untracked files).
 - `--description` — a short summary of the intended changes for the reviewer.
 
 `--wait` blocks until the reviewer submits feedback or a decision.

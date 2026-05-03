@@ -19,7 +19,7 @@ use argon_core::{
     PendingFeedback, ResolvedReviewTarget, ReviewComment, ReviewMode, ReviewOutcome, ReviewSession,
     SCHEMA_VERSION, SessionPayload, SessionStatus, SessionStore, StyledSpan, ThreadState,
     auto_detect_review_target, inspect_worktree_mergeability, resolve_branch_target,
-    resolve_commit_target, resolve_uncommitted_target,
+    resolve_uncommitted_target,
 };
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -237,8 +237,6 @@ struct ReviewArgs {
     base: Option<String>,
     #[arg(long)]
     head: Option<String>,
-    #[arg(long)]
-    commit: Option<String>,
     #[arg(long)]
     mode: Option<ReviewModeArg>,
     #[arg(long)]
@@ -624,7 +622,6 @@ enum OutcomeArg {
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum ReviewModeArg {
     Branch,
-    Commit,
     Uncommitted,
 }
 
@@ -642,7 +639,6 @@ impl From<ReviewModeArg> for ReviewMode {
     fn from(value: ReviewModeArg) -> Self {
         match value {
             ReviewModeArg::Branch => ReviewMode::Branch,
-            ReviewModeArg::Commit => ReviewMode::Commit,
             ReviewModeArg::Uncommitted => ReviewMode::Uncommitted,
         }
     }
@@ -1232,14 +1228,8 @@ fn run_start(args: StartArgs, runtime: &RuntimeOptions) -> Result<()> {
 
     let target = match args.mode.map(ReviewMode::from) {
         Some(ReviewMode::Branch) => {
-            let base = args.base.as_deref();
-            let head = args.head.as_deref();
-            if base.is_none() || head.is_none() {
-                bail!("--mode branch requires both --base and --head");
-            }
-            resolve_branch_target(&repo_root, base, head)?
+            resolve_branch_mode_target(&repo_root, args.base.as_deref(), args.head.as_deref())?
         }
-        Some(ReviewMode::Commit) => resolve_commit_target(&repo_root, None)?,
         Some(ReviewMode::Uncommitted) => resolve_uncommitted_target(&repo_root)?,
         None => {
             if args.base.is_some() || args.head.is_some() {
@@ -1314,8 +1304,8 @@ fn resolve_review_target_for_review(
     args: &ReviewArgs,
 ) -> Result<ResolvedReviewTarget> {
     if args.pr {
-        if args.mode.is_some() || args.commit.is_some() {
-            bail!("--pr cannot be combined with --mode or --commit");
+        if args.mode.is_some() {
+            bail!("--pr cannot be combined with --mode");
         }
         let refs = pr_refs()?;
         return Ok(resolve_branch_target(
@@ -1326,36 +1316,18 @@ fn resolve_review_target_for_review(
     }
 
     match args.mode.map(ReviewMode::from) {
-        Some(ReviewMode::Branch) => {
-            if args.commit.is_some() {
-                bail!("--mode branch cannot be combined with --commit");
-            }
-            Ok(resolve_branch_target(
-                repo_root,
-                args.base.as_deref(),
-                args.head.as_deref(),
-            )?)
-        }
-        Some(ReviewMode::Commit) => {
-            if args.base.is_some() || args.head.is_some() {
-                bail!("--mode commit cannot be combined with --base/--head");
-            }
-            Ok(resolve_commit_target(repo_root, args.commit.as_deref())?)
-        }
+        Some(ReviewMode::Branch) => Ok(resolve_branch_mode_target(
+            repo_root,
+            args.base.as_deref(),
+            args.head.as_deref(),
+        )?),
         Some(ReviewMode::Uncommitted) => {
-            if args.base.is_some() || args.head.is_some() || args.commit.is_some() {
-                bail!("--mode uncommitted cannot be combined with --base/--head/--commit");
+            if args.base.is_some() || args.head.is_some() {
+                bail!("--mode uncommitted cannot be combined with --base/--head");
             }
             Ok(resolve_uncommitted_target(repo_root)?)
         }
         None => {
-            if args.commit.is_some() {
-                if args.base.is_some() || args.head.is_some() {
-                    bail!("--commit cannot be combined with --base/--head");
-                }
-                return Ok(resolve_commit_target(repo_root, args.commit.as_deref())?);
-            }
-
             if args.base.is_some() || args.head.is_some() {
                 return Ok(resolve_branch_target(
                     repo_root,
@@ -1367,6 +1339,22 @@ fn resolve_review_target_for_review(
             Ok(auto_detect_review_target(repo_root)?)
         }
     }
+}
+
+fn resolve_branch_mode_target(
+    repo_root: &Path,
+    base: Option<&str>,
+    head: Option<&str>,
+) -> Result<ResolvedReviewTarget> {
+    if base.is_some() || head.is_some() {
+        return Ok(resolve_branch_target(repo_root, base, head)?);
+    }
+
+    let target = auto_detect_review_target(repo_root)?;
+    if target.mode != ReviewMode::Branch {
+        bail!("--mode branch is not available for this worktree; use --mode uncommitted");
+    }
+    Ok(target)
 }
 
 fn run_wait(args: WaitArgs, runtime: &RuntimeOptions) -> Result<()> {
@@ -1566,7 +1554,6 @@ fn build_reviewer_prompt(
         "Review target: mode={} base={} head={}",
         match session.mode {
             ReviewMode::Branch => "branch",
-            ReviewMode::Commit => "commit",
             ReviewMode::Uncommitted => "uncommitted",
         },
         session.base_ref,
@@ -1686,20 +1673,8 @@ fn reviewer_inspection_commands(session: &ReviewSession) -> Vec<String> {
         ReviewMode::Branch => vec![
             format!("git -C {repo_root} status --short"),
             format!(
-                "git -C {repo_root} diff --no-color {} {}",
-                shell_quote(&session.merge_base_sha),
-                shell_quote(&session.head_ref)
-            ),
-        ],
-        ReviewMode::Commit => vec![
-            format!(
-                "git -C {repo_root} show --stat --patch --no-color {}",
-                shell_quote(&session.head_ref)
-            ),
-            format!(
-                "git -C {repo_root} diff --no-color {} {}",
-                shell_quote(&session.base_ref),
-                shell_quote(&session.head_ref)
+                "git -C {repo_root} diff --no-color {}",
+                shell_quote(&session.merge_base_sha)
             ),
         ],
         ReviewMode::Uncommitted => vec![
@@ -1904,7 +1879,6 @@ fn build_agent_prompt(
         "Review target: mode={} base={} head={}",
         match session.mode {
             ReviewMode::Branch => "branch",
-            ReviewMode::Commit => "commit",
             ReviewMode::Uncommitted => "uncommitted",
         },
         session.base_ref,
@@ -2822,7 +2796,7 @@ mod tests {
         );
         assert!(prompt.contains("Inspect the review target with git before commenting:"));
         assert!(prompt.contains("git -C /tmp/repo status --short"));
-        assert!(prompt.contains("git -C /tmp/repo diff --no-color abc123 feature/x"));
+        assert!(prompt.contains("git -C /tmp/repo diff --no-color abc123"));
     }
 
     #[test]
@@ -3243,7 +3217,6 @@ fn print_session(command: CliCommand, session: &ReviewSession, json: bool) -> Re
         "mode: {}",
         match session.mode {
             ReviewMode::Branch => "branch",
-            ReviewMode::Commit => "commit",
             ReviewMode::Uncommitted => "uncommitted",
         }
     );

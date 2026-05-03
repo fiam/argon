@@ -92,7 +92,7 @@ struct SessionModelTests {
       {
         "id": "11111111-2222-3333-4444-555555555555",
         "repo_root": "/tmp/repo",
-        "mode": "commit",
+        "mode": "uncommitted",
         "base_ref": "HEAD",
         "head_ref": "WORKTREE",
         "merge_base_sha": "cafebabe",

@@ -77,31 +77,33 @@ pub fn build_review_diff(
     let mut command = Command::new("git");
     command.arg("-C").arg(repo_root);
     command.args(["diff", "--no-color", "--unified=3", "--no-ext-diff"]);
-    match mode {
+    let include_untracked = match mode {
         ReviewMode::Branch => {
             command.arg(merge_base_sha);
-            if !head_ref_points_to_current_head(repo_root, head_ref)? {
+            let head_is_checked_out = head_ref_points_to_current_head(repo_root, head_ref)?;
+            if !head_is_checked_out {
                 // If the requested head ref is not checked out, we cannot include
                 // local working tree changes and should diff merge-base to that ref.
                 command.arg(head_ref);
             }
-        }
-        ReviewMode::Commit => {
-            command.arg(base_ref);
-            command.arg(head_ref);
+            head_is_checked_out
         }
         ReviewMode::Uncommitted => {
             // Diff HEAD against the working tree, showing both staged and unstaged changes.
             command.arg("HEAD");
+            true
         }
-    }
+    };
     let output = command.output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(DiffError::Git(stderr));
     }
 
-    let payload = String::from_utf8(output.stdout)?;
+    let mut payload = String::from_utf8(output.stdout)?;
+    if include_untracked {
+        payload.push_str(&untracked_diff_payload(repo_root)?);
+    }
     let files = parse_unified_diff(&payload)?;
     Ok(ReviewDiff {
         base_ref: base_ref.to_string(),
@@ -109,6 +111,43 @@ pub fn build_review_diff(
         merge_base_sha: merge_base_sha.to_string(),
         files,
     })
+}
+
+fn untracked_diff_payload(repo_root: &Path) -> Result<String, DiffError> {
+    let files = git_capture(repo_root, &["ls-files", "--others", "--exclude-standard"])?;
+    let mut payload = String::new();
+
+    for file in files.lines().filter(|line| !line.trim().is_empty()) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo_root)
+            .args([
+                "diff",
+                "--no-color",
+                "--unified=3",
+                "--no-ext-diff",
+                "--no-index",
+                "/dev/null",
+                file,
+            ])
+            .output()?;
+
+        if !output.status.success() && output.status.code() != Some(1) {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(DiffError::Git(format!(
+                "git diff --no-index /dev/null {file} failed: {stderr}"
+            )));
+        }
+
+        if !output.stdout.is_empty() {
+            if !payload.is_empty() && !payload.ends_with('\n') {
+                payload.push('\n');
+            }
+            payload.push_str(&String::from_utf8(output.stdout)?);
+        }
+    }
+
+    Ok(payload)
 }
 
 fn head_ref_points_to_current_head(repo_root: &Path, head_ref: &str) -> Result<bool, DiffError> {
@@ -556,34 +595,32 @@ index 1111111..2222222 100644
     }
 
     #[test]
-    fn build_review_diff_commit_shows_latest_commit_only() -> Result<()> {
+    fn build_review_diff_includes_untracked_non_ignored_files() -> Result<()> {
         let repo = TempDir::new().context("temp repo")?;
         git(&repo, &["init"])?;
         git(&repo, &["config", "user.name", "Argon Test"])?;
         git(&repo, &["config", "user.email", "argon-test@example.com"])?;
 
-        fs::write(repo.path().join("a.txt"), "one\n").context("write file")?;
-        git(&repo, &["add", "a.txt"])?;
+        fs::write(repo.path().join(".gitignore"), "ignored.txt\n").context("write ignore")?;
+        fs::write(repo.path().join("README.md"), "one\n").context("write file")?;
+        git(&repo, &["add", "."])?;
         git(&repo, &["commit", "-m", "init"])?;
-        fs::write(repo.path().join("a.txt"), "one\ncommitted\n").context("write committed")?;
-        git(&repo, &["commit", "-am", "second"])?;
-        let base = git(&repo, &["rev-parse", "HEAD~1"])?;
         let head = git(&repo, &["rev-parse", "HEAD"])?;
 
-        fs::write(repo.path().join("a.txt"), "one\nworking\n").context("write uncommitted")?;
+        fs::write(repo.path().join("new.txt"), "visible\n").context("write untracked")?;
+        fs::write(repo.path().join("ignored.txt"), "hidden\n").context("write ignored")?;
 
         let diff = build_review_diff(
             repo.path(),
-            crate::model::ReviewMode::Commit,
-            &base,
-            &head,
+            crate::model::ReviewMode::Uncommitted,
+            "HEAD",
+            "WORKTREE",
             &head,
         )?;
         assert_eq!(diff.files.len(), 1);
-        assert_eq!(diff.files[0].new_path, "a.txt");
+        assert_eq!(diff.files[0].new_path, "new.txt");
         let added = collect_added_lines(&diff);
-        assert!(added.iter().any(|line| line == "committed"));
-        assert!(!added.iter().any(|line| line == "working"));
+        assert!(added.iter().any(|line| line == "visible"));
         Ok(())
     }
 

@@ -25,8 +25,8 @@ struct GitServiceTests {
     #expect(result == nil)
   }
 
-  @Test("resolveCommitTarget reviews the latest commit only")
-  func resolveCommitTargetUsesParentAndHead() throws {
+  @Test("autoDetectTarget uses uncommitted mode for detached HEAD")
+  func autoDetectTargetUsesUncommittedModeForDetachedHead() throws {
     let repo = try makeRepo()
     defer { try? FileManager.default.removeItem(at: repo) }
 
@@ -38,25 +38,21 @@ struct GitServiceTests {
     try git(repo, ["add", "a.txt"])
     try git(repo, ["commit", "-m", "init"])
 
-    try "one\ncommitted\n".write(
-      to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
-    try git(repo, ["commit", "-am", "second"])
-
-    let expectedBase = try git(repo, ["rev-parse", "HEAD^"]).trimmingCharacters(
-      in: .whitespacesAndNewlines)
     let expectedHead = try git(repo, ["rev-parse", "HEAD"]).trimmingCharacters(
       in: .whitespacesAndNewlines)
 
-    let target = GitService.resolveCommitTarget(repoRoot: repo.path)
+    try git(repo, ["checkout", "--detach", "HEAD"])
 
-    #expect(target?.mode == .commit)
-    #expect(target?.baseRef == expectedBase)
-    #expect(target?.headRef == expectedHead)
+    let target = GitService.autoDetectTarget(repoRoot: repo.path)
+
+    #expect(target?.mode == .uncommitted)
+    #expect(target?.baseRef == "HEAD")
+    #expect(target?.headRef == "WORKTREE")
     #expect(target?.mergeBaseSha == expectedHead)
   }
 
-  @Test("commit diff excludes later working tree changes")
-  func commitDiffExcludesWorkingTreeChanges() throws {
+  @Test("uncommitted diff includes non-ignored untracked files")
+  func uncommittedDiffIncludesNonIgnoredUntrackedFiles() throws {
     let repo = try makeRepo()
     defer { try? FileManager.default.removeItem(at: repo) }
 
@@ -68,28 +64,27 @@ struct GitServiceTests {
     try git(repo, ["add", "a.txt"])
     try git(repo, ["commit", "-m", "init"])
 
-    try "one\ncommitted\n".write(
-      to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
-    try git(repo, ["commit", "-am", "second"])
+    try "ignored.txt\n".write(
+      to: repo.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+    try git(repo, ["add", ".gitignore"])
+    try git(repo, ["commit", "-m", "ignore fixture"])
 
-    try "one\ncommitted\nworking\n".write(
-      to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
-
-    guard let target = GitService.resolveCommitTarget(repoRoot: repo.path) else {
-      Issue.record("expected commit target")
-      return
-    }
+    try "visible\n".write(
+      to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+    try "hidden\n".write(
+      to: repo.appendingPathComponent("ignored.txt"), atomically: true, encoding: .utf8)
 
     let diff = GitService.diff(
       repoRoot: repo.path,
-      mode: target.mode,
-      baseRef: target.baseRef,
-      headRef: target.headRef,
-      mergeBaseSha: target.mergeBaseSha
+      mode: .uncommitted,
+      baseRef: "HEAD",
+      headRef: "WORKTREE",
+      mergeBaseSha: try git(repo, ["rev-parse", "HEAD"])
     )
 
-    #expect(diff.contains("committed"))
-    #expect(!diff.contains("working"))
+    #expect(diff.contains("new.txt"))
+    #expect(diff.contains("visible"))
+    #expect(!diff.contains("ignored.txt"))
   }
 
   @Test("context sources use working tree for uncommitted diffs")
@@ -338,6 +333,37 @@ struct GitServiceTests {
     )
   }
 
+  @Test("inferBaseRef prefers the nearest parent worktree branch")
+  func inferBaseRefPrefersNearestParentWorktreeBranch() throws {
+    let fixture = try makeFixtureDirectory()
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let repo = fixture.appendingPathComponent("repo")
+    let parent = fixture.appendingPathComponent("parent")
+    let child = fixture.appendingPathComponent("child")
+    try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+
+    try git(repo, ["init"])
+    try git(repo, ["config", "user.name", "Argon Test"])
+    try git(repo, ["config", "user.email", "argon-test@example.com"])
+
+    try "base\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    try git(repo, ["add", "a.txt"])
+    try git(repo, ["commit", "-m", "init"])
+    try git(repo, ["branch", "-M", "main"])
+
+    try git(repo, ["worktree", "add", "-b", "parent/topic", parent.path, "HEAD"])
+    try "base\nparent\n".write(
+      to: parent.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    try git(parent, ["commit", "-am", "parent"])
+
+    try git(repo, ["worktree", "add", "-b", "child/topic", child.path, "parent/topic"])
+    try "base\nparent\nchild\n".write(
+      to: child.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    try git(child, ["commit", "-am", "child"])
+
+    #expect(GitService.inferBaseRef(repoRoot: child.path) == "parent/topic")
+  }
+
   @Test("discoverWorktrees returns base and linked worktrees")
   func discoverWorktreesIncludesBaseAndLinkedWorktrees() throws {
     let fixture = try makeFixtureDirectory()
@@ -394,12 +420,19 @@ struct GitServiceTests {
 
     let branchName = try git(worktree, ["branch", "--show-current"]).trimmingCharacters(
       in: .whitespacesAndNewlines)
+    let upstream = try git(
+      worktree,
+      [
+        "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}",
+      ]
+    ).trimmingCharacters(in: .whitespacesAndNewlines)
     let discovered = try GitService.discoverWorktrees(
       repoRoot: repo.path,
       repoCommonDir: repo.appendingPathComponent(".git").path
     )
 
     #expect(branchName == "feature/new-worktree")
+    #expect(upstream == "main")
     #expect(discovered.contains { $0.path == worktree.path && $0.branchName == branchName })
   }
 

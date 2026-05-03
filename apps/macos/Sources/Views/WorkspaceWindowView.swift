@@ -2942,6 +2942,8 @@ private struct WorkspaceInspectorPane: View {
           VStack(alignment: .leading, spacing: 14) {
             WorkspaceSurface {
               VStack(alignment: .leading, spacing: 12) {
+                WorkspaceDiffModePicker()
+
                 WorkspaceCompactDiffSummary(summary: workspaceState.selectedSummary)
 
                 if workspaceState.hasConflicts(for: worktree.path) {
@@ -3349,6 +3351,65 @@ private struct WorkspaceBadge: View {
       .padding(.vertical, 2)
       .background(tint.opacity(0.08), in: Capsule())
       .foregroundStyle(tint)
+  }
+}
+
+private struct WorkspaceDiffModePicker: View {
+  @Environment(WorkspaceState.self) private var workspaceState
+
+  var body: some View {
+    Menu {
+      Button {
+        workspaceState.selectDiffMode(.allChanges)
+      } label: {
+        Label("All changes", systemImage: "arrow.triangle.branch")
+      }
+      .disabled(!workspaceState.selectedWorktreeSupportsAllChanges)
+
+      Button {
+        workspaceState.selectDiffMode(.uncommitted)
+      } label: {
+        Label("Uncommitted changes", systemImage: "pencil.and.outline")
+      }
+    } label: {
+      HStack(spacing: 4) {
+        Image(systemName: activeModeIcon)
+        Text(activeModeLabel)
+          .lineLimit(1)
+          .minimumScaleFactor(0.85)
+        Image(systemName: "chevron.down")
+          .font(.system(size: 8, weight: .semibold))
+      }
+      .font(.caption)
+      .foregroundStyle(.secondary)
+    }
+    .menuStyle(.borderlessButton)
+    .disabled(!workspaceState.selectedWorktreeSupportsAllChanges)
+    .help(helpText)
+  }
+
+  private var activeModeLabel: String {
+    switch workspaceState.selectedDiffMode {
+    case .allChanges:
+      "all changes"
+    case .uncommitted:
+      "uncommitted"
+    }
+  }
+
+  private var activeModeIcon: String {
+    switch workspaceState.selectedDiffMode {
+    case .allChanges:
+      "arrow.triangle.branch"
+    case .uncommitted:
+      "pencil.and.outline"
+    }
+  }
+
+  private var helpText: String {
+    workspaceState.selectedWorktreeSupportsAllChanges
+      ? "Choose the worktree diff scope"
+      : "The base worktree shows uncommitted changes"
   }
 }
 

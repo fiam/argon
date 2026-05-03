@@ -207,15 +207,12 @@ final class AppState {
 
     let sid = sessionId
     let root = repoRoot
-    let dBase = detectedBaseRef
-    let dHead = detectedHeadRef
     let theme = highlightTheme
 
     Task {
       let result = await Task.detached {
         Self.doSwitchMode(
           mode: mode, repoRoot: root, sessionId: sid,
-          detectedBase: dBase, detectedHead: dHead,
           theme: theme
         )
       }.value
@@ -343,8 +340,12 @@ final class AppState {
         headRef: session.headRef,
         mergeBaseSha: session.mergeBaseSha
       )
-      let detectedBase = GitService.inferBaseRef(repoRoot: repoRoot)
-      let detectedHead = GitService.currentBranchName(repoRoot: repoRoot)
+      let detectedTarget = GitService.resolveWorkspaceTarget(
+        repoRoot: repoRoot,
+        diffMode: .allChanges
+      )
+      let detectedBase = detectedTarget?.mode == .branch ? detectedTarget?.baseRef : nil
+      let detectedHead = detectedTarget?.mode == .branch ? detectedTarget?.headRef : nil
       let fingerprint = GitService.diffFingerprint(
         repoRoot: repoRoot, mode: session.mode,
         baseRef: session.baseRef, headRef: session.headRef,
@@ -365,19 +366,17 @@ final class AppState {
 
   nonisolated private static func doSwitchMode(
     mode: ReviewMode, repoRoot: String, sessionId: String?,
-    detectedBase: String?, detectedHead: String?,
     theme: String
   ) -> Result<SwitchData, SwitchError> {
 
     let target: ResolvedTarget?
     switch mode {
     case .branch:
-      let base = detectedBase ?? "main"
-      let head = detectedHead ?? "HEAD"
-
-      target = GitService.resolveBranchTarget(repoRoot: repoRoot, baseRef: base, headRef: head)
-    case .commit:
-      target = GitService.resolveCommitTarget(repoRoot: repoRoot)
+      let resolvedTarget = GitService.resolveWorkspaceTarget(
+        repoRoot: repoRoot,
+        diffMode: .allChanges
+      )
+      target = resolvedTarget?.mode == .branch ? resolvedTarget : nil
     case .uncommitted:
       target = GitService.resolveUncommittedTarget(repoRoot: repoRoot)
     }
