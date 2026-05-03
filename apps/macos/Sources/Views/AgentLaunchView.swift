@@ -540,7 +540,7 @@ struct SandboxHelpPopover: View {
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
           Text(
-            "`USE git` allows `git`, standard git configuration files, and the macOS developer tool roots used by Apple's `/usr/bin/git` launcher. `USE ssh` and `USE gpg` are available for signing, and `USE git/signing` includes both."
+            "`USE git` allows `git`, standard git configuration files, linked worktree Git directories, and the macOS developer tool roots used by Apple's `/usr/bin/git` launcher. `USE ssh` and `USE gpg` are available for signing, and `USE git/signing` includes both."
           )
           .font(.caption)
           .foregroundStyle(.secondary)

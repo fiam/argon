@@ -77,7 +77,7 @@ struct SandboxfilePromptTests {
       ))
     #expect(
       rendered.contains(
-        "USE git # Allow git and read standard git configuration files."))
+        "USE git # Allow git, standard git config, and linked worktree Git directories."))
     #expect(
       rendered.contains(
         "USE shell # Allow the current shell binary and shell history when they apply."))
@@ -131,7 +131,7 @@ struct SandboxfilePromptTests {
         "NET DEFAULT ALLOW # Allow outbound network access by default."))
     #expect(
       contents.contains(
-        "USE git # Allow git and read standard git configuration files."))
+        "USE git # Allow git, standard git config, and linked worktree Git directories."))
     #expect(
       contents.contains(
         "USE shell # Allow the current shell binary and shell history when they apply."))

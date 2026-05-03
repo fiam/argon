@@ -65,7 +65,7 @@ NET DEFAULT ALLOW # Allow outbound network access by default.
 FS ALLOW READ . # Allow reading files inside this repository.
 FS ALLOW WRITE . # Allow edits inside this repository.
 USE os # Allow access to the operating system's shared filesystem without exposing personal directories.
-USE git # Allow git and read standard git configuration files.
+USE git # Allow git, standard git config, and linked worktree Git directories.
 USE shell # Allow the current shell binary and shell history when they apply.
 USE agent # Load agent-specific config and state when they apply.
 IF TEST -f ./Sandboxfile.local # Check for an optional repo-local sandbox extension file.
@@ -413,10 +413,22 @@ than that, add explicit rules in `Sandboxfile` or `Sandboxfile.local`.
 
 `USE git` allows `git` and the standard git configuration locations:
 `$HOME/.gitconfig`, `$XDG_CONFIG_HOME/git/`, and `/etc/gitconfig` when they
-exist. It also preserves `GIT_*` and `DEVELOPER_DIR` environment variables.
-On macOS it allows the Xcode and Command Line Tools developer roots used by
-Apple's `/usr/bin/git` launcher when they exist. It does not install developer
-tools or enable commit signing helpers by default.
+exist. Before evaluating sandbox policy, Argon resolves Git's `GIT_DIR` and
+`GIT_COMMON_DIR` for the current directory by reading the worktree's `.git`
+file or directory and, for linked worktrees, the `commondir` file in the
+worktree Git directory. `USE git` grants read access to those directories and
+sets the resolved `GIT_DIR` and `GIT_COMMON_DIR` in the launched process.
+This lets a sandboxed linked worktree inspect refs, objects, and worktree Git
+state without granting access to the base worktree's checked-out files.
+
+`USE git` also sets `GIT_OPTIONAL_LOCKS=0` so read-oriented Git commands avoid
+optional lock writes. Git operations that update refs, objects, the index, or
+rebase/cherry-pick state still need an explicit writable grant or an Argon
+command that performs that operation outside the sandbox. It also preserves
+other `GIT_*` and `DEVELOPER_DIR` environment variables. On macOS it allows the
+Xcode and Command Line Tools developer roots used by Apple's `/usr/bin/git`
+launcher when they exist. It does not install developer tools or enable commit
+signing helpers by default.
 
 `USE rust` allows common Rust tools from `PATH` when present, including
 `cargo`, `rustc`, `rustdoc`, `rustfmt`, Clippy, `rustup`, `rust-analyzer`,

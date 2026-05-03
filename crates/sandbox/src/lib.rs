@@ -16,6 +16,8 @@ use parser::{InterceptHandler, ParsedProgram, StatementKind};
 const REPO_SANDBOXFILE: &str = "Sandboxfile";
 const USER_SANDBOXFILE: &str = ".Sandboxfile";
 const USER_SANDBOXFILE_COMPAT: &str = ".Sanboxfile";
+const GIT_DIR_ENV: &str = "GIT_DIR";
+const GIT_COMMON_DIR_ENV: &str = "GIT_COMMON_DIR";
 pub const INTERCEPT_RUNNER_ENV: &str = "ARGON_SANDBOX_INTERCEPT_RUNNER";
 pub const INTERCEPT_SOCKET_ENV: &str = "ARGON_SANDBOX_INTERCEPT_SOCKET";
 pub const INTERCEPT_TOKEN_ENV: &str = "ARGON_SANDBOX_INTERCEPT_TOKEN";
@@ -375,6 +377,12 @@ struct SourceFile {
     base_dir: PathBuf,
     source: String,
     program: ParsedProgram,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GitEnvironment {
+    git_dir: PathBuf,
+    git_common_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1976,6 +1984,9 @@ fn validate_primary_command(
 fn seed_variables(context: &SandboxContext) -> Result<BTreeMap<String, String>, SandboxError> {
     let mut vars = BTreeMap::new();
     for (key, value) in &context.env {
+        if key == GIT_DIR_ENV || key == GIT_COMMON_DIR_ENV {
+            continue;
+        }
         vars.insert(key.clone(), value.clone());
     }
 
@@ -1999,6 +2010,16 @@ fn seed_variables(context: &SandboxContext) -> Result<BTreeMap<String, String>, 
     }
     if let Some(session_dir) = context.session_dir.as_ref() {
         vars.insert("SESSION_DIR".to_string(), session_dir.display().to_string());
+    }
+    if let Some(git_environment) = resolve_git_environment(&context.current_dir) {
+        vars.insert(
+            GIT_DIR_ENV.to_string(),
+            git_environment.git_dir.display().to_string(),
+        );
+        vars.insert(
+            GIT_COMMON_DIR_ENV.to_string(),
+            git_environment.git_common_dir.display().to_string(),
+        );
     }
 
     let home = context
@@ -2111,6 +2132,77 @@ fn seed_variables(context: &SandboxContext) -> Result<BTreeMap<String, String>, 
     Ok(vars)
 }
 
+fn resolve_git_environment(start_dir: &Path) -> Option<GitEnvironment> {
+    for directory in ancestor_directories(&normalize_absolute_path(start_dir.to_path_buf())) {
+        let dot_git = directory.join(".git");
+        let Some(git_dir) = resolve_git_dir_path(&dot_git) else {
+            continue;
+        };
+        let git_common_dir = resolve_git_common_dir(&git_dir);
+        return Some(GitEnvironment {
+            git_dir,
+            git_common_dir,
+        });
+    }
+
+    None
+}
+
+fn resolve_git_dir_path(dot_git: &Path) -> Option<PathBuf> {
+    if dot_git.is_dir() {
+        return Some(canonicalize_or_normalize(dot_git));
+    }
+
+    if dot_git
+        .symlink_metadata()
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        let resolved = canonicalize_or_normalize(dot_git);
+        if resolved.is_dir() {
+            return Some(resolved);
+        }
+    }
+
+    if !dot_git.is_file() {
+        return None;
+    }
+
+    let contents = fs::read_to_string(dot_git).ok()?;
+    let line = contents.lines().find(|line| !line.trim().is_empty())?;
+    let git_dir = line.trim().strip_prefix("gitdir:")?.trim();
+    if git_dir.is_empty() {
+        return None;
+    }
+
+    let base_dir = dot_git.parent().unwrap_or_else(|| Path::new("/"));
+    let resolved = canonicalize_or_normalize(&resolve_relative_path(Path::new(git_dir), base_dir));
+    resolved.is_dir().then_some(resolved)
+}
+
+fn resolve_git_common_dir(git_dir: &Path) -> PathBuf {
+    let commondir = git_dir.join("commondir");
+    let Ok(contents) = fs::read_to_string(&commondir) else {
+        return git_dir.to_path_buf();
+    };
+    let value = contents.trim();
+    if value.is_empty() {
+        return git_dir.to_path_buf();
+    }
+
+    let resolved = canonicalize_or_normalize(&resolve_relative_path(Path::new(value), git_dir));
+    if resolved.is_dir() {
+        resolved
+    } else {
+        git_dir.to_path_buf()
+    }
+}
+
+fn canonicalize_or_normalize(path: &Path) -> PathBuf {
+    path.canonicalize()
+        .unwrap_or_else(|_| normalize_absolute_path(path.to_path_buf()))
+}
+
 fn resolve_builtin_request(request: &str) -> String {
     request.trim_start_matches("builtin/").to_string()
 }
@@ -2126,7 +2218,7 @@ NET DEFAULT ALLOW # Allow outbound network access by default.
 FS ALLOW READ . # Allow reading files inside this repository.
 FS ALLOW WRITE . # Allow edits inside this repository.
 USE os # Allow access to the operating system's shared filesystem without exposing personal directories.
-USE git # Allow git and read standard git configuration files.
+USE git # Allow git, standard git config, and linked worktree Git directories.
 USE shell # Allow the current shell binary and shell history when they apply.
 USE agent # Load agent-specific config and state when they apply.
 IF TEST -f ./Sandboxfile.local # Check for an optional repo-local sandbox extension file.
@@ -3283,6 +3375,132 @@ mod tests {
                 ("PATH".to_string(), "/bin:/usr/bin".to_string()),
             ]),
         }
+    }
+
+    #[test]
+    fn git_builtin_reads_resolved_linked_worktree_git_directories() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        let worktree = temp.path().join("worktree");
+        let git_common_dir = repo_root.join(".git");
+        let git_dir = git_common_dir.join("worktrees/feature");
+        fs::create_dir_all(&git_dir).expect("git dir");
+        fs::create_dir_all(&worktree).expect("worktree");
+        fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}\n", git_dir.display()),
+        )
+        .expect("git file");
+        fs::write(git_dir.join("commondir"), "../..\n").expect("commondir");
+        fs::write(
+            worktree.join(REPO_SANDBOXFILE),
+            "FS DEFAULT NONE\nUSE git\n",
+        )
+        .expect("sandboxfile");
+
+        let context = context_for(&worktree, &["git"]);
+        let plan = build_execution_plan(&context, &[]).expect("plan");
+        let expected_git_dir = canonicalize_or_normalize(&git_dir);
+        let expected_common_dir = canonicalize_or_normalize(&git_common_dir);
+
+        assert!(plan.policy.readable_roots.contains(&expected_git_dir));
+        assert!(plan.policy.readable_roots.contains(&expected_common_dir));
+        assert!(!plan.policy.writable_roots.contains(&expected_git_dir));
+        assert!(!plan.policy.writable_roots.contains(&expected_common_dir));
+        assert_eq!(
+            plan.environment.get(GIT_DIR_ENV).map(String::as_str),
+            Some(expected_git_dir.to_str().expect("utf8 git dir"))
+        );
+        assert_eq!(
+            plan.environment.get(GIT_COMMON_DIR_ENV).map(String::as_str),
+            Some(expected_common_dir.to_str().expect("utf8 common dir"))
+        );
+        assert_eq!(
+            plan.environment
+                .get("GIT_OPTIONAL_LOCKS")
+                .map(String::as_str),
+            Some("0")
+        );
+
+        let resolved = resolved_environment(
+            &plan,
+            &BTreeMap::from([
+                (GIT_DIR_ENV.to_string(), "/tmp/not-this-git-dir".to_string()),
+                (
+                    GIT_COMMON_DIR_ENV.to_string(),
+                    "/tmp/not-this-common-dir".to_string(),
+                ),
+            ]),
+        );
+        assert_eq!(
+            resolved.get(GIT_DIR_ENV).map(String::as_str),
+            Some(expected_git_dir.to_str().expect("utf8 git dir"))
+        );
+        assert_eq!(
+            resolved.get(GIT_COMMON_DIR_ENV).map(String::as_str),
+            Some(expected_common_dir.to_str().expect("utf8 common dir"))
+        );
+    }
+
+    #[test]
+    fn git_builtin_does_not_trust_inherited_git_directory_environment() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        let inherited_git_dir = temp.path().join("inherited-git-dir");
+        fs::create_dir_all(&repo_root).expect("repo");
+        fs::create_dir_all(&inherited_git_dir).expect("inherited git dir");
+        fs::write(
+            repo_root.join(REPO_SANDBOXFILE),
+            "FS DEFAULT NONE\nUSE git\n",
+        )
+        .expect("sandboxfile");
+
+        let mut context = context_for(&repo_root, &["git"]);
+        context.env.insert(
+            GIT_DIR_ENV.to_string(),
+            inherited_git_dir.display().to_string(),
+        );
+        context.env.insert(
+            GIT_COMMON_DIR_ENV.to_string(),
+            inherited_git_dir.display().to_string(),
+        );
+
+        let plan = build_execution_plan(&context, &[]).expect("plan");
+
+        assert!(
+            !plan
+                .policy
+                .readable_roots
+                .contains(&canonicalize_or_normalize(&inherited_git_dir))
+        );
+        assert!(
+            plan.removed_environment_keys
+                .contains(&GIT_DIR_ENV.to_string())
+        );
+        assert!(
+            plan.removed_environment_keys
+                .contains(&GIT_COMMON_DIR_ENV.to_string())
+        );
+
+        let resolved = resolved_environment(
+            &plan,
+            &BTreeMap::from([
+                (
+                    GIT_DIR_ENV.to_string(),
+                    inherited_git_dir.display().to_string(),
+                ),
+                (
+                    GIT_COMMON_DIR_ENV.to_string(),
+                    inherited_git_dir.display().to_string(),
+                ),
+            ]),
+        );
+        assert!(!resolved.contains_key(GIT_DIR_ENV));
+        assert!(!resolved.contains_key(GIT_COMMON_DIR_ENV));
+        assert_eq!(
+            resolved.get("GIT_OPTIONAL_LOCKS").map(String::as_str),
+            Some("0")
+        );
     }
 
     #[test]
