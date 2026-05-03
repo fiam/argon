@@ -169,6 +169,16 @@ private struct WorkspaceContentView: View {
       value: workspaceState.launchWarningMessage != nil
         || workspaceState.restoreFailureMessage != nil
     )
+    .alert(
+      workspaceState.worktreeRemovalErrorDialog?.title ?? "Couldn't Remove Worktree",
+      isPresented: worktreeRemovalErrorIsPresented
+    ) {
+      Button("Close", role: .cancel) {
+        workspaceState.dismissWorktreeRemovalError()
+      }
+    } message: {
+      Text(workspaceState.worktreeRemovalErrorDialog?.message ?? "")
+    }
     .toolbar {
       if workspaceState.selectedWorktree != nil {
         WorkspaceToolbarItems(
@@ -298,6 +308,17 @@ private struct WorkspaceContentView: View {
       set: { isPresented in
         if !isPresented {
           workspaceState.dismissShellSandboxfilePrompt()
+        }
+      }
+    )
+  }
+
+  private var worktreeRemovalErrorIsPresented: Binding<Bool> {
+    Binding(
+      get: { workspaceState.worktreeRemovalErrorDialog != nil },
+      set: { isPresented in
+        if !isPresented {
+          workspaceState.dismissWorktreeRemovalError()
         }
       }
     )
@@ -3650,7 +3671,7 @@ private struct WorkspaceRemoveWorktreeButton: View {
           pendingRemoval = removalRequest
         }
       } catch {
-        workspaceState.errorMessage = error.localizedDescription
+        workspaceState.presentWorktreeRemovalError(error, worktreeName: worktreeDisplayName)
       }
     }
   }
@@ -3669,9 +3690,13 @@ private struct WorkspaceRemoveWorktreeButton: View {
       do {
         try await workspaceState.removeWorktree(pendingRemoval, deleteBranch: deleteBranch)
       } catch {
-        workspaceState.errorMessage = error.localizedDescription
+        workspaceState.presentWorktreeRemovalError(error, worktreeName: pendingRemoval.displayName)
       }
     }
+  }
+
+  private var worktreeDisplayName: String {
+    worktree.branchName ?? URL(fileURLWithPath: worktree.path).lastPathComponent
   }
 }
 

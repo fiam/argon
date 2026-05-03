@@ -54,6 +54,7 @@ final class WorkspaceState {
   var selectedBranchTopology: BranchTopology?
   var selectedUpdatedAt: Date?
   var errorMessage: String?
+  var worktreeRemovalErrorDialog: WorkspaceErrorDialog?
   var launchWarningMessage: String?
   var restoreFailureMessage: String?
   var pendingShellSandboxfilePrompt: SandboxfilePromptRequest?
@@ -599,6 +600,20 @@ final class WorkspaceState {
       throw GitService.GitError.commandFailed(branchRemovalError)
     }
     errorMessage = nil
+  }
+
+  func presentWorktreeRemovalError(_ error: any Error, worktreeName: String?) {
+    worktreeRemovalErrorDialog = WorkspaceErrorDialog(
+      title: "Couldn't Remove Worktree",
+      message: Self.worktreeRemovalErrorMessage(
+        for: error,
+        worktreeName: worktreeName
+      )
+    )
+  }
+
+  func dismissWorktreeRemovalError() {
+    worktreeRemovalErrorDialog = nil
   }
 
   func summary(for worktreePath: String) -> WorktreeDiffSummary {
@@ -3512,6 +3527,27 @@ final class WorkspaceState {
     onRestorableStateChange?()
   }
 
+  private static func worktreeRemovalErrorMessage(
+    for error: any Error,
+    worktreeName: String?
+  ) -> String {
+    let reason = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+    let normalizedName = worktreeName?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    let prefix =
+      if let normalizedName, !normalizedName.isEmpty {
+        "Argon couldn't remove \(normalizedName)."
+      } else {
+        "Argon couldn't remove the worktree."
+      }
+
+    guard !reason.isEmpty else {
+      return prefix
+    }
+
+    return "\(prefix)\n\n\(reason)"
+  }
+
   private func resolvedInventorySelectionPath(
     preferredSelection: String,
     validPaths: Set<String>
@@ -3564,6 +3600,12 @@ struct RefreshedWorktree: Sendable {
   let reviewTarget: ResolvedTarget?
   let branchTopology: BranchTopology?
   let hasConflicts: Bool
+}
+
+struct WorkspaceErrorDialog: Identifiable, Equatable, Sendable {
+  let id = UUID()
+  let title: String
+  let message: String
 }
 
 private struct LoadedWorkspace: Sendable {

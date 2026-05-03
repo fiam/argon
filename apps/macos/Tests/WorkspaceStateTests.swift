@@ -1523,6 +1523,25 @@ struct WorkspaceStateTests {
     #expect(request.defaultDeletesBranch == true)
   }
 
+  @Test("worktree removal failures are prepared for an alert dialog")
+  @MainActor
+  func worktreeRemovalFailuresArePreparedForAnAlertDialog() throws {
+    let state = makeState()
+
+    state.presentWorktreeRemovalError(
+      GitService.GitError.commandFailed("fatal: '/tmp/repo/feature' is locked"),
+      worktreeName: "feature/window"
+    )
+
+    let dialog = try #require(state.worktreeRemovalErrorDialog)
+    #expect(dialog.title == "Couldn't Remove Worktree")
+    #expect(dialog.message.contains("Argon couldn't remove feature/window."))
+    #expect(dialog.message.contains("fatal: '/tmp/repo/feature' is locked"))
+
+    state.dismissWorktreeRemovalError()
+    #expect(state.worktreeRemovalErrorDialog == nil)
+  }
+
   @Test("refreshing the selected worktree updates the visible diff state")
   @MainActor
   func refreshingSelectedWorktreeUpdatesVisibleDiffState() {
