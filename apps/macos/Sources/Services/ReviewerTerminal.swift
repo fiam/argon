@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 struct TerminalLaunchConfiguration: Sendable {
@@ -6,8 +7,9 @@ struct TerminalLaunchConfiguration: Sendable {
   let currentDirectory: String
 
   private static let terminalTabIDEnvironmentKey = "ARGON_TERMINAL_TAB_ID"
+  private static let processEnvironmentLock = NSLock()
 
-  private static let strippedTerminalIdentityKeys = [
+  static let strippedTerminalIdentityKeys = [
     "NO_COLOR",
     "TERM",
     "COLORTERM",
@@ -206,6 +208,42 @@ struct TerminalLaunchConfiguration: Sendable {
     for key in strippedTerminalIdentityKeys {
       environment.removeValue(forKey: key)
     }
+  }
+
+  static func processEnvironmentKeysToHideForGhosttySurface(
+    launchEnvironment: [String: String]
+  ) -> [String] {
+    strippedTerminalIdentityKeys.filter { launchEnvironment[$0] == nil }
+  }
+
+  static func withHiddenProcessEnvironment<Result>(
+    keys: [String],
+    _ body: () -> Result
+  ) -> Result {
+    let keys = Array(Set(keys)).sorted()
+    guard !keys.isEmpty else { return body() }
+
+    processEnvironmentLock.lock()
+    let savedValues = keys.map { key -> (key: String, value: String?) in
+      (key, getenv(key).map { String(cString: $0) })
+    }
+
+    for key in keys {
+      unsetenv(key)
+    }
+
+    defer {
+      for savedValue in savedValues {
+        if let value = savedValue.value {
+          setenv(savedValue.key, value, 1)
+        } else {
+          unsetenv(savedValue.key)
+        }
+      }
+      processEnvironmentLock.unlock()
+    }
+
+    return body()
   }
 
   private static func utf8LocaleIdentifier() -> String {

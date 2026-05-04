@@ -1135,29 +1135,37 @@ final class GhosttyTerminalHostView: NSView {
       (key, launch.environment[key] ?? "")
     }
     let command = launch.ghosttyCommand
+    let hiddenProcessEnvironmentKeys =
+      TerminalLaunchConfiguration.processEnvironmentKeysToHideForGhosttySurface(
+        launchEnvironment: launch.environment
+      )
 
-    return launch.currentDirectory.withCString { workingDirectory in
-      command.withCString { commandPointer in
-        envPairs.map(\.0).withCStrings { keys in
-          envPairs.map(\.1).withCStrings { values in
-            var envVars: [ghostty_env_var_s] = []
-            envVars.reserveCapacity(envPairs.count)
-            for index in envPairs.indices {
-              envVars.append(
-                ghostty_env_var_s(
-                  key: keys[index],
-                  value: values[index]
-                ))
-            }
-            let envVarCount = envVars.count
+    return TerminalLaunchConfiguration.withHiddenProcessEnvironment(
+      keys: hiddenProcessEnvironmentKeys
+    ) {
+      launch.currentDirectory.withCString { workingDirectory in
+        command.withCString { commandPointer in
+          envPairs.map(\.0).withCStrings { keys in
+            envPairs.map(\.1).withCStrings { values in
+              var envVars: [ghostty_env_var_s] = []
+              envVars.reserveCapacity(envPairs.count)
+              for index in envPairs.indices {
+                envVars.append(
+                  ghostty_env_var_s(
+                    key: keys[index],
+                    value: values[index]
+                  ))
+              }
+              let envVarCount = envVars.count
 
-            return envVars.withUnsafeMutableBufferPointer { buffer in
-              surfaceConfig.working_directory = workingDirectory
-              surfaceConfig.command = commandPointer
-              surfaceConfig.env_vars = buffer.baseAddress
-              surfaceConfig.env_var_count = envVarCount
-              surfaceConfig.initial_input = nil
-              return ghostty_surface_new(app, &surfaceConfig)
+              return envVars.withUnsafeMutableBufferPointer { buffer in
+                surfaceConfig.working_directory = workingDirectory
+                surfaceConfig.command = commandPointer
+                surfaceConfig.env_vars = buffer.baseAddress
+                surfaceConfig.env_var_count = envVarCount
+                surfaceConfig.initial_input = nil
+                return ghostty_surface_new(app, &surfaceConfig)
+              }
             }
           }
         }

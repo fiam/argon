@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 
@@ -91,6 +92,57 @@ struct ReviewerTerminalTests {
       environment["GHOSTTY_RESOURCES_DIR"] == "/Applications/Ghostty.app/Contents/Resources/ghostty"
     )
     #expect(environment["GHOSTTY_SHELL_FEATURES"] == "path,title")
+  }
+
+  @Test("ghostty surface hides stripped inherited process environment")
+  func ghosttySurfaceHidesStrippedInheritedProcessEnvironment() {
+    let launchEnvironment = ReviewerTerminalLaunch.terminalEnvironment(
+      base: [
+        "NO_COLOR": "1",
+        "TERM": "xterm-ghostty",
+        "COLORTERM": "24bit",
+        "TERMINFO": "/tmp/terminfo",
+        "VTE_VERSION": "123",
+      ],
+      sessionId: "session-123",
+      repoRoot: "/tmp/repo"
+    )
+
+    let hiddenKeys =
+      ReviewerTerminalLaunch.processEnvironmentKeysToHideForGhosttySurface(
+        launchEnvironment: launchEnvironment
+      )
+
+    #expect(hiddenKeys.contains("NO_COLOR"))
+    #expect(hiddenKeys.contains("TERMINFO"))
+    #expect(hiddenKeys.contains("VTE_VERSION"))
+    #expect(!hiddenKeys.contains("TERM"))
+    #expect(!hiddenKeys.contains("COLORTERM"))
+  }
+
+  @Test("hidden process environment scope restores values")
+  func hiddenProcessEnvironmentScopeRestoresValues() {
+    let key = "ARGON_TEST_HIDDEN_TERMINAL_ENV"
+    let originalValue = getenv(key).map { String(cString: $0) }
+
+    defer {
+      if let originalValue {
+        setenv(key, originalValue, 1)
+      } else {
+        unsetenv(key)
+      }
+    }
+
+    setenv(key, "visible-before", 1)
+
+    let valueInsideScope = ReviewerTerminalLaunch.withHiddenProcessEnvironment(
+      keys: [key, key]
+    ) {
+      getenv(key).map { String(cString: $0) }
+    }
+
+    #expect(valueInsideScope == nil)
+    #expect(getenv(key).map { String(cString: $0) } == "visible-before")
   }
 
   @Test("terminal environment defaults TERM_PROGRAM to ghostty")
