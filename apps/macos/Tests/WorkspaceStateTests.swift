@@ -1604,6 +1604,106 @@ struct WorkspaceStateTests {
     #expect(state.worktrees.map(\.path) == ["/tmp/repo"])
   }
 
+  @Test("inventory updates select the next worktree when the selected worktree disappears")
+  @MainActor
+  func inventoryUpdatesSelectTheNextWorktreeWhenTheSelectedWorktreeDisappears() {
+    let state = makeState()
+    state.worktrees = [
+      DiscoveredWorktree(
+        path: "/tmp/repo",
+        branchName: "main",
+        headSHA: "abc123",
+        isBaseWorktree: true,
+        isDetached: false
+      ),
+      DiscoveredWorktree(
+        path: "/tmp/repo/feature",
+        branchName: "feature/window",
+        headSHA: "def456",
+        isBaseWorktree: false,
+        isDetached: false
+      ),
+      DiscoveredWorktree(
+        path: "/tmp/repo/review",
+        branchName: "review/comments",
+        headSHA: "ghi789",
+        isBaseWorktree: false,
+        isDetached: false
+      ),
+    ]
+    state.selectedWorktreePath = "/tmp/repo/feature"
+
+    state.applyDiscoveredWorktreeInventory([
+      DiscoveredWorktree(
+        path: "/tmp/repo",
+        branchName: "main",
+        headSHA: "abc123",
+        isBaseWorktree: true,
+        isDetached: false
+      ),
+      DiscoveredWorktree(
+        path: "/tmp/repo/review",
+        branchName: "review/comments",
+        headSHA: "ghi789",
+        isBaseWorktree: false,
+        isDetached: false
+      ),
+    ])
+
+    #expect(state.selectedWorktreePath == "/tmp/repo/review")
+    #expect(state.worktrees.map(\.path) == ["/tmp/repo", "/tmp/repo/review"])
+  }
+
+  @Test("inventory updates select the previous worktree when the selected worktree was last")
+  @MainActor
+  func inventoryUpdatesSelectThePreviousWorktreeWhenTheSelectedWorktreeWasLast() {
+    let state = makeState()
+    state.worktrees = [
+      DiscoveredWorktree(
+        path: "/tmp/repo",
+        branchName: "main",
+        headSHA: "abc123",
+        isBaseWorktree: true,
+        isDetached: false
+      ),
+      DiscoveredWorktree(
+        path: "/tmp/repo/feature",
+        branchName: "feature/window",
+        headSHA: "def456",
+        isBaseWorktree: false,
+        isDetached: false
+      ),
+      DiscoveredWorktree(
+        path: "/tmp/repo/review",
+        branchName: "review/comments",
+        headSHA: "ghi789",
+        isBaseWorktree: false,
+        isDetached: false
+      ),
+    ]
+    state.selectedWorktreePath = "/tmp/repo/review"
+
+    state.applyDiscoveredWorktreeInventory([
+      DiscoveredWorktree(
+        path: "/tmp/repo",
+        branchName: "main",
+        headSHA: "abc123",
+        isBaseWorktree: true,
+        isDetached: false
+      ),
+      DiscoveredWorktree(
+        path: "/tmp/repo/feature",
+        branchName: "feature/window",
+        headSHA: "def456",
+        isBaseWorktree: false,
+        isDetached: false
+      ),
+    ])
+
+    #expect(state.selectedWorktreePath == "/tmp/repo/feature")
+    #expect(state.worktrees.map(\.path) == ["/tmp/repo", "/tmp/repo/feature"])
+  }
+
   @Test("restored selections fall back to the base worktree when the selected worktree was deleted")
   @MainActor
   func restoredSelectionsFallBackToTheBaseWorktreeWhenSelectedWorktreeWasDeleted() {

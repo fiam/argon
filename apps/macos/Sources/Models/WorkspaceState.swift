@@ -2704,7 +2704,8 @@ final class WorkspaceState {
       return
     }
 
-    let currentPaths = Set(worktrees.map { normalizedPath($0.path) })
+    let currentWorktrees = worktrees
+    let currentPaths = Set(currentWorktrees.map { normalizedPath($0.path) })
     let validPaths = Set(discoveredWorktrees.map { normalizedPath($0.path) })
     let addedPaths = validPaths.subtracting(currentPaths)
     let preservedSelection = normalizedSelectedWorktreePath
@@ -2717,7 +2718,9 @@ final class WorkspaceState {
 
     if let nextSelection = resolvedInventorySelectionPath(
       preferredSelection: preferredSelection,
-      validPaths: validPaths
+      validPaths: validPaths,
+      previousWorktrees: currentWorktrees,
+      discoveredWorktrees: discoveredWorktrees
     ) {
       if nextSelection == preservedSelection {
         selectedWorktreePath = nextSelection
@@ -3806,10 +3809,20 @@ final class WorkspaceState {
 
   private func resolvedInventorySelectionPath(
     preferredSelection: String,
-    validPaths: Set<String>
+    validPaths: Set<String>,
+    previousWorktrees: [DiscoveredWorktree],
+    discoveredWorktrees: [DiscoveredWorktree]
   ) -> String? {
     if validPaths.contains(preferredSelection) {
       return preferredSelection
+    }
+
+    if let nearestSelection = nearestInventorySelectionPath(
+      replacing: preferredSelection,
+      previousWorktrees: previousWorktrees,
+      discoveredWorktrees: discoveredWorktrees
+    ) {
+      return nearestSelection
     }
 
     let normalizedRepoRoot = normalizedPath(target.repoRoot)
@@ -3817,7 +3830,22 @@ final class WorkspaceState {
       return normalizedRepoRoot
     }
 
-    return worktrees.first.map { normalizedPath($0.path) }
+    return discoveredWorktrees.first.map { normalizedPath($0.path) }
+  }
+
+  private func nearestInventorySelectionPath(
+    replacing preferredSelection: String,
+    previousWorktrees: [DiscoveredWorktree],
+    discoveredWorktrees: [DiscoveredWorktree]
+  ) -> String? {
+    guard !discoveredWorktrees.isEmpty,
+      let previousIndex = previousWorktrees.firstIndex(where: {
+        normalizedPath($0.path) == preferredSelection
+      })
+    else { return nil }
+
+    let nearestIndex = min(previousIndex, discoveredWorktrees.count - 1)
+    return normalizedPath(discoveredWorktrees[nearestIndex].path)
   }
 
   private func clearSelectedWorktreeDetails() {
