@@ -184,6 +184,7 @@ private struct WorkspaceContentView: View {
         WorkspaceToolbarItems(
           showsFinalizeControls: workspaceState.canFinalizeSelectedWorktree,
           showsReviewProgress: isPreparingSelectedWorktreeReview,
+          showsMergeBackProgress: workspaceState.isMergeBackInProgressForSelectedWorktree,
           isReviewDisabled: workspaceState.isPresentingReviewPreparationSheet,
           canRebase: workspaceState.canRebaseSelectedWorktree,
           canMergeBack: workspaceState.canMergeBackSelectedWorktree,
@@ -613,6 +614,10 @@ private struct WorkspaceSidebarRow: View {
     workspaceState.worktreeNeedsAttention(for: worktree.path)
   }
 
+  private var isMergeBackCompleted: Bool {
+    workspaceState.isMergeBackCompleted(for: worktree.path)
+  }
+
   private var activeAgentCount: Int {
     workspaceState.activeAgentCount(for: worktree.path)
   }
@@ -685,7 +690,18 @@ private struct WorkspaceSidebarRow: View {
       )
     }
 
-    if let waitingForHumanAgentActivity {
+    if isMergeBackCompleted {
+      tokens.append(
+        WorkspaceSidebarMetadataToken(
+          id: "merge-back-complete",
+          label: "done",
+          compactLabel: "done",
+          symbolName: "checkmark.circle.fill",
+          tint: .green,
+          accessibilityIdentifier: "workspace-sidebar-merge-back-complete"
+        )
+      )
+    } else if let waitingForHumanAgentActivity {
       tokens.append(.agent(waitingForHumanAgentActivity))
     } else if needsAttention {
       tokens.append(
@@ -1034,6 +1050,7 @@ private struct WorkspaceCenterPane: View {
 private struct WorkspaceToolbarItems: ToolbarContent {
   let showsFinalizeControls: Bool
   let showsReviewProgress: Bool
+  let showsMergeBackProgress: Bool
   let isReviewDisabled: Bool
   let canRebase: Bool
   let canMergeBack: Bool
@@ -1081,12 +1098,21 @@ private struct WorkspaceToolbarItems: ToolbarContent {
     }
 
     ToolbarItem(placement: .primaryAction) {
-      Button(action: onMergeBack) {
-        Image(systemName: "arrow.triangle.branch")
+      if showsMergeBackProgress {
+        ProgressView()
+          .progressViewStyle(.circular)
+          .controlSize(.small)
+          .frame(width: 24, height: 24)
+          .help(mergeBackHelpText)
+          .accessibilityLabel("Merge Back Running")
+      } else {
+        Button(action: onMergeBack) {
+          Image(systemName: "arrow.triangle.branch")
+        }
+        .help(mergeBackHelpText)
+        .accessibilityLabel("Merge Back")
+        .disabled(!showsFinalizeControls || !canMergeBack)
       }
-      .help(mergeBackHelpText)
-      .accessibilityLabel("Merge Back")
-      .disabled(!showsFinalizeControls || !canMergeBack)
     }
 
     ToolbarItem(placement: .primaryAction) {
@@ -1113,8 +1139,11 @@ private struct WorkspaceToolbarItems: ToolbarContent {
     if !showsFinalizeControls {
       return "The base worktree is already the landing branch."
     }
+    if showsMergeBackProgress {
+      return "Merge back is running."
+    }
     if !canMergeBack {
-      return "Merge Back is only available when this worktree has commits to land."
+      return "Merge Back requires a branch-backed worktree."
     }
     return finalizeHelpText("Merge back to base branch")
   }

@@ -115,7 +115,7 @@ wait_for_pids_to_exit() {
 }
 
 quit_running_argon() {
-    local -a pids
+    local -a pids=()
     local pid
     while IFS= read -r pid; do
         if [[ -n "$pid" ]]; then

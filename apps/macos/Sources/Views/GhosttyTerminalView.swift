@@ -374,6 +374,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
     while clock.now < deadline {
       if let host = GhosttyHostRegistry.host(for: terminalID) {
         host.injectText(prompt)
+        try? await Task.sleep(for: .milliseconds(150))
         host.submitReturn()
         return true
       }

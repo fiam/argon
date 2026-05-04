@@ -700,14 +700,93 @@ struct WorkspaceStateTests {
 
   @Test("merge back fast-forwards a single ahead commit without showing strategy choices")
   @MainActor
-  func mergeBackFastForwardsSingleAheadCommitWithoutShowingStrategyChoices() {
+  func mergeBackFastForwardsSingleAheadCommitWithoutShowingStrategyChoices() async {
+    let restoreMergeBack = stubFastForwardMergeBackPerformer { _ in
+      FastForwardMergeBackResult(
+        baseBranchName: "main",
+        headBranchName: "feature/window",
+        branchHead: "def456",
+        landedCommitCount: 1
+      )
+    }
+    defer { restoreMergeBack() }
+
     let state = makeState()
     selectFeatureWorktree(in: state)
     state.selectedBranchTopology = BranchTopology(aheadCount: 1, behindCount: 0)
 
     state.beginMergeBackFlow()
 
+    #expect(state.activeFinalizeAction == nil)
+    #expect(state.isPresentingMergeBackOptions == false)
+    #expect(state.mergeBackOptions.isEmpty)
+    #expect(state.isPresentingAgentLaunchSheet == false)
+    #expect(state.isMergeBackInProgress(for: "/tmp/repo/feature") == true)
+    #expect(
+      await waitUntil {
+        state.isMergeBackCompleted(for: "/tmp/repo/feature")
+      })
+    #expect(state.isMergeBackInProgress(for: "/tmp/repo/feature") == false)
+    #expect(
+      state.launchWarningMessage == "Fast-forwarded main to feature/window (1 commit)."
+    )
+  }
+
+  @Test("merge back falls back to an agent when local fast-forward is unavailable")
+  @MainActor
+  func mergeBackFallsBackToAgentWhenLocalFastForwardIsUnavailable() async {
+    let restoreMergeBack = stubFastForwardMergeBackPerformer { _ in
+      throw GitService.GitError.commandFailed("The linked worktree has uncommitted changes.")
+    }
+    defer { restoreMergeBack() }
+
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+    state.selectedBranchTopology = BranchTopology(aheadCount: 1, behindCount: 0)
+
+    state.beginMergeBackFlow()
+
+    #expect(state.isMergeBackInProgress(for: "/tmp/repo/feature") == true)
+    #expect(
+      await waitUntil {
+        state.activeFinalizeAction == .fastForwardToBase
+          && state.isPresentingAgentLaunchSheet
+      })
+    #expect(state.isMergeBackInProgress(for: "/tmp/repo/feature") == false)
+    #expect(state.isMergeBackCompleted(for: "/tmp/repo/feature") == false)
+  }
+
+  @Test("merge back with no ahead commits starts a commit-first flow")
+  @MainActor
+  func mergeBackWithNoAheadCommitsStartsCommitFirstFlow() throws {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+    state.selectedBranchTopology = BranchTopology(aheadCount: 0, behindCount: 0)
+
+    #expect(state.canMergeBackSelectedWorktree == true)
+
+    state.beginMergeBackFlow()
+
     #expect(state.activeFinalizeAction == .fastForwardToBase)
+    #expect(state.isPresentingMergeBackOptions == false)
+    #expect(state.mergeBackOptions.isEmpty)
+    #expect(state.isPresentingAgentLaunchSheet == true)
+
+    let prompt = try state.finalizePrompt(for: .fastForwardToBase)
+    #expect(prompt.contains("No commits ahead yet:"))
+    #expect(prompt.contains("create one clear commit on feature/window before landing it"))
+  }
+
+  @Test("merge back rebases a single diverged commit without showing strategy choices")
+  @MainActor
+  func mergeBackRebasesSingleDivergedCommitWithoutShowingStrategyChoices() {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+    state.selectedBranchTopology = BranchTopology(aheadCount: 1, behindCount: 2)
+
+    state.beginMergeBackFlow()
+
+    #expect(state.activeFinalizeAction == .rebaseAndMergeToBase)
     #expect(state.isPresentingMergeBackOptions == false)
     #expect(state.mergeBackOptions.isEmpty)
     #expect(state.isPresentingAgentLaunchSheet == true)
@@ -847,6 +926,57 @@ struct WorkspaceStateTests {
       })
     #expect(
       state.pendingFinalizeRequest(for: .openPullRequest, worktreePath: "/tmp/repo/feature") == nil)
+  }
+
+  @Test("successful merge back marks worktree done and clears agent input state")
+  @MainActor
+  func successfulMergeBackMarksWorktreeDoneAndClearsAgentInputState() async throws {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+    let tab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          sandboxEnabled: false
+        ))
+    )
+
+    let prompt = try state.prepareFinalizePrompt(
+      for: .fastForwardToBase,
+      sourceTabID: tab.id
+    )
+    let pending = try #require(
+      state.pendingFinalizeRequest(for: .fastForwardToBase, worktreePath: "/tmp/repo/feature")
+    )
+    tab.hasAttention = true
+    tab.agentActivityState = .waitingForHuman
+
+    #expect(prompt.contains(pending.responseFilePath))
+    #expect(state.isMergeBackInProgress(for: "/tmp/repo/feature") == true)
+
+    let response = WorkspaceAgentControlResponse.finalize(
+      requestID: pending.request.id,
+      action: .fastForwardToBase,
+      status: .success,
+      message: "Fast-forwarded main.",
+      branchHead: "abc123def456",
+      pullRequestURL: nil,
+      followUp: nil
+    )
+    try write(agentControlResponse: response, to: pending.responseFilePath)
+
+    #expect(
+      await waitUntil {
+        state.isMergeBackCompleted(for: "/tmp/repo/feature")
+      })
+    #expect(state.isMergeBackInProgress(for: "/tmp/repo/feature") == false)
+    #expect(
+      state.pendingFinalizeRequest(for: .fastForwardToBase, worktreePath: "/tmp/repo/feature")
+        == nil)
+    #expect(tab.hasAttention == false)
+    #expect(tab.agentActivityState == .idle)
   }
 
   @Test("staged review launches activate after the agent sheet dismisses")
@@ -3415,6 +3545,19 @@ struct WorkspaceStateTests {
     ]
     state.selectedWorktreePath = "/tmp/repo"
     return state
+  }
+
+  @MainActor
+  private func stubFastForwardMergeBackPerformer(
+    _ performer:
+      @escaping @Sendable (FastForwardMergeBackRequest) throws ->
+      FastForwardMergeBackResult
+  ) -> () -> Void {
+    let previousPerformer = WorkspaceState.fastForwardMergeBackPerformer
+    WorkspaceState.fastForwardMergeBackPerformer = performer
+    return {
+      WorkspaceState.fastForwardMergeBackPerformer = previousPerformer
+    }
   }
 
   @MainActor

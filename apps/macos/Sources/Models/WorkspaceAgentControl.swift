@@ -181,7 +181,8 @@ struct WorkspaceAgentControlRequest: Identifiable, Equatable, Sendable {
     worktreePath: String,
     branchName: String,
     baseRef: String,
-    compareURL: String?
+    compareURL: String?,
+    commitBeforeLanding: Bool = false
   ) -> Self {
     Self(
       worktreePath: worktreePath,
@@ -191,7 +192,8 @@ struct WorkspaceAgentControlRequest: Identifiable, Equatable, Sendable {
         worktreePath: worktreePath,
         branchName: branchName,
         baseRef: baseRef,
-        compareURL: compareURL
+        compareURL: compareURL,
+        commitBeforeLanding: commitBeforeLanding
       )
     )
   }

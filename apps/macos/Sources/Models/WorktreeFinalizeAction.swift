@@ -10,6 +10,15 @@ enum WorktreeFinalizeAction: String, Identifiable, Sendable {
 
   var id: String { rawValue }
 
+  var isMergeBackAction: Bool {
+    switch self {
+    case .rebaseOntoBase, .openPullRequest:
+      false
+    case .fastForwardToBase, .mergeCommitToBase, .rebaseAndMergeToBase, .squashAndMergeToBase:
+      true
+    }
+  }
+
   var title: String {
     switch self {
     case .rebaseOntoBase:
@@ -111,11 +120,24 @@ enum WorktreeFinalizeAction: String, Identifiable, Sendable {
     worktreePath: String,
     branchName: String,
     baseRef: String,
-    compareURL: String?
+    compareURL: String?,
+    commitBeforeLanding: Bool = false
   ) -> String {
     let compareSection =
       if let compareURL, !compareURL.isEmpty {
         "\nSuggested compare URL: \(compareURL)"
+      } else {
+        ""
+      }
+    let commitBeforeLandingSection =
+      if commitBeforeLanding {
+        """
+
+        No commits ahead yet:
+        - First inspect the linked worktree for uncommitted changes.
+        - Stage the intended changes and create one clear commit on \(branchName) before landing it.
+        - Do not create an empty commit; report `failed` if there is nothing to commit.
+        """
       } else {
         ""
       }
@@ -129,7 +151,7 @@ enum WorktreeFinalizeAction: String, Identifiable, Sendable {
         Base worktree: \(repoRoot)
         Linked worktree: \(worktreePath)
         Feature branch: \(branchName)
-        Base branch: \(baseRef)\(compareSection)
+        Base branch: \(baseRef)\(compareSection)\(commitBeforeLandingSection)
 
         Expectations:
         1. Rebase \(branchName) onto \(baseRef) in the linked worktree at \(worktreePath).
@@ -147,7 +169,7 @@ enum WorktreeFinalizeAction: String, Identifiable, Sendable {
         Base worktree: \(repoRoot)
         Linked worktree: \(worktreePath)
         Feature branch: \(branchName)
-        Base branch: \(baseRef)\(compareSection)
+        Base branch: \(baseRef)\(compareSection)\(commitBeforeLandingSection)
 
         Expectations:
         1. Validate the linked worktree changes first at \(worktreePath).
@@ -166,7 +188,7 @@ enum WorktreeFinalizeAction: String, Identifiable, Sendable {
         Base worktree: \(repoRoot)
         Linked worktree: \(worktreePath)
         Feature branch: \(branchName)
-        Base branch: \(baseRef)\(compareSection)
+        Base branch: \(baseRef)\(compareSection)\(commitBeforeLandingSection)
 
         Expectations:
         1. Validate the linked worktree changes first at \(worktreePath).
@@ -185,7 +207,7 @@ enum WorktreeFinalizeAction: String, Identifiable, Sendable {
         Base worktree: \(repoRoot)
         Linked worktree: \(worktreePath)
         Feature branch: \(branchName)
-        Base branch: \(baseRef)\(compareSection)
+        Base branch: \(baseRef)\(compareSection)\(commitBeforeLandingSection)
 
         Expectations:
         1. Rebase \(branchName) onto \(baseRef) in the linked worktree at \(worktreePath).
@@ -204,7 +226,7 @@ enum WorktreeFinalizeAction: String, Identifiable, Sendable {
         Base worktree: \(repoRoot)
         Linked worktree: \(worktreePath)
         Feature branch: \(branchName)
-        Base branch: \(baseRef)\(compareSection)
+        Base branch: \(baseRef)\(compareSection)\(commitBeforeLandingSection)
 
         Expectations:
         1. Validate the linked worktree changes first at \(worktreePath).

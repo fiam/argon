@@ -192,6 +192,99 @@ struct GitServiceTests {
     #expect(topology?.canFastForwardBase == false)
   }
 
+  @Test("fastForwardMergeBack advances a clean up-to-date base worktree")
+  func fastForwardMergeBackAdvancesCleanUpToDateBaseWorktree() throws {
+    let fixture = try makeFixtureDirectory()
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let repo = fixture.appendingPathComponent("repo")
+    let worktree = fixture.appendingPathComponent("feature-worktree")
+    try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+
+    try git(repo, ["init"])
+    try git(repo, ["config", "user.name", "Argon Test"])
+    try git(repo, ["config", "user.email", "argon-test@example.com"])
+    try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    try git(repo, ["add", "a.txt"])
+    try git(repo, ["commit", "-m", "init"])
+    try git(repo, ["branch", "-M", "main"])
+    let baseHead = try git(repo, ["rev-parse", "HEAD"]).trimmingCharacters(
+      in: .whitespacesAndNewlines)
+
+    try git(repo, ["worktree", "add", "-b", "feature/direct", worktree.path, "HEAD"])
+    try "one\nfeature\n".write(
+      to: worktree.appendingPathComponent("a.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(worktree, ["commit", "-am", "feature"])
+    let featureHead = try git(worktree, ["rev-parse", "HEAD"]).trimmingCharacters(
+      in: .whitespacesAndNewlines)
+
+    let result = try GitService.fastForwardMergeBack(
+      FastForwardMergeBackRequest(
+        repoRoot: repo.path,
+        worktreePath: worktree.path,
+        branchName: "feature/direct",
+        baseRef: "main",
+        headRef: "feature/direct"
+      ))
+
+    let newBaseHead = try git(repo, ["rev-parse", "HEAD"]).trimmingCharacters(
+      in: .whitespacesAndNewlines)
+    #expect(baseHead != featureHead)
+    #expect(result.branchHead == featureHead)
+    #expect(result.landedCommitCount == 1)
+    #expect(result.message == "Fast-forwarded main to feature/direct (1 commit).")
+    #expect(newBaseHead == featureHead)
+  }
+
+  @Test("fastForwardMergeBack refuses dirty linked worktrees")
+  func fastForwardMergeBackRefusesDirtyLinkedWorktrees() throws {
+    let fixture = try makeFixtureDirectory()
+    defer { try? FileManager.default.removeItem(at: fixture) }
+    let repo = fixture.appendingPathComponent("repo")
+    let worktree = fixture.appendingPathComponent("feature-worktree")
+    try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+
+    try git(repo, ["init"])
+    try git(repo, ["config", "user.name", "Argon Test"])
+    try git(repo, ["config", "user.email", "argon-test@example.com"])
+    try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+    try git(repo, ["add", "a.txt"])
+    try git(repo, ["commit", "-m", "init"])
+    try git(repo, ["branch", "-M", "main"])
+    let baseHead = try git(repo, ["rev-parse", "HEAD"]).trimmingCharacters(
+      in: .whitespacesAndNewlines)
+
+    try git(repo, ["worktree", "add", "-b", "feature/dirty", worktree.path, "HEAD"])
+    try "one\nfeature\n".write(
+      to: worktree.appendingPathComponent("a.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(worktree, ["commit", "-am", "feature"])
+    try "one\nfeature\ndirty\n".write(
+      to: worktree.appendingPathComponent("a.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+
+    #expect(throws: GitService.GitError.self) {
+      try GitService.fastForwardMergeBack(
+        FastForwardMergeBackRequest(
+          repoRoot: repo.path,
+          worktreePath: worktree.path,
+          branchName: "feature/dirty",
+          baseRef: "main",
+          headRef: "feature/dirty"
+        ))
+    }
+
+    let newBaseHead = try git(repo, ["rev-parse", "HEAD"]).trimmingCharacters(
+      in: .whitespacesAndNewlines)
+    #expect(newBaseHead == baseHead)
+  }
+
   @Test("defaultWorktreeStartPoint prefers local branch for a remote base")
   func defaultWorktreeStartPointPrefersLocalBranchForRemoteBase() throws {
     let fixture = try makeFixtureDirectory()

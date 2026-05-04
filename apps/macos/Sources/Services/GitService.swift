@@ -37,6 +37,27 @@ struct BranchTopology: Hashable, Sendable {
   }
 }
 
+struct FastForwardMergeBackRequest: Hashable, Sendable {
+  let repoRoot: String
+  let worktreePath: String
+  let branchName: String
+  let baseRef: String
+  let headRef: String
+}
+
+struct FastForwardMergeBackResult: Hashable, Sendable {
+  let baseBranchName: String
+  let headBranchName: String
+  let branchHead: String
+  let landedCommitCount: Int
+
+  var message: String {
+    let commitLabel = landedCommitCount == 1 ? "commit" : "commits"
+    return
+      "Fast-forwarded \(baseBranchName) to \(headBranchName) (\(landedCommitCount) \(commitLabel))."
+  }
+}
+
 struct DiscoveredWorktree: Identifiable, Hashable, Sendable {
   var id: String { path }
 
@@ -361,6 +382,80 @@ enum GitService {
       "branch", force ? "-D" : "-d",
       trimmedBranchName,
     ])
+  }
+
+  static func fastForwardMergeBack(
+    _ request: FastForwardMergeBackRequest
+  ) throws -> FastForwardMergeBackResult {
+    let repoRoot = normalizePath(request.repoRoot)
+    let worktreePath = normalizePath(request.worktreePath)
+    let branchName = request.branchName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let baseRef = request.baseRef.trimmingCharacters(in: .whitespacesAndNewlines)
+    let headRef = request.headRef.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    guard !branchName.isEmpty else {
+      throw GitError.commandFailed("Branch name is required.")
+    }
+    guard !baseRef.isEmpty else {
+      throw GitError.commandFailed("Base branch is required.")
+    }
+
+    guard let baseBranchName = currentBranchName(repoRoot: repoRoot) else {
+      throw GitError.commandFailed("The base worktree must be on a branch.")
+    }
+    let expectedBaseBranchName = githubBranchName(baseRef)
+    guard baseBranchName == baseRef || baseBranchName == expectedBaseBranchName else {
+      throw GitError.commandFailed(
+        "The base worktree is on \(baseBranchName), not \(expectedBaseBranchName)."
+      )
+    }
+
+    guard !hasUncommittedChanges(repoRoot: repoRoot) else {
+      throw GitError.commandFailed("The base worktree has uncommitted changes.")
+    }
+    guard !hasUncommittedChanges(repoRoot: worktreePath) else {
+      throw GitError.commandFailed("The linked worktree has uncommitted changes.")
+    }
+
+    guard let baseHead = resolveRef(repoRoot: repoRoot, ref: "HEAD"),
+      let expectedBaseHead = resolveRef(repoRoot: repoRoot, ref: baseRef)
+    else {
+      throw GitError.commandFailed("Could not resolve the base branch.")
+    }
+    guard baseHead == expectedBaseHead else {
+      throw GitError.commandFailed("The base worktree is not up to date with \(baseRef).")
+    }
+
+    let mergeHeadRef = headRef.isEmpty ? branchName : headRef
+    guard let branchHead = resolveRef(repoRoot: repoRoot, ref: mergeHeadRef) else {
+      throw GitError.commandFailed("Could not resolve \(branchName).")
+    }
+    guard isAncestor(repoRoot: repoRoot, ancestor: "HEAD", descendant: branchHead) else {
+      throw GitError.commandFailed("\(baseBranchName) cannot be fast-forwarded to \(branchName).")
+    }
+
+    let landedCommitCount = commitCount(repoRoot: repoRoot, range: "HEAD..\(branchHead)") ?? 0
+    guard landedCommitCount > 0 else {
+      throw GitError.commandFailed("\(branchName) has no commits to land.")
+    }
+
+    _ = try requireGit([
+      "-C", repoRoot,
+      "merge", "--ff-only",
+      branchHead,
+    ])
+
+    guard resolveRef(repoRoot: repoRoot, ref: "HEAD") == branchHead else {
+      throw GitError.commandFailed(
+        "Fast-forward did not update \(baseBranchName) to \(branchName).")
+    }
+
+    return FastForwardMergeBackResult(
+      baseBranchName: baseBranchName,
+      headBranchName: branchName,
+      branchHead: branchHead,
+      landedCommitCount: landedCommitCount
+    )
   }
 
   static func diffSummary(
