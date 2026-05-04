@@ -1,5 +1,10 @@
 import Foundation
 
+enum TerminalSessionReferenceContextKey {
+  static let preservedForRestore = "preservedForRestore"
+  static let storageDirectory = "storageDir"
+}
+
 struct TerminalSessionReference: Codable, Equatable, Sendable {
   let backendID: String
   let sessionID: String
@@ -20,13 +25,12 @@ protocol TerminalSessionBackend: Sendable {
   var backendID: String { get }
 
   func isAvailable() -> Bool
-  func reference(for tabID: UUID, projectPath: String) -> TerminalSessionReference?
+  func reference(for tabID: UUID, workspacePath: String) -> TerminalSessionReference?
   func stop(reference: TerminalSessionReference)
   func isRunning(reference: TerminalSessionReference) -> Bool
 }
 
 enum TerminalSessionBackends {
-  private static let preservedForRestoreContextKey = "preservedForRestore"
   private static let argon = ArgonTerminalSessionBackend()
   private static let legacyScreen = LegacyScreenTerminalSessionStopper()
 
@@ -34,9 +38,9 @@ enum TerminalSessionBackends {
     argon.isAvailable()
   }
 
-  static func reference(for tabID: UUID, projectPath: String) -> TerminalSessionReference? {
+  static func reference(for tabID: UUID, workspacePath: String) -> TerminalSessionReference? {
     guard argon.isAvailable() else { return nil }
-    return argon.reference(for: tabID, projectPath: projectPath)
+    return argon.reference(for: tabID, workspacePath: workspacePath)
   }
 
   static func attachLaunchConfiguration(
@@ -52,7 +56,12 @@ enum TerminalSessionBackends {
   }
 
   static func canReconnect(reference: TerminalSessionReference) -> Bool {
-    reference.backendID == argon.backendID && argon.isAvailable()
+    switch reference.backendID {
+    case argon.backendID:
+      argon.canReconnect(reference: reference)
+    default:
+      false
+    }
   }
 
   static func isRunning(reference: TerminalSessionReference) -> Bool {
@@ -68,7 +77,7 @@ enum TerminalSessionBackends {
     reference: TerminalSessionReference
   ) -> TerminalSessionReference {
     var context = reference.context
-    context[preservedForRestoreContextKey] = "true"
+    context[TerminalSessionReferenceContextKey.preservedForRestore] = "true"
     return TerminalSessionReference(
       backendID: reference.backendID,
       sessionID: reference.sessionID,
@@ -77,7 +86,7 @@ enum TerminalSessionBackends {
   }
 
   static func wasPreservedForRestore(reference: TerminalSessionReference) -> Bool {
-    reference.context[preservedForRestoreContextKey] == "true"
+    reference.context[TerminalSessionReferenceContextKey.preservedForRestore] == "true"
   }
 
   static func stop(reference: TerminalSessionReference) {

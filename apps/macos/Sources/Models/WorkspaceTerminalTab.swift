@@ -19,7 +19,7 @@ enum WorkspaceTerminalKind: Equatable, Sendable {
   }
 }
 
-enum WorkspaceAgentActivityState: Equatable, Sendable {
+enum WorkspaceAgentActivityState: String, Codable, Equatable, Sendable {
   case idle
   case thinking
   case waitingForHuman

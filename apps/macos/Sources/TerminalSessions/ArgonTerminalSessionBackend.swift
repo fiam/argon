@@ -3,18 +3,18 @@ import Foundation
 
 struct ArgonTerminalSessionBackend: TerminalSessionBackend {
   let backendID = "argon"
-  private static let storageDirectoryContextKey = "storageDir"
 
   func isAvailable() -> Bool {
     FileManager.default.isExecutableFile(atPath: ArgonCLI.cliPath())
   }
 
-  func reference(for tabID: UUID, projectPath: String) -> TerminalSessionReference? {
-    return TerminalSessionReference(
+  func reference(for tabID: UUID, workspacePath: String) -> TerminalSessionReference? {
+    TerminalSessionReference(
       backendID: backendID,
       sessionID: "argon-\(tabID.uuidString.lowercased())",
       context: [
-        Self.storageDirectoryContextKey: Self.storageDirectory(projectPath: projectPath).path
+        TerminalSessionReferenceContextKey.storageDirectory:
+          Self.storageDirectory(workspacePath: workspacePath).path
       ]
     )
   }
@@ -23,11 +23,15 @@ struct ArgonTerminalSessionBackend: TerminalSessionBackend {
     reference: TerminalSessionReference,
     createLaunch: TerminalLaunchConfiguration
   ) -> TerminalLaunchConfiguration {
+    guard let storageDirectory = Self.storageDirectory(for: reference) else {
+      TerminalSessionLifecycleLog.record(
+        "attach-launch-skipped session=\(reference.sessionID) reason=missing-storage-directory"
+      )
+      return createLaunch
+    }
+
     let cli = ArgonCLI.cliPath()
-    let storageDirectory = Self.storageDirectory(
-      reference: reference,
-      fallbackProjectPath: createLaunch.currentDirectory
-    ).path
+    let storageDirectoryPath = storageDirectory.path
     let args = [
       cli,
       "terminal",
@@ -35,7 +39,7 @@ struct ArgonTerminalSessionBackend: TerminalSessionBackend {
       "--session-id",
       reference.sessionID,
       "--storage-dir",
-      storageDirectory,
+      storageDirectoryPath,
       "--no-replay",
       "--",
       "/bin/sh",
@@ -43,7 +47,7 @@ struct ArgonTerminalSessionBackend: TerminalSessionBackend {
       createLaunch.shellCommand,
     ]
     TerminalSessionLifecycleLog.record(
-      "attach-launch session=\(reference.sessionID) storage=\(storageDirectory) cwd=\(createLaunch.currentDirectory) command=\(createLaunch.shellCommand)"
+      "attach-launch session=\(reference.sessionID) storage=\(storageDirectoryPath) cwd=\(createLaunch.currentDirectory) command=\(createLaunch.shellCommand)"
     )
     return TerminalLaunchConfiguration.command(
       args.map(TerminalLaunchConfiguration.shellQuote).joined(separator: " "),
@@ -54,6 +58,12 @@ struct ArgonTerminalSessionBackend: TerminalSessionBackend {
 
   func stop(reference: TerminalSessionReference) {
     guard reference.backendID == backendID else { return }
+    guard let storageDirectory = Self.storageDirectory(for: reference) else {
+      TerminalSessionLifecycleLog.record(
+        "backend-stop-skipped session=\(reference.sessionID) reason=missing-storage-directory"
+      )
+      return
+    }
     TerminalSessionLifecycleLog.record("backend-stop session=\(reference.sessionID)")
     let process = Process()
     process.executableURL = URL(fileURLWithPath: ArgonCLI.cliPath())
@@ -63,7 +73,7 @@ struct ArgonTerminalSessionBackend: TerminalSessionBackend {
       "--session-id",
       reference.sessionID,
       "--storage-dir",
-      Self.storageDirectory(reference: reference).path,
+      storageDirectory.path,
     ]
     process.standardOutput = Pipe()
     process.standardError = Pipe()
@@ -73,6 +83,12 @@ struct ArgonTerminalSessionBackend: TerminalSessionBackend {
 
   func isRunning(reference: TerminalSessionReference) -> Bool {
     guard reference.backendID == backendID else { return false }
+    guard canReconnect(reference: reference) else {
+      TerminalSessionLifecycleLog.record(
+        "backend-is-running session=\(reference.sessionID) result=false reason=missing-storage-directory"
+      )
+      return false
+    }
 
     let paths = sessionPaths(reference: reference)
     guard FileManager.default.fileExists(atPath: paths.socket.path) else {
@@ -105,30 +121,34 @@ struct ArgonTerminalSessionBackend: TerminalSessionBackend {
     return running
   }
 
+  func canReconnect(reference: TerminalSessionReference) -> Bool {
+    reference.backendID == backendID
+      && isAvailable()
+      && Self.storageDirectory(for: reference) != nil
+  }
+
   private func sessionPaths(reference: TerminalSessionReference) -> (socket: URL, pid: URL) {
-    let directory = Self.storageDirectory(reference: reference)
+    let directory = Self.storageDirectory(for: reference)!
     return (
       socket: directory.appendingPathComponent("\(reference.sessionID).sock", isDirectory: false),
       pid: directory.appendingPathComponent("\(reference.sessionID).pid", isDirectory: false)
     )
   }
 
-  private static func storageDirectory(
-    reference: TerminalSessionReference,
-    fallbackProjectPath: String? = nil
-  ) -> URL {
-    if let path = reference.context[storageDirectoryContextKey], !path.isEmpty {
-      return URL(fileURLWithPath: path, isDirectory: true)
+  private static func storageDirectory(for reference: TerminalSessionReference) -> URL? {
+    guard
+      let storageDirectory = reference.context[TerminalSessionReferenceContextKey.storageDirectory],
+      !storageDirectory.isEmpty
+    else {
+      return nil
     }
-    if let fallbackProjectPath, !fallbackProjectPath.isEmpty {
-      return storageDirectory(projectPath: fallbackProjectPath)
-    }
-    return legacyStorageDirectory()
+
+    return URL(fileURLWithPath: storageDirectory, isDirectory: true)
   }
 
-  private static func storageDirectory(projectPath: String) -> URL {
+  private static func storageDirectory(workspacePath: String) -> URL {
     compactRootDirectory()
-      .appendingPathComponent("p-\(projectHash(projectPath))", isDirectory: true)
+      .appendingPathComponent("p-\(pathHash(workspacePath))", isDirectory: true)
   }
 
   private static func compactRootDirectory() -> URL {
@@ -136,13 +156,8 @@ struct ArgonTerminalSessionBackend: TerminalSessionBackend {
       .appendingPathComponent("argon-ts-\(getuid())", isDirectory: true)
   }
 
-  private static func legacyStorageDirectory() -> URL {
-    URL(fileURLWithPath: "/tmp", isDirectory: true)
-      .appendingPathComponent("argon-terminal-sessions-\(getuid())", isDirectory: true)
-  }
-
-  private static func projectHash(_ projectPath: String) -> String {
-    let resolved = URL(fileURLWithPath: projectPath).standardizedFileURL.path
+  private static func pathHash(_ path: String) -> String {
+    let resolved = URL(fileURLWithPath: path).standardizedFileURL.path
     let hash = fnv1a64(Array(resolved.utf8))
     return String(format: "%016llx", hash)
   }
@@ -155,7 +170,6 @@ struct ArgonTerminalSessionBackend: TerminalSessionBackend {
     }
     return hash
   }
-
 }
 
 struct LegacyScreenTerminalSessionStopper: Sendable {

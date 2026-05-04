@@ -1377,6 +1377,407 @@ struct WorkspaceStateTests {
     #expect(state.restoreFailureMessage?.contains("feature/window") == true)
   }
 
+  @Test("cold restorable agents stay lazy in sidebar status")
+  @MainActor
+  func coldRestorableAgentsStayLazyInSidebarStatus() {
+    let snapshot = PersistedWorkspaceWindowSnapshot(
+      target: WorkspaceTarget(
+        repoRoot: "/tmp/repo",
+        repoCommonDir: "/tmp/repo/.git",
+        selectedWorktreePath: "/tmp/repo"
+      ),
+      terminalTabsByWorktreePath: [
+        "/tmp/repo/feature": [
+          PersistedWorkspaceTerminalTab(
+            id: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Codex",
+            commandDescription: "codex --yolo",
+            kind: .agent(profileName: "Codex", icon: "codex"),
+            agentFamilyID: .codex,
+            createdAt: Date(timeIntervalSince1970: 3),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"],
+            hasAttention: false,
+            agentActivityState: .thinking
+          )
+        ]
+      ],
+      selectedTerminalTabIDsByWorktreePath: [:]
+    )
+
+    let state = makeState()
+    state.applyPersistedWindowSnapshot(snapshot)
+
+    #expect(state.allTerminalTabs.isEmpty)
+    #expect(state.selectedTerminalTabs.isEmpty)
+    #expect(state.runningAgentCount == 0)
+    #expect(state.activeAgentCount(for: "/tmp/repo/feature") == 0)
+    #expect(state.agentActivitySummary(for: "/tmp/repo/feature") == .empty)
+    #expect(!state.worktreeNeedsAttention(for: "/tmp/repo/feature"))
+  }
+
+  @Test("unscoped preserved agents do not contribute sidebar status")
+  @MainActor
+  func unscopedPreservedAgentsDoNotContributeSidebarStatus() {
+    let preservedSession = TerminalSessionBackends.markPreservedForRestore(
+      reference: TerminalSessionReference(backendID: "argon", sessionID: "unscoped-session")
+    )
+    let snapshot = PersistedWorkspaceWindowSnapshot(
+      target: WorkspaceTarget(
+        repoRoot: "/tmp/repo",
+        repoCommonDir: "/tmp/repo/.git",
+        selectedWorktreePath: "/tmp/repo"
+      ),
+      terminalTabsByWorktreePath: [
+        "/tmp/repo/feature": [
+          PersistedWorkspaceTerminalTab(
+            id: UUID(uuidString: "44444444-4444-4444-4444-444444444444")!,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Codex",
+            commandDescription: "codex --yolo",
+            kind: .agent(profileName: "Codex", icon: "codex"),
+            agentFamilyID: .codex,
+            createdAt: Date(timeIntervalSince1970: 4),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"],
+            keepsRunningAfterQuit: true,
+            terminalSession: preservedSession,
+            hasAttention: true,
+            agentActivityState: .waitingForHuman
+          )
+        ]
+      ],
+      selectedTerminalTabIDsByWorktreePath: [:]
+    )
+
+    let state = makeState()
+    state.applyPersistedWindowSnapshot(snapshot)
+
+    #expect(state.allTerminalTabs.isEmpty)
+    #expect(state.runningAgentCount == 0)
+    #expect(state.activeAgentCount(for: "/tmp/repo/feature") == 0)
+    #expect(state.agentActivitySummary(for: "/tmp/repo/feature") == .empty)
+    #expect(!state.worktreeNeedsAttention(for: "/tmp/repo/feature"))
+  }
+
+  @Test("running preserved agents restore in the background while other tabs stay lazy")
+  @MainActor
+  func runningPreservedAgentsRestoreInTheBackgroundWhileOtherTabsStayLazy() async {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    let liveTabID = UUID(uuidString: "55555555-5555-5555-5555-555555555555")!
+    let lazyTabID = UUID(uuidString: "66666666-6666-6666-6666-666666666666")!
+    let preservedSession = TerminalSessionBackends.markPreservedForRestore(
+      reference: TerminalSessionReference(
+        backendID: "argon",
+        sessionID: "argon-background-running",
+        context: [
+          TerminalSessionReferenceContextKey.storageDirectory:
+            "/tmp/argon-workspace-state-background-running"
+        ]
+      )
+    )
+    WorkspaceState.terminalSessionReconnectChecker = { session in
+      session.sessionID == preservedSession.sessionID
+    }
+    WorkspaceState.terminalSessionRunningChecker = { session in
+      session.sessionID == preservedSession.sessionID
+    }
+    WorkspaceState.commandStatusProvider = { commands in
+      Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
+    }
+    defer {
+      restoreExperiment()
+      WorkspaceState.terminalSessionReconnectChecker = { session in
+        TerminalSessionBackends.canReconnect(reference: session)
+      }
+      WorkspaceState.terminalSessionRunningChecker = { session in
+        TerminalSessionBackends.isRunning(reference: session)
+      }
+      WorkspaceState.commandStatusProvider = nil
+    }
+
+    let snapshot = PersistedWorkspaceWindowSnapshot(
+      target: WorkspaceTarget(
+        repoRoot: "/tmp/repo",
+        repoCommonDir: "/tmp/repo/.git",
+        selectedWorktreePath: "/tmp/repo"
+      ),
+      terminalTabsByWorktreePath: [
+        "/tmp/repo/feature": [
+          PersistedWorkspaceTerminalTab(
+            id: liveTabID,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Codex",
+            commandDescription: "codex --yolo",
+            kind: .agent(profileName: "Codex", icon: "codex"),
+            agentFamilyID: .codex,
+            createdAt: Date(timeIntervalSince1970: 5),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"],
+            keepsRunningAfterQuit: true,
+            terminalSession: preservedSession,
+            agentActivityState: .thinking
+          ),
+          PersistedWorkspaceTerminalTab(
+            id: lazyTabID,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Gemini",
+            commandDescription: "gemini",
+            kind: .agent(profileName: "Gemini", icon: "sparkles"),
+            agentFamilyID: .gemini,
+            createdAt: Date(timeIntervalSince1970: 6),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"]
+          ),
+        ]
+      ],
+      selectedTerminalTabIDsByWorktreePath: [
+        "/tmp/repo/feature": lazyTabID
+      ]
+    )
+
+    let state = makeState()
+    state.applyPersistedWindowSnapshot(snapshot)
+
+    #expect(state.selectedWorktreePath == "/tmp/repo")
+    #expect(state.selectedTerminalTabs.isEmpty)
+    #expect(state.activeAgentCount(for: "/tmp/repo/feature") == 1)
+    #expect(
+      state.agentActivitySummary(for: "/tmp/repo/feature")
+        == WorktreeAgentActivitySummary(
+          waitingForHumanCount: 0,
+          thinkingCount: 1,
+          runningAgentCount: 1
+        )
+    )
+
+    #expect(
+      await waitUntil {
+        state.terminalTabsByWorktreePath["/tmp/repo/feature"]?.contains {
+          $0.id == liveTabID
+        } == true
+      }
+    )
+
+    #expect(state.selectedTerminalTabs.isEmpty)
+    #expect(state.terminalTabsByWorktreePath["/tmp/repo/feature"]?.map(\.id) == [liveTabID])
+    #expect(
+      state.selectedTerminalTabIDsByWorktreePath["/tmp/repo/feature"] == lazyTabID)
+    #expect(state.activeAgentCount(for: "/tmp/repo/feature") == 1)
+
+    state.prepareSelectionLoading(for: "/tmp/repo/feature")
+    #expect(
+      await waitUntil {
+        state.selectedTerminalTabs.contains { $0.id == lazyTabID }
+      }
+    )
+    #expect(Set(state.selectedTerminalTabs.map(\.id)) == Set([liveTabID, lazyTabID]))
+    #expect(state.selectedTerminalTab?.id == lazyTabID)
+  }
+
+  @Test("running unpreserved terminal sessions restore in the background")
+  @MainActor
+  func runningUnpreservedTerminalSessionsRestoreInTheBackground() async {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    let liveTabID = UUID(uuidString: "77777777-7777-7777-7777-777777777777")!
+    let runningSession = TerminalSessionReference(
+      backendID: "argon",
+      sessionID: "argon-background-idle",
+      context: [
+        TerminalSessionReferenceContextKey.storageDirectory:
+          "/tmp/argon-workspace-state-background-idle"
+      ]
+    )
+    WorkspaceState.terminalSessionReconnectChecker = { session in
+      session.sessionID == runningSession.sessionID
+    }
+    WorkspaceState.terminalSessionRunningChecker = { session in
+      session.sessionID == runningSession.sessionID
+    }
+    WorkspaceState.commandStatusProvider = { commands in
+      Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
+    }
+    defer {
+      restoreExperiment()
+      WorkspaceState.terminalSessionReconnectChecker = { session in
+        TerminalSessionBackends.canReconnect(reference: session)
+      }
+      WorkspaceState.terminalSessionRunningChecker = { session in
+        TerminalSessionBackends.isRunning(reference: session)
+      }
+      WorkspaceState.commandStatusProvider = nil
+    }
+
+    let snapshot = PersistedWorkspaceWindowSnapshot(
+      target: WorkspaceTarget(
+        repoRoot: "/tmp/repo",
+        repoCommonDir: "/tmp/repo/.git",
+        selectedWorktreePath: "/tmp/repo"
+      ),
+      terminalTabsByWorktreePath: [
+        "/tmp/repo/feature": [
+          PersistedWorkspaceTerminalTab(
+            id: liveTabID,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Codex",
+            commandDescription: "codex --yolo",
+            kind: .agent(profileName: "Codex", icon: "codex"),
+            agentFamilyID: .codex,
+            createdAt: Date(timeIntervalSince1970: 7),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"],
+            keepsRunningAfterQuit: true,
+            terminalSession: runningSession,
+            agentActivityState: .idle
+          )
+        ]
+      ],
+      selectedTerminalTabIDsByWorktreePath: [
+        "/tmp/repo/feature": liveTabID
+      ]
+    )
+
+    let state = makeState()
+    state.applyPersistedWindowSnapshot(snapshot)
+
+    #expect(state.selectedTerminalTabs.isEmpty)
+    #expect(state.activeAgentCount(for: "/tmp/repo/feature") == 1)
+    #expect(
+      state.agentActivitySummary(for: "/tmp/repo/feature")
+        == WorktreeAgentActivitySummary(
+          waitingForHumanCount: 0,
+          thinkingCount: 0,
+          runningAgentCount: 1
+        )
+    )
+
+    #expect(
+      await waitUntil {
+        state.terminalTabsByWorktreePath["/tmp/repo/feature"]?.contains {
+          $0.id == liveTabID && $0.terminalSession == runningSession
+        } == true
+      }
+    )
+    #expect(state.selectedTerminalTabs.isEmpty)
+    #expect(state.activeAgentCount(for: "/tmp/repo/feature") == 1)
+  }
+
+  @Test("late snapshots merge running background agents into sidebar status")
+  @MainActor
+  func lateSnapshotsMergeRunningBackgroundAgentsIntoSidebarStatus() async {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    let liveTabID = UUID(uuidString: "88888888-8888-8888-8888-888888888888")!
+    let coldTabID = UUID(uuidString: "99999999-9999-9999-9999-999999999999")!
+    let runningSession = TerminalSessionReference(
+      backendID: "argon",
+      sessionID: "argon-late-background",
+      context: [
+        TerminalSessionReferenceContextKey.storageDirectory:
+          "/tmp/argon-workspace-state-late-background"
+      ]
+    )
+    WorkspaceState.terminalSessionReconnectChecker = { session in
+      session.sessionID == runningSession.sessionID
+    }
+    WorkspaceState.terminalSessionRunningChecker = { session in
+      session.sessionID == runningSession.sessionID
+    }
+    WorkspaceState.commandStatusProvider = { commands in
+      Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
+    }
+    WorkspaceState.tabRestoreTestDelay = .milliseconds(150)
+    defer {
+      restoreExperiment()
+      WorkspaceState.terminalSessionReconnectChecker = { session in
+        TerminalSessionBackends.canReconnect(reference: session)
+      }
+      WorkspaceState.terminalSessionRunningChecker = { session in
+        TerminalSessionBackends.isRunning(reference: session)
+      }
+      WorkspaceState.commandStatusProvider = nil
+      WorkspaceState.tabRestoreTestDelay = nil
+    }
+
+    let snapshot = PersistedWorkspaceWindowSnapshot(
+      target: WorkspaceTarget(
+        repoRoot: "/tmp/repo",
+        repoCommonDir: "/tmp/repo/.git",
+        selectedWorktreePath: "/tmp/repo/feature"
+      ),
+      terminalTabsByWorktreePath: [
+        "/tmp/repo/feature": [
+          PersistedWorkspaceTerminalTab(
+            id: liveTabID,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Codex",
+            commandDescription: "codex --yolo",
+            kind: .agent(profileName: "Codex", icon: "codex"),
+            agentFamilyID: .codex,
+            createdAt: Date(timeIntervalSince1970: 8),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"],
+            keepsRunningAfterQuit: true,
+            terminalSession: runningSession,
+            hasAttention: true,
+            agentActivityState: .waitingForHuman
+          ),
+          PersistedWorkspaceTerminalTab(
+            id: coldTabID,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Gemini",
+            commandDescription: "gemini",
+            kind: .agent(profileName: "Gemini", icon: "sparkles"),
+            agentFamilyID: .gemini,
+            createdAt: Date(timeIntervalSince1970: 9),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"]
+          ),
+        ]
+      ],
+      selectedTerminalTabIDsByWorktreePath: [
+        "/tmp/repo/feature": coldTabID
+      ]
+    )
+
+    let state = makeState()
+
+    #expect(!state.canSeedFromPersistedWindowSnapshot)
+
+    state.mergePersistedRunningAgentTabs(from: snapshot)
+
+    #expect(state.selectedWorktreePath == "/tmp/repo")
+    #expect(state.selectedTerminalTabs.isEmpty)
+    #expect(state.activeAgentCount(for: "/tmp/repo/feature") == 1)
+    #expect(state.worktreeNeedsAttention(for: "/tmp/repo/feature"))
+    #expect(
+      state.agentActivitySummary(for: "/tmp/repo/feature")
+        == WorktreeAgentActivitySummary(
+          waitingForHumanCount: 1,
+          thinkingCount: 0,
+          runningAgentCount: 1
+        )
+    )
+    #expect(state.terminalTabsByWorktreePath["/tmp/repo/feature"] == nil)
+
+    #expect(
+      await waitUntil {
+        state.terminalTabsByWorktreePath["/tmp/repo/feature"]?.map(\.id) == [liveTabID]
+      }
+    )
+    #expect(state.selectedWorktreePath == "/tmp/repo")
+    #expect(state.selectedTerminalTabs.isEmpty)
+    #expect(state.activeAgentCount(for: "/tmp/repo/feature") == 1)
+    #expect(state.worktreeNeedsAttention(for: "/tmp/repo/feature"))
+  }
+
   @Test("opening a tab while lazy restore is in flight preserves the new tab")
   @MainActor
   func openingTabDuringLazyRestorePreservesNewTab() async {
@@ -2673,8 +3074,8 @@ struct WorkspaceStateTests {
       Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
     }
     defer {
-      WorkspaceState.terminalSessionReferenceProvider = { tabID, projectPath in
-        TerminalSessionBackends.reference(for: tabID, projectPath: projectPath)
+      WorkspaceState.terminalSessionReferenceProvider = { tabID, workspacePath in
+        TerminalSessionBackends.reference(for: tabID, workspacePath: workspacePath)
       }
       WorkspaceState.terminalSessionLaunchBuilder = Self.defaultTerminalSessionLaunchBuilder
       WorkspaceState.terminalSessionStopper = { session in
@@ -2748,8 +3149,8 @@ struct WorkspaceStateTests {
       Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
     }
     defer {
-      WorkspaceState.terminalSessionReferenceProvider = { tabID, projectPath in
-        TerminalSessionBackends.reference(for: tabID, projectPath: projectPath)
+      WorkspaceState.terminalSessionReferenceProvider = { tabID, workspacePath in
+        TerminalSessionBackends.reference(for: tabID, workspacePath: workspacePath)
       }
       WorkspaceState.terminalSessionLaunchBuilder = Self.defaultTerminalSessionLaunchBuilder
       WorkspaceState.commandStatusProvider = nil
@@ -2824,8 +3225,8 @@ struct WorkspaceStateTests {
       Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
     }
     defer {
-      WorkspaceState.terminalSessionReferenceProvider = { tabID, projectPath in
-        TerminalSessionBackends.reference(for: tabID, projectPath: projectPath)
+      WorkspaceState.terminalSessionReferenceProvider = { tabID, workspacePath in
+        TerminalSessionBackends.reference(for: tabID, workspacePath: workspacePath)
       }
       WorkspaceState.terminalSessionLaunchBuilder = Self.defaultTerminalSessionLaunchBuilder
       WorkspaceState.terminalSessionStopper = { session in
@@ -2914,8 +3315,8 @@ struct WorkspaceStateTests {
       Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
     }
     defer {
-      WorkspaceState.terminalSessionReferenceProvider = { tabID, projectPath in
-        TerminalSessionBackends.reference(for: tabID, projectPath: projectPath)
+      WorkspaceState.terminalSessionReferenceProvider = { tabID, workspacePath in
+        TerminalSessionBackends.reference(for: tabID, workspacePath: workspacePath)
       }
       WorkspaceState.terminalSessionLaunchBuilder = Self.defaultTerminalSessionLaunchBuilder
       WorkspaceState.terminalSessionStopper = { session in
@@ -3116,8 +3517,8 @@ struct WorkspaceStateTests {
     }
     WorkspaceState.terminalSessionLaunchBuilder = Self.testTerminalSessionLaunchBuilder
     defer {
-      WorkspaceState.terminalSessionReferenceProvider = { tabID, projectPath in
-        TerminalSessionBackends.reference(for: tabID, projectPath: projectPath)
+      WorkspaceState.terminalSessionReferenceProvider = { tabID, workspacePath in
+        TerminalSessionBackends.reference(for: tabID, workspacePath: workspacePath)
       }
       WorkspaceState.terminalSessionLaunchBuilder = Self.defaultTerminalSessionLaunchBuilder
     }
@@ -3146,9 +3547,11 @@ struct WorkspaceStateTests {
   func argonTerminalSessionLaunchWrapsAttachInUserShell() throws {
     let tabID = UUID(uuidString: "8E0C2B1D-0CE1-40C4-8A8E-8F07E75FA597")!
     let reference = try #require(
-      ArgonTerminalSessionBackend().reference(for: tabID, projectPath: "/tmp/repo")
+      ArgonTerminalSessionBackend().reference(for: tabID, workspacePath: "/tmp/repo")
     )
-    let storageDir = try #require(reference.context["storageDir"])
+    let storageDir = try #require(
+      reference.context[TerminalSessionReferenceContextKey.storageDirectory]
+    )
     let createLaunch = TerminalLaunchConfiguration.command(
       "codex --yolo",
       currentDirectory: "/tmp/repo",
@@ -3451,8 +3854,8 @@ struct WorkspaceStateTests {
       Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
     }
     defer {
-      WorkspaceState.terminalSessionReferenceProvider = { tabID, projectPath in
-        TerminalSessionBackends.reference(for: tabID, projectPath: projectPath)
+      WorkspaceState.terminalSessionReferenceProvider = { tabID, workspacePath in
+        TerminalSessionBackends.reference(for: tabID, workspacePath: workspacePath)
       }
       WorkspaceState.terminalSessionStopper = { session in
         TerminalSessionBackends.stop(reference: session)
@@ -3563,8 +3966,8 @@ struct WorkspaceStateTests {
       )
     }
     defer {
-      WorkspaceState.terminalSessionReferenceProvider = { tabID, projectPath in
-        TerminalSessionBackends.reference(for: tabID, projectPath: projectPath)
+      WorkspaceState.terminalSessionReferenceProvider = { tabID, workspacePath in
+        TerminalSessionBackends.reference(for: tabID, workspacePath: workspacePath)
       }
     }
 
@@ -3603,6 +4006,7 @@ struct WorkspaceStateTests {
 
     #expect(TerminalSessionBackends.wasPreservedForRestore(reference: thinkingSession))
     #expect(!TerminalSessionBackends.wasPreservedForRestore(reference: idleSession))
+    #expect(persistedThinkingTab.agentActivityState == .thinking)
     #expect(persistedIdleTab.keepsRunningAfterQuit == true)
   }
 

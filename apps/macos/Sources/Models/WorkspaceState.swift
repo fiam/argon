@@ -9,8 +9,8 @@ final class WorkspaceState {
   nonisolated(unsafe) static var agentThinkingIdleTimeout: Duration = .seconds(3)
   nonisolated(unsafe) static var commandStatusProvider: (@Sendable ([String]) -> [String: Bool])?
   nonisolated(unsafe) static var terminalSessionReferenceProvider:
-    (@Sendable (UUID, String) -> TerminalSessionReference?) = { tabID, projectPath in
-      TerminalSessionBackends.reference(for: tabID, projectPath: projectPath)
+    (@Sendable (UUID, String) -> TerminalSessionReference?) = { tabID, workspacePath in
+      TerminalSessionBackends.reference(for: tabID, workspacePath: workspacePath)
     }
   nonisolated(unsafe) static var terminalSessionLaunchBuilder:
     (
@@ -26,6 +26,10 @@ final class WorkspaceState {
   nonisolated(unsafe) static var terminalSessionRunningChecker:
     (@Sendable (TerminalSessionReference) -> Bool) = { session in
       TerminalSessionBackends.isRunning(reference: session)
+    }
+  nonisolated(unsafe) static var terminalSessionReconnectChecker:
+    (@Sendable (TerminalSessionReference) -> Bool) = { session in
+      TerminalSessionBackends.canReconnect(reference: session)
     }
   private static let restoredAgentAttentionSuppressionInterval: TimeInterval = 3
   nonisolated(unsafe) static var sandboxfilePromptLoader:
@@ -106,6 +110,8 @@ final class WorkspaceState {
   private var activeLocalMergeBackWorktreePaths: Set<String> = []
   private var pendingRestorableTabsByWorktreePath: [String: [PersistedWorkspaceTerminalTab]] = [:]
   private var pendingTabRestoreTasksByWorktreePath: [String: Task<Void, Never>] = [:]
+  private var pendingAgentActivitySummariesByWorktreePath: [String: WorktreeAgentActivitySummary] =
+    [:]
   private var selectionLoadRequestID: UUID?
   private var shouldLaunchReviewAfterNextAgentTab = false
   private var pendingReviewPreparationAfterAgentLaunch: WorkspaceReviewPreparation?
@@ -335,6 +341,7 @@ final class WorkspaceState {
       && terminalTabsByWorktreePath.isEmpty
       && pendingRestorableTabsByWorktreePath.isEmpty
       && pendingTabRestoreTasksByWorktreePath.isEmpty
+      && pendingAgentActivitySummariesByWorktreePath.isEmpty
   }
 
   var persistedWindowSnapshot: PersistedWorkspaceWindowSnapshot {
@@ -387,6 +394,7 @@ final class WorkspaceState {
 
     selectedWorktreePath = normalizedPath(snapshot.target.selectedWorktreePath ?? target.repoRoot)
     terminalTabsByWorktreePath = [:]
+    pendingAgentActivitySummariesByWorktreePath = [:]
     pendingRestorableTabsByWorktreePath = snapshot.terminalTabsByWorktreePath.reduce(
       into: [String: [PersistedWorkspaceTerminalTab]]()
     ) { partialResult, entry in
@@ -410,12 +418,15 @@ final class WorkspaceState {
             keepsRunningAfterQuit: tab.keepsRunningAfterQuit,
             terminalSession: tab.terminalSession,
             resumeSessionID: tab.resumeSessionID,
-            resumeCommandDescription: tab.resumeCommandDescription
+            resumeCommandDescription: tab.resumeCommandDescription,
+            hasAttention: tab.hasAttention,
+            agentActivityState: tab.agentActivityState
           ),
           using: restoreMetadataByProfileIDOrName
         )
       }
     }
+    refreshPendingAgentActivitySummaries()
 
     selectedTerminalTabIDsByWorktreePath = snapshot.selectedTerminalTabIDsByWorktreePath.reduce(
       into: [String: UUID]()
@@ -438,6 +449,86 @@ final class WorkspaceState {
         partialResult[normalizedPath(entry.key)] = normalized
       }
     }
+
+    let validPaths = Set(worktrees.map { normalizedPath($0.path) })
+    if !validPaths.isEmpty {
+      startRunningBackgroundAgentRestores(
+        validPaths: validPaths,
+        excluding: normalizedSelectedWorktreePath
+      )
+    }
+    refreshPendingAgentActivitySummaries()
+  }
+
+  func mergePersistedRunningAgentTabs(from snapshot: PersistedWorkspaceWindowSnapshot) {
+    let restoreMetadataByProfileIDOrName = Self.restoreMetadataByProfileIDOrName(
+      savedProfiles: SavedAgentProfiles().profiles
+    )
+    let validPaths = Set(worktrees.map { normalizedPath($0.path) })
+    let materializedTabIDs = Set(terminalTabsByWorktreePath.values.flatMap { $0.map(\.id) })
+    var changedPaths = Set<String>()
+
+    for entry in snapshot.terminalTabsByWorktreePath {
+      let worktreePath = normalizedPath(entry.key)
+      if !validPaths.isEmpty, !validPaths.contains(worktreePath) {
+        continue
+      }
+
+      let pendingTabIDs = Set((pendingRestorableTabsByWorktreePath[worktreePath] ?? []).map(\.id))
+      let runningAgentTabs = entry.value.compactMap { tab -> PersistedWorkspaceTerminalTab? in
+        let normalizedTab = Self.persistedTabByResolvingResumeTemplate(
+          from: PersistedWorkspaceTerminalTab(
+            id: tab.id,
+            profileID: tab.profileID,
+            worktreePath: normalizedPath(tab.worktreePath),
+            worktreeLabel: tab.worktreeLabel,
+            title: tab.title,
+            commandDescription: tab.commandDescription,
+            baseCommandDescription: tab.baseCommandDescription,
+            kind: tab.kind,
+            agentFamilyID: tab.agentFamilyID,
+            createdAt: tab.createdAt,
+            isSandboxed: tab.isSandboxed,
+            yoloMode: tab.yoloMode,
+            writableRoots: tab.writableRoots.map(normalizedPath),
+            resumeArgumentTemplate: tab.resumeArgumentTemplate,
+            keepsRunningAfterQuit: tab.keepsRunningAfterQuit,
+            terminalSession: tab.terminalSession,
+            resumeSessionID: tab.resumeSessionID,
+            resumeCommandDescription: tab.resumeCommandDescription,
+            hasAttention: tab.hasAttention,
+            agentActivityState: tab.agentActivityState
+          ),
+          using: restoreMetadataByProfileIDOrName
+        )
+        guard !materializedTabIDs.contains(normalizedTab.id),
+          !pendingTabIDs.contains(normalizedTab.id),
+          Self.pendingTabRepresentsRunningBackgroundAgent(normalizedTab)
+        else {
+          return nil
+        }
+        return normalizedTab
+      }
+
+      guard !runningAgentTabs.isEmpty else { continue }
+      pendingRestorableTabsByWorktreePath[worktreePath, default: []].append(
+        contentsOf: runningAgentTabs
+      )
+      changedPaths.insert(worktreePath)
+    }
+
+    guard !changedPaths.isEmpty else { return }
+
+    for changedPath in changedPaths {
+      refreshPendingAgentActivitySummary(for: changedPath)
+    }
+    if !validPaths.isEmpty {
+      startRunningBackgroundAgentRestores(
+        validPaths: validPaths,
+        excluding: normalizedSelectedWorktreePath
+      )
+    }
+    notifyRestorableStateChanged()
   }
 
   func load() {
@@ -765,25 +856,31 @@ final class WorkspaceState {
   }
 
   var runningAgentCount: Int {
-    allTerminalTabs.reduce(into: 0) { count, tab in
+    let materializedCount = allTerminalTabs.reduce(into: 0) { count, tab in
       if case .agent = tab.kind, tab.isRunning {
         count += 1
       }
     }
+    return materializedCount
+      + pendingRunningBackgroundAgentCount()
   }
 
   func activeAgentCount(for worktreePath: String) -> Int {
-    let tabs = terminalTabsByWorktreePath[normalizedPath(worktreePath)] ?? []
-    return tabs.reduce(into: 0) { count, tab in
+    let normalizedPath = normalizedPath(worktreePath)
+    let tabs = terminalTabsByWorktreePath[normalizedPath] ?? []
+    let materializedCount = tabs.reduce(into: 0) { count, tab in
       if case .agent = tab.kind, tab.isRunning {
         count += 1
       }
     }
+    return materializedCount
+      + (pendingAgentActivitySummariesByWorktreePath[normalizedPath]?.runningAgentCount ?? 0)
   }
 
   func agentActivitySummary(for worktreePath: String) -> WorktreeAgentActivitySummary {
-    let tabs = terminalTabsByWorktreePath[normalizedPath(worktreePath)] ?? []
-    return tabs.reduce(into: .empty) { summary, tab in
+    let normalizedPath = normalizedPath(worktreePath)
+    let tabs = terminalTabsByWorktreePath[normalizedPath] ?? []
+    let materializedSummary = tabs.reduce(into: .empty) { summary, tab in
       guard case .agent = tab.kind, tab.isRunning else { return }
 
       summary = WorktreeAgentActivitySummary(
@@ -794,11 +891,25 @@ final class WorkspaceState {
         runningAgentCount: summary.runningAgentCount + 1
       )
     }
+    guard
+      let pendingSummary = pendingAgentActivitySummariesByWorktreePath[normalizedPath]
+    else {
+      return materializedSummary
+    }
+    return WorktreeAgentActivitySummary(
+      waitingForHumanCount: materializedSummary.waitingForHumanCount
+        + pendingSummary.waitingForHumanCount,
+      thinkingCount: materializedSummary.thinkingCount + pendingSummary.thinkingCount,
+      runningAgentCount: materializedSummary.runningAgentCount + pendingSummary.runningAgentCount
+    )
   }
 
   func worktreeNeedsAttention(for worktreePath: String) -> Bool {
-    let tabs = terminalTabsByWorktreePath[normalizedPath(worktreePath)] ?? []
+    let normalizedPath = normalizedPath(worktreePath)
+    let tabs = terminalTabsByWorktreePath[normalizedPath] ?? []
     return tabs.contains { $0.hasAttention }
+      || (pendingAgentActivitySummariesByWorktreePath[normalizedPath]?.waitingForHumanCount ?? 0)
+        > 0
   }
 
   func defaultNewWorktreeStartPoint() -> String {
@@ -1258,7 +1369,7 @@ final class WorkspaceState {
     let tabID = UUID()
     let terminalSession =
       request.keepRunningWhileThinking
-      ? Self.terminalSessionReferenceProvider(tabID, target.repoRoot)
+      ? Self.terminalSessionReferenceProvider(tabID, worktree.path)
       : nil
     TerminalSessionLifecycleLog.record(
       "open-agent-tab tab=\(tabID.uuidString.lowercased()) session=\(terminalSession?.sessionID ?? "none") profile=\(request.displayName) family=\(request.agentFamilyID?.rawValue ?? "none") sandbox=\(request.sandboxEnabled) yolo=\(request.yoloMode) resume=\(request.resumeSessionID ?? "none")"
@@ -2115,6 +2226,11 @@ final class WorkspaceState {
 
     for persistedTab in hydratedTabs {
       if case .agent = persistedTab.kind {
+        if pendingTabRepresentsRunningBackgroundAgent(persistedTab) {
+          restorableTabs.append(persistedTab)
+          continue
+        }
+
         let executable = commandExecutableToken(
           from: persistedTab.resumeCommandDescription ?? persistedTab.commandDescription
         )
@@ -2130,6 +2246,16 @@ final class WorkspaceState {
     return RestoredPersistedTabs(
       persistedTabs: restorableTabs,
       missingAgentCount: missingAgentCount
+    )
+  }
+
+  nonisolated private static func restoreRunningBackgroundAgentTabs(
+    _ persistedTabs: [PersistedWorkspaceTerminalTab]
+  ) -> RestoredPersistedTabs {
+    let hydratedTabs = hydratedPersistedAgentResumeMetadata(for: persistedTabs)
+    return RestoredPersistedTabs(
+      persistedTabs: hydratedTabs.filter(Self.pendingTabRepresentsRunningBackgroundAgent),
+      missingAgentCount: 0
     )
   }
 
@@ -2215,6 +2341,8 @@ final class WorkspaceState {
       terminalSession: terminalSession,
       resumeSessionID: persistedTab.resumeSessionID,
       resumeCommandDescription: persistedTab.resumeCommandDescription,
+      hasAttention: persistedTab.hasAttention,
+      agentActivityState: persistedTab.agentActivityState,
       suppressAttentionUntil: suppressAttentionUntil
     )
   }
@@ -2232,8 +2360,11 @@ final class WorkspaceState {
       return nil
     }
     if let terminalSession = tab.terminalSession {
-      guard TerminalSessionBackends.wasPreservedForRestore(reference: terminalSession),
-        TerminalSessionBackends.canReconnect(reference: terminalSession)
+      let canReconnect = Self.terminalSessionReconnectChecker(terminalSession)
+      let wasPreserved = TerminalSessionBackends.wasPreservedForRestore(
+        reference: terminalSession)
+      let isRunning = canReconnect && Self.terminalSessionRunningChecker(terminalSession)
+      guard canReconnect, wasPreserved || isRunning
       else {
         TerminalSessionLifecycleLog.record(
           "stop-terminal-session reason=restore-unusable-existing tab=\(tab.id.uuidString.lowercased()) session=\(terminalSession.sessionID)"
@@ -2311,7 +2442,9 @@ final class WorkspaceState {
         keepsRunningAfterQuit: tab.keepsRunningAfterQuit,
         terminalSession: tab.terminalSession,
         resumeSessionID: tab.resumeSessionID,
-        resumeCommandDescription: renderedResumeCommand
+        resumeCommandDescription: renderedResumeCommand,
+        hasAttention: tab.hasAttention,
+        agentActivityState: tab.agentActivityState
       )
     }
 
@@ -2402,7 +2535,9 @@ final class WorkspaceState {
               keepsRunningAfterQuit: tab.keepsRunningAfterQuit,
               terminalSession: tab.terminalSession,
               resumeSessionID: tabSessionID,
-              resumeCommandDescription: renderedResumeCommand
+              resumeCommandDescription: renderedResumeCommand,
+              hasAttention: tab.hasAttention,
+              agentActivityState: tab.agentActivityState
             )
           }
           continue
@@ -2445,7 +2580,9 @@ final class WorkspaceState {
           keepsRunningAfterQuit: tab.keepsRunningAfterQuit,
           terminalSession: tab.terminalSession,
           resumeSessionID: matchingSession.sessionID,
-          resumeCommandDescription: renderedResumeCommand
+          resumeCommandDescription: renderedResumeCommand,
+          hasAttention: tab.hasAttention,
+          agentActivityState: tab.agentActivityState
         )
       }
     }
@@ -2524,7 +2661,9 @@ final class WorkspaceState {
       keepsRunningAfterQuit: tab.keepsRunningAfterQuit,
       terminalSession: terminalSession,
       resumeSessionID: tab.resumeSessionID,
-      resumeCommandDescription: tab.resumeCommandDescription
+      resumeCommandDescription: tab.resumeCommandDescription,
+      hasAttention: tab.hasAttention,
+      agentActivityState: tab.agentActivityState
     )
   }
 
@@ -2559,8 +2698,67 @@ final class WorkspaceState {
       keepsRunningAfterQuit: tab.keepsRunningAfterQuit,
       terminalSession: tab.terminalSession,
       resumeSessionID: tab.resumeSessionID,
-      resumeCommandDescription: tab.resumeCommandDescription
+      resumeCommandDescription: tab.resumeCommandDescription,
+      hasAttention: tab.hasAttention,
+      agentActivityState: tab.agentActivityState
     )
+  }
+
+  private func refreshPendingAgentActivitySummaries() {
+    let worktreePaths = Set(
+      Array(pendingRestorableTabsByWorktreePath.keys)
+        + Array(pendingAgentActivitySummariesByWorktreePath.keys)
+    )
+    for worktreePath in worktreePaths {
+      refreshPendingAgentActivitySummary(for: worktreePath)
+    }
+  }
+
+  private func refreshPendingAgentActivitySummary(for worktreePath: String) {
+    let normalizedPath = normalizedPath(worktreePath)
+    let summary = Self.pendingAgentActivitySummary(
+      for: pendingRestorableTabsByWorktreePath[normalizedPath] ?? []
+    )
+
+    if summary == .empty {
+      pendingAgentActivitySummariesByWorktreePath.removeValue(forKey: normalizedPath)
+    } else {
+      pendingAgentActivitySummariesByWorktreePath[normalizedPath] = summary
+    }
+  }
+
+  private func pendingRunningBackgroundAgentCount() -> Int {
+    pendingRestorableTabsByWorktreePath.values.reduce(0) { count, tabs in
+      count + tabs.filter(Self.pendingTabRepresentsRunningBackgroundAgent).count
+    }
+  }
+
+  nonisolated private static func pendingAgentActivitySummary(
+    for tabs: [PersistedWorkspaceTerminalTab]
+  ) -> WorktreeAgentActivitySummary {
+    tabs.reduce(into: .empty) { summary, tab in
+      guard pendingTabRepresentsRunningBackgroundAgent(tab) else { return }
+      let isWaitingForHuman = tab.hasAttention || tab.agentActivityState == .waitingForHuman
+
+      summary = WorktreeAgentActivitySummary(
+        waitingForHumanCount: summary.waitingForHumanCount + (isWaitingForHuman ? 1 : 0),
+        thinkingCount: summary.thinkingCount
+          + (tab.agentActivityState == .thinking ? 1 : 0),
+        runningAgentCount: summary.runningAgentCount + 1
+      )
+    }
+  }
+
+  nonisolated private static func pendingTabRepresentsRunningBackgroundAgent(
+    _ tab: PersistedWorkspaceTerminalTab
+  ) -> Bool {
+    guard case .agent = tab.kind else { return false }
+    guard AgentTerminalPersistenceExperimentSettings.canUseTerminalSessionPersistence else {
+      return false
+    }
+    guard let terminalSession = tab.terminalSession else { return false }
+    guard terminalSessionReconnectChecker(terminalSession) else { return false }
+    return terminalSessionRunningChecker(terminalSession)
   }
 
   private static func restoreMetadataByProfileIDOrName(savedProfiles: [SavedAgentProfile])
@@ -2681,6 +2879,10 @@ final class WorkspaceState {
     let validPaths = Set(data.worktrees.map { normalizedPath($0.path) })
     pruneWorktreeState(validPaths: validPaths)
     configureWatchers(validPaths: validPaths)
+    startRunningBackgroundAgentRestores(
+      validPaths: validPaths,
+      excluding: normalizedPath(data.selectedWorktreePath)
+    )
     startPendingTabRestoreIfNeeded(for: normalizedPath(data.selectedWorktreePath))
     notifyRestorableStateChanged()
   }
@@ -2701,6 +2903,10 @@ final class WorkspaceState {
 
       worktrees = discoveredWorktrees
       scheduleAllWorktreeRefreshes()
+      startRunningBackgroundAgentRestores(
+        validPaths: Set(discoveredWorktrees.map { normalizedPath($0.path) }),
+        excluding: normalizedSelectedWorktreePath
+      )
       return
     }
 
@@ -2715,6 +2921,10 @@ final class WorkspaceState {
     worktrees = discoveredWorktrees
     pruneWorktreeState(validPaths: validPaths)
     configureWatchers(validPaths: validPaths)
+    startRunningBackgroundAgentRestores(
+      validPaths: validPaths,
+      excluding: preservedSelection
+    )
 
     if let nextSelection = resolvedInventorySelectionPath(
       preferredSelection: preferredSelection,
@@ -2783,12 +2993,67 @@ final class WorkspaceState {
       return
     }
 
+    refreshPendingAgentActivitySummary(for: normalizedPath)
+
+    startPendingTabRestoreTask(
+      for: normalizedPath,
+      persistedTabs: persistedTabs,
+      removeRestoredTabsFromPending: false
+    )
+  }
+
+  private func startRunningBackgroundAgentRestores(
+    validPaths: Set<String>,
+    excluding selectedWorktreePath: String?
+  ) {
+    let selectedWorktreePath = selectedWorktreePath.map(normalizedPath)
+    for worktreePath in pendingRestorableTabsByWorktreePath.keys.sorted() {
+      let normalizedPath = normalizedPath(worktreePath)
+      guard validPaths.contains(normalizedPath), normalizedPath != selectedWorktreePath else {
+        continue
+      }
+      startPendingRunningBackgroundAgentRestoreIfNeeded(for: normalizedPath)
+    }
+  }
+
+  private func startPendingRunningBackgroundAgentRestoreIfNeeded(for worktreePath: String) {
+    let normalizedPath = normalizedPath(worktreePath)
+    guard pendingTabRestoreTasksByWorktreePath[normalizedPath] == nil,
+      let persistedTabs = pendingRestorableTabsByWorktreePath[normalizedPath],
+      !persistedTabs.isEmpty
+    else {
+      return
+    }
+
+    let runningAgentTabs = persistedTabs.filter(Self.pendingTabRepresentsRunningBackgroundAgent)
+    guard !runningAgentTabs.isEmpty else {
+      refreshPendingAgentActivitySummary(for: normalizedPath)
+      return
+    }
+
+    refreshPendingAgentActivitySummary(for: normalizedPath)
+
+    startPendingTabRestoreTask(
+      for: normalizedPath,
+      persistedTabs: runningAgentTabs,
+      removeRestoredTabsFromPending: true
+    )
+  }
+
+  private func startPendingTabRestoreTask(
+    for normalizedPath: String,
+    persistedTabs: [PersistedWorkspaceTerminalTab],
+    removeRestoredTabsFromPending: Bool
+  ) {
     pendingTabRestoreTasksByWorktreePath[normalizedPath] = Task { @MainActor [weak self] in
       if let delay = Self.tabRestoreTestDelay {
         try? await Task.sleep(for: delay)
       }
       let restored = await Task.detached {
-        Self.restorePersistedTabs(persistedTabs)
+        if removeRestoredTabsFromPending {
+          return Self.restoreRunningBackgroundAgentTabs(persistedTabs)
+        }
+        return Self.restorePersistedTabs(persistedTabs)
       }.value
 
       guard let self, !Task.isCancelled else { return }
@@ -2810,12 +3075,28 @@ final class WorkspaceState {
       }
 
       self.terminalTabsByWorktreePath[normalizedPath] = mergedTabs
+      if removeRestoredTabsFromPending {
+        let restoredTabIDs = Set(restored.persistedTabs.map(\.id))
+        var pendingTabs = self.pendingRestorableTabsByWorktreePath[normalizedPath] ?? []
+        pendingTabs.removeAll { restoredTabIDs.contains($0.id) }
+        if pendingTabs.isEmpty {
+          self.pendingRestorableTabsByWorktreePath.removeValue(forKey: normalizedPath)
+        } else {
+          self.pendingRestorableTabsByWorktreePath[normalizedPath] = pendingTabs
+        }
+        self.refreshPendingAgentActivitySummary(for: normalizedPath)
+      }
+      let pendingTabs = self.pendingRestorableTabsByWorktreePath[normalizedPath] ?? []
 
       if let selectedTabID = self.selectedTerminalTabIDsByWorktreePath[normalizedPath],
         !mergedTabs.contains(where: { $0.id == selectedTabID })
       {
-        self.selectedTerminalTabIDsByWorktreePath[normalizedPath] = mergedTabs.first?.id
-      } else if self.selectedTerminalTabIDsByWorktreePath[normalizedPath] == nil {
+        if !pendingTabs.contains(where: { $0.id == selectedTabID }) {
+          self.selectedTerminalTabIDsByWorktreePath[normalizedPath] = mergedTabs.first?.id
+        }
+      } else if self.selectedTerminalTabIDsByWorktreePath[normalizedPath] == nil
+        && pendingTabs.isEmpty
+      {
         self.selectedTerminalTabIDsByWorktreePath[normalizedPath] = mergedTabs.first?.id
       }
 
@@ -2835,6 +3116,11 @@ final class WorkspaceState {
       }
 
       self.notifyRestorableStateChanged()
+      if self.normalizedSelectedWorktreePath == normalizedPath,
+        self.pendingRestorableTabsByWorktreePath[normalizedPath]?.isEmpty == false
+      {
+        self.startPendingTabRestoreIfNeeded(for: normalizedPath)
+      }
     }
   }
 
@@ -3096,6 +3382,9 @@ final class WorkspaceState {
     pendingRestorableTabsByWorktreePath =
       pendingRestorableTabsByWorktreePath
       .filter { validPaths.contains($0.key) }
+    pendingAgentActivitySummariesByWorktreePath =
+      pendingAgentActivitySummariesByWorktreePath
+      .filter { validPaths.contains($0.key) }
     selectedTerminalTabIDsByWorktreePath =
       selectedTerminalTabIDsByWorktreePath
       .filter { validPaths.contains($0.key) }
@@ -3243,6 +3532,7 @@ final class WorkspaceState {
     pendingTabs.removeAll { $0.id == persistedTab.id }
     pendingTabs.append(persistedTab)
     pendingRestorableTabsByWorktreePath[worktreePath] = pendingTabs
+    refreshPendingAgentActivitySummary(for: worktreePath)
   }
 
   private func stoppedRestorableAgentTab(
@@ -3287,7 +3577,9 @@ final class WorkspaceState {
       keepsRunningAfterQuit: tab.keepsRunningAfterQuit,
       terminalSession: nil,
       resumeSessionID: tab.resumeSessionID,
-      resumeCommandDescription: resumeCommandDescription
+      resumeCommandDescription: resumeCommandDescription,
+      hasAttention: tab.hasAttention,
+      agentActivityState: tab.agentActivityState
     )
   }
 

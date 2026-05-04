@@ -104,6 +104,8 @@ struct PersistedWorkspaceTerminalTab: Codable, Equatable {
   let terminalSession: TerminalSessionReference?
   let resumeSessionID: String?
   let resumeCommandDescription: String?
+  let hasAttention: Bool
+  let agentActivityState: WorkspaceAgentActivityState
 
   private enum CodingKeys: String, CodingKey {
     case id
@@ -124,6 +126,8 @@ struct PersistedWorkspaceTerminalTab: Codable, Equatable {
     case terminalSession
     case resumeSessionID
     case resumeCommandDescription
+    case hasAttention
+    case agentActivityState
   }
 
   init(
@@ -144,7 +148,9 @@ struct PersistedWorkspaceTerminalTab: Codable, Equatable {
     keepsRunningAfterQuit: Bool = false,
     terminalSession: TerminalSessionReference? = nil,
     resumeSessionID: String? = nil,
-    resumeCommandDescription: String? = nil
+    resumeCommandDescription: String? = nil,
+    hasAttention: Bool = false,
+    agentActivityState: WorkspaceAgentActivityState = .idle
   ) {
     self.id = id
     self.profileID = profileID
@@ -164,6 +170,8 @@ struct PersistedWorkspaceTerminalTab: Codable, Equatable {
     self.terminalSession = terminalSession
     self.resumeSessionID = resumeSessionID
     self.resumeCommandDescription = resumeCommandDescription
+    self.hasAttention = hasAttention
+    self.agentActivityState = agentActivityState
   }
 
   init(from decoder: any Decoder) throws {
@@ -196,6 +204,10 @@ struct PersistedWorkspaceTerminalTab: Codable, Equatable {
       String.self,
       forKey: .resumeCommandDescription
     )
+    hasAttention = try container.decodeIfPresent(Bool.self, forKey: .hasAttention) ?? false
+    agentActivityState =
+      try container.decodeIfPresent(WorkspaceAgentActivityState.self, forKey: .agentActivityState)
+      ?? .idle
   }
 
   func encode(to encoder: any Encoder) throws {
@@ -219,5 +231,7 @@ struct PersistedWorkspaceTerminalTab: Codable, Equatable {
     try container.encodeIfPresent(terminalSession, forKey: .terminalSession)
     try container.encodeIfPresent(resumeSessionID, forKey: .resumeSessionID)
     try container.encodeIfPresent(resumeCommandDescription, forKey: .resumeCommandDescription)
+    try container.encode(hasAttention, forKey: .hasAttention)
+    try container.encode(agentActivityState, forKey: .agentActivityState)
   }
 }

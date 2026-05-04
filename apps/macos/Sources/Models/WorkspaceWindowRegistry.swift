@@ -159,7 +159,8 @@ final class WorkspaceWindowRegistry {
           _ = consumePersistedSnapshot(for: repoRoot)
           workspaceState.applyPersistedWindowSnapshot(snapshot)
         } else {
-          discardPersistedSnapshot(for: repoRoot)
+          _ = consumePersistedSnapshot(for: repoRoot)
+          workspaceState.mergePersistedRunningAgentTabs(from: snapshot)
         }
       }
       return workspaceState
