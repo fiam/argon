@@ -2662,7 +2662,7 @@ struct WorkspaceStateTests {
 
     let session = TerminalSessionReference(backendID: "test", sessionID: "restored-session")
     let stoppedSessions = TerminalSessionStopRecorder()
-    WorkspaceState.terminalSessionReferenceProvider = { _ in
+    WorkspaceState.terminalSessionReferenceProvider = { _, _ in
       session
     }
     WorkspaceState.terminalSessionLaunchBuilder = Self.testTerminalSessionLaunchBuilder
@@ -2673,8 +2673,8 @@ struct WorkspaceStateTests {
       Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
     }
     defer {
-      WorkspaceState.terminalSessionReferenceProvider = { tabID in
-        TerminalSessionBackends.reference(for: tabID)
+      WorkspaceState.terminalSessionReferenceProvider = { tabID, projectPath in
+        TerminalSessionBackends.reference(for: tabID, projectPath: projectPath)
       }
       WorkspaceState.terminalSessionLaunchBuilder = Self.defaultTerminalSessionLaunchBuilder
       WorkspaceState.terminalSessionStopper = { session in
@@ -2740,7 +2740,7 @@ struct WorkspaceStateTests {
       backendID: "test",
       sessionID: "replacement-session"
     )
-    WorkspaceState.terminalSessionReferenceProvider = { _ in
+    WorkspaceState.terminalSessionReferenceProvider = { _, _ in
       replacementSession
     }
     WorkspaceState.terminalSessionLaunchBuilder = Self.testTerminalSessionLaunchBuilder
@@ -2748,8 +2748,8 @@ struct WorkspaceStateTests {
       Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
     }
     defer {
-      WorkspaceState.terminalSessionReferenceProvider = { tabID in
-        TerminalSessionBackends.reference(for: tabID)
+      WorkspaceState.terminalSessionReferenceProvider = { tabID, projectPath in
+        TerminalSessionBackends.reference(for: tabID, projectPath: projectPath)
       }
       WorkspaceState.terminalSessionLaunchBuilder = Self.defaultTerminalSessionLaunchBuilder
       WorkspaceState.commandStatusProvider = nil
@@ -2810,7 +2810,7 @@ struct WorkspaceStateTests {
       sessionID: "replacement-session"
     )
     let stoppedSessions = TerminalSessionStopRecorder()
-    WorkspaceState.terminalSessionReferenceProvider = { _ in
+    WorkspaceState.terminalSessionReferenceProvider = { _, _ in
       replacementSession
     }
     WorkspaceState.terminalSessionLaunchBuilder = Self.testTerminalSessionLaunchBuilder
@@ -2824,8 +2824,8 @@ struct WorkspaceStateTests {
       Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
     }
     defer {
-      WorkspaceState.terminalSessionReferenceProvider = { tabID in
-        TerminalSessionBackends.reference(for: tabID)
+      WorkspaceState.terminalSessionReferenceProvider = { tabID, projectPath in
+        TerminalSessionBackends.reference(for: tabID, projectPath: projectPath)
       }
       WorkspaceState.terminalSessionLaunchBuilder = Self.defaultTerminalSessionLaunchBuilder
       WorkspaceState.terminalSessionStopper = { session in
@@ -2903,7 +2903,7 @@ struct WorkspaceStateTests {
       sessionID: "replacement-session"
     )
     let stoppedSessions = TerminalSessionStopRecorder()
-    WorkspaceState.terminalSessionReferenceProvider = { _ in
+    WorkspaceState.terminalSessionReferenceProvider = { _, _ in
       replacementSession
     }
     WorkspaceState.terminalSessionLaunchBuilder = Self.testTerminalSessionLaunchBuilder
@@ -2914,8 +2914,8 @@ struct WorkspaceStateTests {
       Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
     }
     defer {
-      WorkspaceState.terminalSessionReferenceProvider = { tabID in
-        TerminalSessionBackends.reference(for: tabID)
+      WorkspaceState.terminalSessionReferenceProvider = { tabID, projectPath in
+        TerminalSessionBackends.reference(for: tabID, projectPath: projectPath)
       }
       WorkspaceState.terminalSessionLaunchBuilder = Self.defaultTerminalSessionLaunchBuilder
       WorkspaceState.terminalSessionStopper = { session in
@@ -3111,13 +3111,13 @@ struct WorkspaceStateTests {
   @MainActor
   func persistentTerminalLaunchUsesTerminalSessionBackend() throws {
     let session = TerminalSessionReference(backendID: "test", sessionID: "launch-session")
-    WorkspaceState.terminalSessionReferenceProvider = { _ in
+    WorkspaceState.terminalSessionReferenceProvider = { _, _ in
       session
     }
     WorkspaceState.terminalSessionLaunchBuilder = Self.testTerminalSessionLaunchBuilder
     defer {
-      WorkspaceState.terminalSessionReferenceProvider = { tabID in
-        TerminalSessionBackends.reference(for: tabID)
+      WorkspaceState.terminalSessionReferenceProvider = { tabID, projectPath in
+        TerminalSessionBackends.reference(for: tabID, projectPath: projectPath)
       }
       WorkspaceState.terminalSessionLaunchBuilder = Self.defaultTerminalSessionLaunchBuilder
     }
@@ -3143,8 +3143,12 @@ struct WorkspaceStateTests {
   }
 
   @Test("argon terminal session launch wraps attach in user shell")
-  func argonTerminalSessionLaunchWrapsAttachInUserShell() {
+  func argonTerminalSessionLaunchWrapsAttachInUserShell() throws {
     let tabID = UUID(uuidString: "8E0C2B1D-0CE1-40C4-8A8E-8F07E75FA597")!
+    let reference = try #require(
+      ArgonTerminalSessionBackend().reference(for: tabID, projectPath: "/tmp/repo")
+    )
+    let storageDir = try #require(reference.context["storageDir"])
     let createLaunch = TerminalLaunchConfiguration.command(
       "codex --yolo",
       currentDirectory: "/tmp/repo",
@@ -3156,16 +3160,22 @@ struct WorkspaceStateTests {
     )
 
     let launch = TerminalSessionBackends.attachLaunchConfiguration(
-      reference: TerminalSessionReference(backendID: "argon", sessionID: "argon-direct"),
+      reference: reference,
       createLaunch: createLaunch
     )
 
+    #expect(storageDir.hasPrefix("/tmp/argon-ts-"))
+    #expect(storageDir.contains("/p-"))
+    #expect("\(storageDir)/\(reference.sessionID).sock".utf8.count < 104)
     #expect(launch.processSpec.executable == "/bin/zsh")
     #expect(Array(launch.processSpec.args.prefix(3)) == ["-i", "-l", "-c"])
     let attachCommand = launch.processSpec.args.last ?? ""
     #expect(attachCommand.contains(ArgonCLI.cliPath()))
     #expect(attachCommand.contains("'terminal' 'attach'"))
-    #expect(attachCommand.contains("'--session-id' 'argon-direct'"))
+    #expect(attachCommand.contains("'--session-id' '\(reference.sessionID)'"))
+    #expect(attachCommand.contains("'--storage-dir' '\(storageDir)'"))
+    #expect(attachCommand.contains("/p-"))
+    #expect(!attachCommand.contains("argon-terminal-sessions"))
     #expect(attachCommand.contains("'/bin/sh' '-lc'"))
     #expect(attachCommand.contains("codex --yolo"))
     #expect(launch.currentDirectory == "/tmp/repo")
@@ -3431,7 +3441,7 @@ struct WorkspaceStateTests {
 
     let session = TerminalSessionReference(backendID: "test", sessionID: "stopped-thinking")
     let stoppedSessions = TerminalSessionStopRecorder()
-    WorkspaceState.terminalSessionReferenceProvider = { _ in
+    WorkspaceState.terminalSessionReferenceProvider = { _, _ in
       session
     }
     WorkspaceState.terminalSessionStopper = { session in
@@ -3441,8 +3451,8 @@ struct WorkspaceStateTests {
       Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
     }
     defer {
-      WorkspaceState.terminalSessionReferenceProvider = { tabID in
-        TerminalSessionBackends.reference(for: tabID)
+      WorkspaceState.terminalSessionReferenceProvider = { tabID, projectPath in
+        TerminalSessionBackends.reference(for: tabID, projectPath: projectPath)
       }
       WorkspaceState.terminalSessionStopper = { session in
         TerminalSessionBackends.stop(reference: session)
@@ -3546,15 +3556,15 @@ struct WorkspaceStateTests {
     let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
     defer { restoreExperiment() }
 
-    WorkspaceState.terminalSessionReferenceProvider = { tabID in
+    WorkspaceState.terminalSessionReferenceProvider = { tabID, _ in
       TerminalSessionReference(
         backendID: "test",
         sessionID: "session-\(tabID.uuidString.lowercased())"
       )
     }
     defer {
-      WorkspaceState.terminalSessionReferenceProvider = { tabID in
-        TerminalSessionBackends.reference(for: tabID)
+      WorkspaceState.terminalSessionReferenceProvider = { tabID, projectPath in
+        TerminalSessionBackends.reference(for: tabID, projectPath: projectPath)
       }
     }
 

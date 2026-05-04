@@ -1216,7 +1216,11 @@ fn default_storage_dir() -> PathBuf {
         return PathBuf::from(path);
     }
     let uid = unsafe { libc::getuid() };
-    Path::new("/tmp").join(format!("argon-terminal-sessions-{uid}"))
+    default_storage_dir_for_uid(uid)
+}
+
+fn default_storage_dir_for_uid(uid: libc::uid_t) -> PathBuf {
+    Path::new("/tmp").join(format!("argon-ts-{uid}"))
 }
 
 fn validate_session_id(session_id: &str) -> Result<()> {
@@ -1294,5 +1298,13 @@ mod tests {
         assert!(validate_session_id("argon-abc_123").is_ok());
         assert!(validate_session_id("../bad").is_err());
         assert!(validate_session_id("").is_err());
+    }
+
+    #[test]
+    fn default_storage_dir_uses_compact_tmp_path() {
+        assert_eq!(
+            default_storage_dir_for_uid(501),
+            Path::new("/tmp").join("argon-ts-501")
+        );
     }
 }

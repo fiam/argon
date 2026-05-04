@@ -9,8 +9,8 @@ final class WorkspaceState {
   nonisolated(unsafe) static var agentThinkingIdleTimeout: Duration = .seconds(3)
   nonisolated(unsafe) static var commandStatusProvider: (@Sendable ([String]) -> [String: Bool])?
   nonisolated(unsafe) static var terminalSessionReferenceProvider:
-    (@Sendable (UUID) -> TerminalSessionReference?) = { tabID in
-      TerminalSessionBackends.reference(for: tabID)
+    (@Sendable (UUID, String) -> TerminalSessionReference?) = { tabID, projectPath in
+      TerminalSessionBackends.reference(for: tabID, projectPath: projectPath)
     }
   nonisolated(unsafe) static var terminalSessionLaunchBuilder:
     (
@@ -1258,7 +1258,7 @@ final class WorkspaceState {
     let tabID = UUID()
     let terminalSession =
       request.keepRunningWhileThinking
-      ? Self.terminalSessionReferenceProvider(tabID)
+      ? Self.terminalSessionReferenceProvider(tabID, target.repoRoot)
       : nil
     TerminalSessionLifecycleLog.record(
       "open-agent-tab tab=\(tabID.uuidString.lowercased()) session=\(terminalSession?.sessionID ?? "none") profile=\(request.displayName) family=\(request.agentFamilyID?.rawValue ?? "none") sandbox=\(request.sandboxEnabled) yolo=\(request.yoloMode) resume=\(request.resumeSessionID ?? "none")"
@@ -2263,7 +2263,7 @@ final class WorkspaceState {
     }
     guard case .agent = tab.kind else { return nil }
     guard tab.keepsRunningAfterQuit || tab.terminalSession != nil else { return nil }
-    return Self.terminalSessionReferenceProvider(tab.id)
+    return Self.terminalSessionReferenceProvider(tab.id, tab.worktreePath)
   }
 
   private static func restoredKeepsRunningAfterQuit(

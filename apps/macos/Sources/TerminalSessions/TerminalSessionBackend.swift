@@ -20,7 +20,7 @@ protocol TerminalSessionBackend: Sendable {
   var backendID: String { get }
 
   func isAvailable() -> Bool
-  func reference(for tabID: UUID) -> TerminalSessionReference?
+  func reference(for tabID: UUID, projectPath: String) -> TerminalSessionReference?
   func stop(reference: TerminalSessionReference)
   func isRunning(reference: TerminalSessionReference) -> Bool
 }
@@ -34,9 +34,9 @@ enum TerminalSessionBackends {
     argon.isAvailable()
   }
 
-  static func reference(for tabID: UUID) -> TerminalSessionReference? {
+  static func reference(for tabID: UUID, projectPath: String) -> TerminalSessionReference? {
     guard argon.isAvailable() else { return nil }
-    return argon.reference(for: tabID)
+    return argon.reference(for: tabID, projectPath: projectPath)
   }
 
   static func attachLaunchConfiguration(
