@@ -1517,12 +1517,41 @@ struct WorkspaceStateTests {
     #expect(!state.worktreeNeedsAttention(for: "/tmp/repo/feature"))
   }
 
-  @Test("unscoped preserved agents do not contribute sidebar status")
+  @Test("persistent agents with unusable sessions restore in the background")
   @MainActor
-  func unscopedPreservedAgentsDoNotContributeSidebarStatus() {
+  func persistentAgentsWithUnusableSessionsRestoreInTheBackground() async {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
     let preservedSession = TerminalSessionBackends.markPreservedForRestore(
       reference: TerminalSessionReference(backendID: "argon", sessionID: "unscoped-session")
     )
+    let replacementSession = TerminalSessionReference(
+      backendID: "test",
+      sessionID: "replacement-background-session"
+    )
+    let stoppedSessions = TerminalSessionStopRecorder()
+    WorkspaceState.terminalSessionReferenceProvider = { _, _ in
+      replacementSession
+    }
+    WorkspaceState.terminalSessionLaunchBuilder = Self.testTerminalSessionLaunchBuilder
+    WorkspaceState.terminalSessionStopper = { session in
+      stoppedSessions.append(session)
+    }
+    WorkspaceState.commandStatusProvider = { commands in
+      Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
+    }
+    defer {
+      restoreExperiment()
+      WorkspaceState.terminalSessionReferenceProvider = { tabID, workspacePath in
+        TerminalSessionBackends.reference(for: tabID, workspacePath: workspacePath)
+      }
+      WorkspaceState.terminalSessionLaunchBuilder = Self.defaultTerminalSessionLaunchBuilder
+      WorkspaceState.terminalSessionStopper = { session in
+        TerminalSessionBackends.stop(reference: session)
+      }
+      WorkspaceState.commandStatusProvider = nil
+    }
+
+    let tabID = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
     let snapshot = PersistedWorkspaceWindowSnapshot(
       target: WorkspaceTarget(
         repoRoot: "/tmp/repo",
@@ -1532,7 +1561,7 @@ struct WorkspaceStateTests {
       terminalTabsByWorktreePath: [
         "/tmp/repo/feature": [
           PersistedWorkspaceTerminalTab(
-            id: UUID(uuidString: "44444444-4444-4444-4444-444444444444")!,
+            id: tabID,
             worktreePath: "/tmp/repo/feature",
             worktreeLabel: "feature/window",
             title: "Codex",
@@ -1542,8 +1571,12 @@ struct WorkspaceStateTests {
             createdAt: Date(timeIntervalSince1970: 4),
             isSandboxed: true,
             writableRoots: ["/tmp/repo/feature"],
+            resumeArgumentTemplate: "resume {{session_id}}",
             keepsRunningAfterQuit: true,
             terminalSession: preservedSession,
+            resumeSessionID: "44444444-4444-4444-4444-444444444444",
+            resumeCommandDescription:
+              "codex --yolo resume '44444444-4444-4444-4444-444444444444'",
             hasAttention: true,
             agentActivityState: .waitingForHuman
           )
@@ -1556,10 +1589,113 @@ struct WorkspaceStateTests {
     state.applyPersistedWindowSnapshot(snapshot)
 
     #expect(state.allTerminalTabs.isEmpty)
-    #expect(state.runningAgentCount == 0)
-    #expect(state.activeAgentCount(for: "/tmp/repo/feature") == 0)
-    #expect(state.agentActivitySummary(for: "/tmp/repo/feature") == .empty)
-    #expect(!state.worktreeNeedsAttention(for: "/tmp/repo/feature"))
+    #expect(state.runningAgentCount == 1)
+    #expect(state.activeAgentCount(for: "/tmp/repo/feature") == 1)
+    #expect(
+      state.agentActivitySummary(for: "/tmp/repo/feature")
+        == WorktreeAgentActivitySummary(
+          waitingForHumanCount: 1,
+          thinkingCount: 0,
+          runningAgentCount: 1
+        )
+    )
+    #expect(state.worktreeNeedsAttention(for: "/tmp/repo/feature"))
+
+    #expect(
+      await waitUntil {
+        state.terminalTabsByWorktreePath["/tmp/repo/feature"]?.contains {
+          $0.id == tabID && $0.terminalSession == replacementSession
+        } == true
+      }
+    )
+    #expect(stoppedSessions.sessions == [preservedSession])
+  }
+
+  @Test("persistent restorable agents show sidebar status before background restore finishes")
+  @MainActor
+  func persistentRestorableAgentsShowSidebarStatusBeforeBackgroundRestoreFinishes() async {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    let tabID = UUID(uuidString: "45454545-4545-4545-4545-454545454545")!
+    let replacementSession = TerminalSessionReference(
+      backendID: "test",
+      sessionID: "persistent-background-session"
+    )
+    WorkspaceState.tabRestoreTestDelay = .milliseconds(150)
+    WorkspaceState.terminalSessionReferenceProvider = { _, _ in
+      replacementSession
+    }
+    WorkspaceState.terminalSessionLaunchBuilder = Self.testTerminalSessionLaunchBuilder
+    WorkspaceState.commandStatusProvider = { commands in
+      Dictionary(commands.map { ($0, true) }, uniquingKeysWith: { current, _ in current })
+    }
+    defer {
+      restoreExperiment()
+      WorkspaceState.tabRestoreTestDelay = nil
+      WorkspaceState.terminalSessionReferenceProvider = { tabID, workspacePath in
+        TerminalSessionBackends.reference(for: tabID, workspacePath: workspacePath)
+      }
+      WorkspaceState.terminalSessionLaunchBuilder = Self.defaultTerminalSessionLaunchBuilder
+      WorkspaceState.commandStatusProvider = nil
+    }
+
+    let snapshot = PersistedWorkspaceWindowSnapshot(
+      target: WorkspaceTarget(
+        repoRoot: "/tmp/repo",
+        repoCommonDir: "/tmp/repo/.git",
+        selectedWorktreePath: "/tmp/repo"
+      ),
+      terminalTabsByWorktreePath: [
+        "/tmp/repo/feature": [
+          PersistedWorkspaceTerminalTab(
+            id: tabID,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Codex",
+            commandDescription: "codex --yolo",
+            kind: .agent(profileName: "Codex", icon: "codex"),
+            agentFamilyID: .codex,
+            createdAt: Date(timeIntervalSince1970: 4.5),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"],
+            resumeArgumentTemplate: "resume {{session_id}}",
+            keepsRunningAfterQuit: true,
+            resumeSessionID: "45454545-4545-4545-4545-454545454545",
+            resumeCommandDescription:
+              "codex --yolo resume '45454545-4545-4545-4545-454545454545'",
+            agentActivityState: .thinking
+          )
+        ]
+      ],
+      selectedTerminalTabIDsByWorktreePath: [
+        "/tmp/repo/feature": tabID
+      ]
+    )
+
+    let state = makeState()
+    state.applyPersistedWindowSnapshot(snapshot)
+
+    #expect(state.selectedWorktreePath == "/tmp/repo")
+    #expect(state.selectedTerminalTabs.isEmpty)
+    #expect(state.terminalTabsByWorktreePath["/tmp/repo/feature"] == nil)
+    #expect(state.activeAgentCount(for: "/tmp/repo/feature") == 1)
+    #expect(
+      state.agentActivitySummary(for: "/tmp/repo/feature")
+        == WorktreeAgentActivitySummary(
+          waitingForHumanCount: 0,
+          thinkingCount: 1,
+          runningAgentCount: 1
+        )
+    )
+
+    #expect(
+      await waitUntil {
+        state.terminalTabsByWorktreePath["/tmp/repo/feature"]?.contains {
+          $0.id == tabID && $0.terminalSession == replacementSession
+        } == true
+      }
+    )
+    #expect(state.selectedTerminalTabs.isEmpty)
+    #expect(state.activeAgentCount(for: "/tmp/repo/feature") == 1)
   }
 
   @Test("running preserved agents restore in the background while other tabs stay lazy")
