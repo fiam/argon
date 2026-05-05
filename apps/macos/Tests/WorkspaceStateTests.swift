@@ -791,128 +791,58 @@ struct WorkspaceStateTests {
     #expect(state.canRebaseSelectedWorktree == true)
   }
 
-  @Test("merge back fast-forwards a single ahead commit without showing strategy choices")
+  @Test("merge back always starts the generic agent flow for changed worktrees")
   @MainActor
-  func mergeBackFastForwardsSingleAheadCommitWithoutShowingStrategyChoices() async {
-    let restoreMergeBack = stubFastForwardMergeBackPerformer { _ in
-      FastForwardMergeBackResult(
-        baseBranchName: "main",
-        headBranchName: "feature/window",
-        branchHead: "def456",
-        landedCommitCount: 1
-      )
-    }
-    defer { restoreMergeBack() }
-
+  func mergeBackAlwaysStartsGenericAgentFlowForChangedWorktrees() {
     let state = makeState()
     selectFeatureWorktree(in: state)
     state.selectedBranchTopology = BranchTopology(aheadCount: 1, behindCount: 0)
 
     state.beginMergeBackFlow()
 
-    #expect(state.activeFinalizeAction == nil)
+    #expect(state.activeFinalizeAction == .mergeBackToBase)
     #expect(state.isPresentingMergeBackOptions == false)
     #expect(state.mergeBackOptions.isEmpty)
-    #expect(state.isPresentingAgentLaunchSheet == false)
-    #expect(state.isMergeBackInProgress(for: "/tmp/repo/feature") == true)
-    #expect(
-      await waitUntil {
-        state.isMergeBackCompleted(for: "/tmp/repo/feature")
-      })
-    #expect(state.isMergeBackInProgress(for: "/tmp/repo/feature") == false)
-    #expect(
-      state.launchWarningMessage == "Fast-forwarded main to feature/window (1 commit)."
-    )
+    #expect(state.isPresentingAgentLaunchSheet == true)
   }
 
-  @Test("merge back falls back to an agent when local fast-forward is unavailable")
+  @Test("merge back stays available for uncommitted work without ahead commits")
   @MainActor
-  func mergeBackFallsBackToAgentWhenLocalFastForwardIsUnavailable() async {
-    let restoreMergeBack = stubFastForwardMergeBackPerformer { _ in
-      throw GitService.GitError.commandFailed("The linked worktree has uncommitted changes.")
-    }
-    defer { restoreMergeBack() }
-
+  func mergeBackStaysAvailableForUncommittedWorkWithoutAheadCommits() throws {
     let state = makeState()
     selectFeatureWorktree(in: state)
     state.selectedBranchTopology = BranchTopology(aheadCount: 1, behindCount: 0)
-
-    state.beginMergeBackFlow()
-
-    #expect(state.isMergeBackInProgress(for: "/tmp/repo/feature") == true)
-    #expect(
-      await waitUntil {
-        state.activeFinalizeAction == .fastForwardToBase
-          && state.isPresentingAgentLaunchSheet
-      })
-    #expect(state.isMergeBackInProgress(for: "/tmp/repo/feature") == false)
-    #expect(state.isMergeBackCompleted(for: "/tmp/repo/feature") == false)
-  }
-
-  @Test("merge back with no ahead commits starts a commit-first flow")
-  @MainActor
-  func mergeBackWithNoAheadCommitsStartsCommitFirstFlow() throws {
-    let state = makeState()
-    selectFeatureWorktree(in: state)
     state.selectedBranchTopology = BranchTopology(aheadCount: 0, behindCount: 0)
+    state.selectedSummary = WorktreeDiffSummary(
+      fileCount: 1, addedLineCount: 1, removedLineCount: 0)
 
     #expect(state.canMergeBackSelectedWorktree == true)
 
     state.beginMergeBackFlow()
 
-    #expect(state.activeFinalizeAction == .fastForwardToBase)
+    #expect(state.activeFinalizeAction == .mergeBackToBase)
     #expect(state.isPresentingMergeBackOptions == false)
     #expect(state.mergeBackOptions.isEmpty)
     #expect(state.isPresentingAgentLaunchSheet == true)
 
-    let prompt = try state.finalizePrompt(for: .fastForwardToBase)
+    let prompt = try state.finalizePrompt(for: .mergeBackToBase)
     #expect(prompt.contains("No commits ahead yet:"))
     #expect(prompt.contains("create one clear commit on feature/window before landing it"))
   }
 
-  @Test("merge back rebases a single diverged commit without showing strategy choices")
+  @Test("merge back lets the agent decide when the base moved ahead")
   @MainActor
-  func mergeBackRebasesSingleDivergedCommitWithoutShowingStrategyChoices() {
+  func mergeBackLetsAgentDecideWhenBaseMovedAhead() {
     let state = makeState()
     selectFeatureWorktree(in: state)
     state.selectedBranchTopology = BranchTopology(aheadCount: 1, behindCount: 2)
 
     state.beginMergeBackFlow()
 
-    #expect(state.activeFinalizeAction == .rebaseAndMergeToBase)
+    #expect(state.activeFinalizeAction == .mergeBackToBase)
     #expect(state.isPresentingMergeBackOptions == false)
     #expect(state.mergeBackOptions.isEmpty)
     #expect(state.isPresentingAgentLaunchSheet == true)
-  }
-
-  @Test("merge back offers fast-forward and merge commit when branch is linearly ahead")
-  @MainActor
-  func mergeBackOffersFastForwardAndMergeCommitWhenBranchIsLinearlyAhead() {
-    let state = makeState()
-    selectFeatureWorktree(in: state)
-    state.selectedBranchTopology = BranchTopology(aheadCount: 3, behindCount: 0)
-
-    state.beginMergeBackFlow()
-
-    #expect(state.isPresentingMergeBackOptions == true)
-    #expect(state.mergeBackOptions == [.mergeCommitToBase, .fastForwardToBase])
-    #expect(state.activeFinalizeAction == nil)
-  }
-
-  @Test("merge back offers merge, rebase-and-merge, and squash when base moved ahead")
-  @MainActor
-  func mergeBackOffersMergeRebaseAndSquashWhenBaseMovedAhead() {
-    let state = makeState()
-    selectFeatureWorktree(in: state)
-    state.selectedBranchTopology = BranchTopology(aheadCount: 3, behindCount: 2)
-
-    state.beginMergeBackFlow()
-
-    #expect(state.isPresentingMergeBackOptions == true)
-    #expect(
-      state.mergeBackOptions == [.mergeCommitToBase, .rebaseAndMergeToBase, .squashAndMergeToBase]
-    )
-    #expect(state.activeFinalizeAction == nil)
   }
 
   @Test("launching a sandboxed merge finalizer keeps roots narrow and explains broker use")
@@ -1076,6 +1006,50 @@ struct WorkspaceStateTests {
         == nil)
     #expect(tab.hasAttention == false)
     #expect(tab.agentActivityState == .idle)
+  }
+
+  @Test("successful rebase asks for agent attention instead of marking merge done")
+  @MainActor
+  func successfulRebaseAsksForAgentAttentionInsteadOfMarkingMergeDone() async throws {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+    let tab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          sandboxEnabled: false
+        ))
+    )
+
+    _ = try state.prepareFinalizePrompt(
+      for: .rebaseOntoBase,
+      sourceTabID: tab.id
+    )
+    let pending = try #require(
+      state.pendingFinalizeRequest(for: .rebaseOntoBase, worktreePath: "/tmp/repo/feature")
+    )
+    #expect(state.isRebaseInProgress(for: "/tmp/repo/feature") == true)
+
+    let response = WorkspaceAgentControlResponse.finalize(
+      requestID: pending.request.id,
+      action: .rebaseOntoBase,
+      status: .success,
+      message: "Rebased onto main.",
+      branchHead: "abc123def456",
+      pullRequestURL: nil,
+      followUp: nil
+    )
+    try write(agentControlResponse: response, to: pending.responseFilePath)
+
+    #expect(
+      await waitUntil {
+        state.isRebaseInProgress(for: "/tmp/repo/feature") == false
+          && tab.agentActivityState == .waitingForHuman
+          && tab.hasAttention
+      })
+    #expect(state.isMergeBackCompleted(for: "/tmp/repo/feature") == false)
   }
 
   @Test("staged review launches activate after the agent sheet dismisses")
@@ -4427,6 +4401,8 @@ struct WorkspaceStateTests {
       mergeBaseSha: "abc123"
     )
     state.selectedBranchTopology = BranchTopology(aheadCount: 2, behindCount: 0)
+    state.selectedSummary = WorktreeDiffSummary(
+      fileCount: 1, addedLineCount: 1, removedLineCount: 0)
   }
 
   private func makeReviewSession(

@@ -184,6 +184,7 @@ private struct WorkspaceContentView: View {
         WorkspaceToolbarItems(
           showsFinalizeControls: workspaceState.canFinalizeSelectedWorktree,
           showsReviewProgress: isPreparingSelectedWorktreeReview,
+          showsRebaseProgress: workspaceState.isRebaseInProgressForSelectedWorktree,
           showsMergeBackProgress: workspaceState.isMergeBackInProgressForSelectedWorktree,
           isReviewDisabled: workspaceState.isPresentingReviewPreparationSheet,
           canRebase: workspaceState.canRebaseSelectedWorktree,
@@ -1050,6 +1051,7 @@ private struct WorkspaceCenterPane: View {
 private struct WorkspaceToolbarItems: ToolbarContent {
   let showsFinalizeControls: Bool
   let showsReviewProgress: Bool
+  let showsRebaseProgress: Bool
   let showsMergeBackProgress: Bool
   let isReviewDisabled: Bool
   let canRebase: Bool
@@ -1089,12 +1091,23 @@ private struct WorkspaceToolbarItems: ToolbarContent {
     }
 
     ToolbarItem(placement: .primaryAction) {
-      Button(action: onRebase) {
-        Image(systemName: "arrow.clockwise")
+      if showsRebaseProgress {
+        ProgressView()
+          .progressViewStyle(.circular)
+          .controlSize(.small)
+          .frame(width: 24, height: 24)
+          .help(rebaseHelpText)
+          .accessibilityLabel("Rebase Running")
+          .accessibilityIdentifier("workspace-rebase-running-indicator")
+      } else {
+        Button(action: onRebase) {
+          Image(systemName: "arrow.clockwise")
+        }
+        .help(rebaseHelpText)
+        .accessibilityLabel("Rebase onto Base")
+        .accessibilityIdentifier("workspace-rebase-button")
+        .disabled(!showsFinalizeControls || !canRebase)
       }
-      .help(rebaseHelpText)
-      .accessibilityLabel("Rebase onto Base")
-      .disabled(!showsFinalizeControls || !canRebase)
     }
 
     ToolbarItem(placement: .primaryAction) {
@@ -1105,12 +1118,14 @@ private struct WorkspaceToolbarItems: ToolbarContent {
           .frame(width: 24, height: 24)
           .help(mergeBackHelpText)
           .accessibilityLabel("Merge Back Running")
+          .accessibilityIdentifier("workspace-merge-back-running-indicator")
       } else {
         Button(action: onMergeBack) {
           Image(systemName: "arrow.triangle.branch")
         }
         .help(mergeBackHelpText)
         .accessibilityLabel("Merge Back")
+        .accessibilityIdentifier("workspace-merge-back-button")
         .disabled(!showsFinalizeControls || !canMergeBack)
       }
     }
@@ -1121,6 +1136,7 @@ private struct WorkspaceToolbarItems: ToolbarContent {
       }
       .help(openPRHelpText)
       .accessibilityLabel("Open Pull Request")
+      .accessibilityIdentifier("workspace-open-pr-button")
       .disabled(!showsFinalizeControls || !canOpenPR)
     }
   }
@@ -1128,6 +1144,9 @@ private struct WorkspaceToolbarItems: ToolbarContent {
   private var rebaseHelpText: String {
     if !showsFinalizeControls {
       return "The base worktree cannot be rebased onto itself."
+    }
+    if showsRebaseProgress {
+      return "Rebase is running."
     }
     if !canRebase {
       return "Rebase is only available when this worktree is behind the base branch."
@@ -2600,6 +2619,7 @@ private struct WorkspaceAgentTabSheet: View {
           TextField("Command", text: $customCommand, prompt: Text("e.g. codex --yolo"))
             .textFieldStyle(.roundedBorder)
             .font(.system(.body, design: .monospaced))
+            .accessibilityIdentifier("workspace-agent-custom-command-field")
         }
       }
 
@@ -2651,6 +2671,7 @@ private struct WorkspaceAgentTabSheet: View {
         }
         .keyboardShortcut(.defaultAction)
         .disabled(!canLaunch)
+        .accessibilityIdentifier("workspace-agent-launch-button")
       }
     }
     .padding(24)

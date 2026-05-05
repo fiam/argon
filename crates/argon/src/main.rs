@@ -15,10 +15,11 @@ mod terminal_session;
 
 use anyhow::{Context, Result, bail};
 use argon_core::{
-    AgentEvent, AgentEventKind, CliCommand, CliResponse, CommentAnchor, CommentAuthor, CommentKind,
-    PendingFeedback, ResolvedReviewTarget, ReviewComment, ReviewMode, ReviewOutcome, ReviewSession,
-    SCHEMA_VERSION, SessionPayload, SessionStatus, SessionStore, StyledSpan, ThreadState,
-    auto_detect_review_target, inspect_worktree_mergeability, resolve_branch_target,
+    AgentControlResponse, AgentControlStatus, AgentEvent, AgentEventKind, CliCommand, CliResponse,
+    CommentAnchor, CommentAuthor, CommentKind, FinalizeAction, PendingFeedback,
+    ResolvedReviewTarget, ReviewComment, ReviewMode, ReviewOutcome, ReviewSession,
+    ReviewSummaryDraft, SCHEMA_VERSION, SessionPayload, SessionStatus, SessionStore, StyledSpan,
+    ThreadState, auto_detect_review_target, inspect_worktree_mergeability, resolve_branch_target,
     resolve_uncommitted_target,
 };
 use chrono::{DateTime, Utc};
@@ -498,6 +499,37 @@ enum DevCommands {
     Decide(DevDecideArgs),
     UpdateTarget(DevUpdateTargetArgs),
     ResolveThread(DevResolveThreadArgs),
+    #[command(hide = true)]
+    FakeControlAgent(FakeControlAgentArgs),
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum FakeControlAgentStatus {
+    Success,
+    Failed,
+}
+
+impl From<FakeControlAgentStatus> for AgentControlStatus {
+    fn from(status: FakeControlAgentStatus) -> Self {
+        match status {
+            FakeControlAgentStatus::Success => AgentControlStatus::Success,
+            FakeControlAgentStatus::Failed => AgentControlStatus::Failed,
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+struct FakeControlAgentArgs {
+    #[arg(long, default_value_t = 250)]
+    delay_ms: u64,
+    #[arg(long, default_value_t = 0)]
+    post_response_sleep_ms: u64,
+    #[arg(long, value_enum, default_value = "success")]
+    status: FakeControlAgentStatus,
+    #[arg(long)]
+    message: Option<String>,
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    prompt: Vec<String>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -2907,6 +2939,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn fake_control_agent_extracts_contract_path_and_finalize_action() {
+        let prompt = r#"
+Structured response contract:
+1. When you finish, write one JSON object to this exact path:
+   /tmp/argon-agent-control/w-123/request.json
+
+Success example:
+{
+  "action" : "merge_back_to_base",
+  "kind" : "finalize",
+  "request_id" : "5f44e59d-4ad9-4e53-a835-04bfbb6802eb",
+  "status" : "success"
+}
+"#;
+
+        assert_eq!(
+            fake_control_response_path(prompt).expect("path"),
+            PathBuf::from("/tmp/argon-agent-control/w-123/request.json")
+        );
+        assert_eq!(
+            fake_control_request_id(prompt).expect("request id"),
+            Uuid::parse_str("5f44e59d-4ad9-4e53-a835-04bfbb6802eb").unwrap()
+        );
+        assert_eq!(
+            fake_control_finalize_action(prompt).expect("action"),
+            Some(FinalizeAction::MergeBackToBase)
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn desktop_spawn_detaches_into_new_session() {
@@ -2941,9 +3003,10 @@ mod tests {
 }
 
 fn run_dev(command: DevCommands, runtime: &RuntimeOptions) -> Result<()> {
-    let store = open_store_for_current_repo(runtime)?;
     match command {
+        DevCommands::FakeControlAgent(args) => run_fake_control_agent(args),
         DevCommands::Comment(args) => {
+            let store = open_store_for_current_repo(runtime)?;
             let kind = if args.file.is_some() || args.line_new.is_some() || args.line_old.is_some()
             {
                 CommentKind::Line
@@ -2973,6 +3036,7 @@ fn run_dev(command: DevCommands, runtime: &RuntimeOptions) -> Result<()> {
             Ok(())
         }
         DevCommands::Decide(args) => {
+            let store = open_store_for_current_repo(runtime)?;
             let session = store.set_decision(args.session, args.outcome.into(), args.summary)?;
             if args.json {
                 println!("{}", serde_json::to_string_pretty(&session)?);
@@ -2986,6 +3050,7 @@ fn run_dev(command: DevCommands, runtime: &RuntimeOptions) -> Result<()> {
             Ok(())
         }
         DevCommands::UpdateTarget(args) => {
+            let store = open_store_for_current_repo(runtime)?;
             let session = store.update_session_target(
                 args.session,
                 args.mode.into(),
@@ -2996,10 +3061,140 @@ fn run_dev(command: DevCommands, runtime: &RuntimeOptions) -> Result<()> {
             print_session(CliCommand::Review, &session, args.json)
         }
         DevCommands::ResolveThread(args) => {
+            let store = open_store_for_current_repo(runtime)?;
             let session = store.mark_thread_resolved(args.session, args.thread)?;
             print_session(CliCommand::ReviewerComment, &session, args.json)
         }
     }
+}
+
+fn run_fake_control_agent(args: FakeControlAgentArgs) -> Result<()> {
+    let prompt = args.prompt.join(" ");
+    if prompt.trim().is_empty() {
+        bail!("fake control agent requires the injected Argon prompt as an argument");
+    }
+
+    let response_path = fake_control_response_path(&prompt)?;
+    let request_id = fake_control_request_id(&prompt)?;
+    let status = AgentControlStatus::from(args.status);
+    let message = args.message.unwrap_or_else(|| match status {
+        AgentControlStatus::Success => "Fake agent completed the request.".to_string(),
+        AgentControlStatus::Failed => "Fake agent failed the request.".to_string(),
+    });
+
+    if args.delay_ms > 0 {
+        thread::sleep(Duration::from_millis(args.delay_ms));
+    }
+
+    let response = match fake_control_finalize_action(&prompt)? {
+        Some(action) => AgentControlResponse::Finalize {
+            request_id,
+            action,
+            status,
+            message,
+            branch_head: Some("fake-agent-head".to_string()),
+            pull_request_url: None,
+            follow_up: None,
+        },
+        None => AgentControlResponse::ReviewSummary {
+            request_id,
+            status,
+            message,
+            draft: (status == AgentControlStatus::Success).then(|| ReviewSummaryDraft {
+                title: "Fake review summary".to_string(),
+                summary: "Generated by the Argon fake control agent.".to_string(),
+                testing: "Not run by the fake agent.".to_string(),
+                risks: "Fake agent response for deterministic UI coverage.".to_string(),
+            }),
+        },
+    };
+
+    if let Some(parent) = response_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let data = serde_json::to_vec_pretty(&response)?;
+    std::fs::write(&response_path, data)
+        .with_context(|| format!("writing {}", response_path.display()))?;
+    println!("argon fake control agent wrote {}", response_path.display());
+
+    if args.post_response_sleep_ms > 0 {
+        thread::sleep(Duration::from_millis(args.post_response_sleep_ms));
+    }
+
+    Ok(())
+}
+
+fn fake_control_response_path(prompt: &str) -> Result<PathBuf> {
+    const CONTRACT_MARKER: &str = "write one JSON object to this exact path:";
+    if let Some((_, rest)) = prompt.split_once(CONTRACT_MARKER)
+        && let Some(path) = rest
+            .lines()
+            .map(str::trim)
+            .find(|line| line.starts_with('/'))
+    {
+        return Ok(PathBuf::from(path));
+    }
+
+    const HEREDOC_MARKER: &str = "cat > '";
+    if let Some((_, rest)) = prompt.split_once(HEREDOC_MARKER)
+        && let Some((path, _)) = rest.split_once('\'')
+    {
+        return Ok(PathBuf::from(path));
+    }
+
+    bail!("fake control agent could not find response path in prompt")
+}
+
+fn fake_control_request_id(prompt: &str) -> Result<Uuid> {
+    let raw = fake_control_extract_json_string(prompt, "request_id")
+        .context("fake control agent could not find request_id in prompt")?;
+    Uuid::parse_str(&raw).with_context(|| format!("invalid request_id: {raw}"))
+}
+
+fn fake_control_finalize_action(prompt: &str) -> Result<Option<FinalizeAction>> {
+    let Some(raw) = fake_control_extract_json_string(prompt, "action") else {
+        return Ok(None);
+    };
+    let action = serde_json::from_value(serde_json::Value::String(raw.clone()))
+        .with_context(|| format!("invalid finalize action: {raw}"))?;
+    Ok(Some(action))
+}
+
+fn fake_control_extract_json_string(prompt: &str, key: &str) -> Option<String> {
+    let marker = format!("\"{key}\"");
+    let mut remaining = prompt;
+
+    while let Some((_, rest)) = remaining.split_once(&marker) {
+        let Some(rest) = rest.trim_start().strip_prefix(':') else {
+            remaining = rest;
+            continue;
+        };
+        let Some(rest) = rest.trim_start().strip_prefix('"') else {
+            remaining = rest;
+            continue;
+        };
+
+        let mut value = String::new();
+        let mut escaped = false;
+        for character in rest.chars() {
+            if escaped {
+                value.push(character);
+                escaped = false;
+                continue;
+            }
+
+            match character {
+                '\\' => escaped = true,
+                '"' => return Some(value),
+                _ => value.push(character),
+            }
+        }
+
+        return None;
+    }
+
+    None
 }
 
 fn wait_for_decision(

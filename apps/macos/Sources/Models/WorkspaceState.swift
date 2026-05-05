@@ -229,7 +229,7 @@ final class WorkspaceState {
 
   var canFinalizeSelectedWorktree: Bool {
     guard let selectedWorktree, !selectedWorktree.isBaseWorktree else { return false }
-    return selectedReviewTarget?.mode == .branch
+    return Self.supportsAllChangesDiff(for: selectedWorktree)
   }
 
   var selectedDiffMode: WorkspaceDiffMode {
@@ -251,7 +251,8 @@ final class WorkspaceState {
   }
 
   var canMergeBackSelectedWorktree: Bool {
-    canFinalizeSelectedWorktree && selectedBranchTopology != nil
+    canFinalizeSelectedWorktree
+      && (selectedSummary.hasChanges || ((selectedBranchTopology?.aheadCount ?? 0) > 0))
   }
 
   var canOpenPullRequestForSelectedWorktree: Bool {
@@ -846,6 +847,15 @@ final class WorkspaceState {
     return isMergeBackInProgress(for: selectedWorktree.path)
   }
 
+  var isRebaseInProgressForSelectedWorktree: Bool {
+    guard let selectedWorktree else { return false }
+    return isRebaseInProgress(for: selectedWorktree.path)
+  }
+
+  func isRebaseInProgress(for worktreePath: String) -> Bool {
+    isFinalizeInProgress(.rebaseOntoBase, for: worktreePath)
+  }
+
   func isMergeBackInProgress(for worktreePath: String) -> Bool {
     let normalizedWorktreePath = normalizedPath(worktreePath)
     if activeLocalMergeBackWorktreePaths.contains(normalizedWorktreePath) {
@@ -858,6 +868,17 @@ final class WorkspaceState {
         return false
       }
       return action.isMergeBackAction
+    }
+  }
+
+  func isFinalizeInProgress(
+    _ action: WorktreeFinalizeAction,
+    for worktreePath: String
+  ) -> Bool {
+    let normalizedWorktreePath = normalizedPath(worktreePath)
+    return activeAgentControlRequestsByID.values.contains { pending in
+      pending.worktreePath == normalizedWorktreePath
+        && pending.request.action == .finalize(action)
     }
   }
 
@@ -1048,25 +1069,8 @@ final class WorkspaceState {
   }
 
   func beginMergeBackFlow() {
-    guard canMergeBackSelectedWorktree, let selectedBranchTopology else { return }
-
-    if selectedBranchTopology.aheadCount <= 1 {
-      let action: WorktreeFinalizeAction =
-        selectedBranchTopology.needsRebase ? .rebaseAndMergeToBase : .fastForwardToBase
-      beginFinalizeFlow(action)
-      return
-    }
-
-    let options = mergeBackOptions(for: selectedBranchTopology)
-    guard !options.isEmpty else { return }
-
-    if options.count == 1 {
-      beginFinalizeFlow(options[0])
-      return
-    }
-
-    mergeBackOptions = options
-    isPresentingMergeBackOptions = true
+    guard canMergeBackSelectedWorktree else { return }
+    beginFinalizeFlow(.mergeBackToBase)
   }
 
   func chooseMergeBackAction(_ action: WorktreeFinalizeAction) {
@@ -1216,12 +1220,17 @@ final class WorkspaceState {
           options.buildRequest(
             prompt: prompt
           ))
-        guard openedTab != nil else {
+        guard let openedTab else {
           cancelFinalizeRequest(for: finalizeAction)
           throw GitService.GitError.commandFailed(
             "Open a worktree before launching a finalize agent."
           )
         }
+        setPendingFinalizeRequestSourceTab(
+          for: finalizeAction,
+          worktreePath: openedTab.worktreePath,
+          sourceTabID: openedTab.id
+        )
         finishFinalizeFlow()
         return
       }
@@ -3837,6 +3846,28 @@ final class WorkspaceState {
     }
   }
 
+  func setPendingFinalizeRequestSourceTab(
+    for action: WorktreeFinalizeAction,
+    worktreePath: String,
+    sourceTabID: UUID
+  ) {
+    let normalizedWorktreePath = normalizedPath(worktreePath)
+    guard
+      let entry = activeAgentControlRequestsByID.first(where: { entry in
+        let pending = entry.value
+        return pending.worktreePath == normalizedWorktreePath
+          && pending.request.action == .finalize(action)
+      })
+    else { return }
+
+    activeAgentControlRequestsByID[entry.key] = PendingWorkspaceAgentControlRequest(
+      request: entry.value.request,
+      worktreePath: entry.value.worktreePath,
+      responseFilePath: entry.value.responseFilePath,
+      sourceTabID: sourceTabID
+    )
+  }
+
   func reviewSummaryControlRequest(
     for worktreePath: String
   ) throws -> WorkspaceAgentControlRequest {
@@ -3876,7 +3907,7 @@ final class WorkspaceState {
     guard let branchName = selectedWorktree.branchName, !branchName.isEmpty else {
       throw GitService.GitError.commandFailed("Finalize actions require a branch-backed worktree.")
     }
-    guard let target = selectedReviewTarget, target.mode == .branch else {
+    guard let target = selectedFinalizeTarget(), target.mode == .branch else {
       throw GitService.GitError.commandFailed(
         "Finalize actions require a branch-based worktree target."
       )
@@ -3889,8 +3920,17 @@ final class WorkspaceState {
       branchName: branchName,
       baseRef: target.baseRef,
       compareURL: selectedPullRequestURL,
-      commitBeforeLanding: action.isMergeBackAction && selectedBranchTopology?.aheadCount == 0
+      commitBeforeLanding: action.isMergeBackAction
+        && (selectedBranchTopology?.aheadCount ?? 0) == 0
     )
+  }
+
+  private func selectedFinalizeTarget() -> ResolvedTarget? {
+    if let selectedReviewTarget, selectedReviewTarget.mode == .branch {
+      return selectedReviewTarget
+    }
+    guard let selectedWorktree else { return nil }
+    return GitService.resolveWorkspaceTarget(repoRoot: selectedWorktree.path, diffMode: .allChanges)
   }
 
   private func beginAgentControlRequest(
@@ -4054,7 +4094,12 @@ final class WorkspaceState {
   ) {
     switch status {
     case .success:
-      if action.isMergeBackAction {
+      if action == .rebaseOntoBase {
+        if let sourceTabID = pendingRequest.sourceTabID {
+          markAgentWaitingForHuman(sourceTabID)
+          markTerminalNeedsAttention(sourceTabID)
+        }
+      } else if action.isMergeBackAction {
         completedMergeBackWorktreePaths.insert(pendingRequest.worktreePath)
         if let sourceTabID = pendingRequest.sourceTabID {
           markAgentDone(sourceTabID)

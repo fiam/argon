@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import XCTest
 
@@ -313,8 +314,117 @@ final class ArgonUITests: XCTestCase {
 
     XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
     XCTAssertTrue(app.buttons["workspace-merge-back-button"].waitForExistence(timeout: 15))
-    XCTAssertTrue(app.buttons["workspace-merge-style-button"].exists)
     XCTAssertTrue(app.buttons["workspace-open-pr-button"].exists)
+  }
+
+  @MainActor
+  func testMergeBackButtonRunsFakeAgentForUncommittedChanges() throws {
+    let target = try Self.createLinkedWorkspaceWithUncommittedChanges()
+    let app = XCUIApplication()
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.fixtureRoot)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--workspace-repo-root", target.repoRoot,
+      "--workspace-common-dir", target.repoCommonDir,
+      "--selected-worktree-path", target.selectedWorktreePath,
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launchEnvironment[Self.disableCLIInstallPromptEnvironmentKey] = "1"
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+
+    let mergeButton = app.buttons["workspace-merge-back-button"]
+    XCTAssertTrue(mergeButton.waitForExistence(timeout: 15))
+    XCTAssertTrue(waitForEnabledState(mergeButton, enabled: true, timeout: 10))
+    mergeButton.click()
+
+    try launchFakeFinalizeAgent(
+      in: app,
+      message: "Fake merge back complete.",
+      postResponseSleepMilliseconds: 0
+    )
+
+    XCTAssertTrue(
+      app.descendants(matching: .any)["workspace-merge-back-running-indicator"]
+        .waitForExistence(timeout: 5)
+    )
+    XCTAssertTrue(
+      waitForSidebarRowLabel(
+        in: app,
+        worktreePath: target.selectedWorktreePath,
+        containing: "done",
+        timeout: 10
+      )
+    )
+  }
+
+  @MainActor
+  func testRebaseButtonRunsFakeAgentAndAsksForAttention() throws {
+    let target = try Self.createLinkedWorkspaceBehindBase()
+    let app = XCUIApplication()
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.fixtureRoot)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--workspace-repo-root", target.repoRoot,
+      "--workspace-common-dir", target.repoCommonDir,
+      "--selected-worktree-path", target.selectedWorktreePath,
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launchEnvironment[Self.disableCLIInstallPromptEnvironmentKey] = "1"
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+
+    let rebaseButton = app.buttons["workspace-rebase-button"]
+    XCTAssertTrue(rebaseButton.waitForExistence(timeout: 15))
+    XCTAssertTrue(waitForEnabledState(rebaseButton, enabled: true, timeout: 10))
+    rebaseButton.click()
+
+    try launchFakeFinalizeAgent(
+      in: app,
+      delayMilliseconds: 2_500,
+      message: "Fake rebase complete.",
+      postResponseSleepMilliseconds: 20_000
+    )
+
+    XCTAssertTrue(
+      app.descendants(matching: .any)["workspace-rebase-running-indicator"]
+        .waitForExistence(timeout: 5)
+    )
+
+    let baseRow = app.descendants(matching: .any)[
+      Self.workspaceSidebarAccessibilityIdentifier(for: target.repoRoot)
+    ]
+    XCTAssertTrue(baseRow.waitForExistence(timeout: 10))
+    baseRow.click()
+
+    XCTAssertTrue(
+      waitForSidebarRowLabel(
+        in: app,
+        worktreePath: target.selectedWorktreePath,
+        containing: "waiting",
+        timeout: 10
+      )
+    )
+    XCTAssertFalse(
+      waitForSidebarRowLabel(
+        in: app,
+        worktreePath: target.selectedWorktreePath,
+        containing: "done",
+        timeout: 0.5
+      )
+    )
   }
 
   @MainActor
@@ -1251,6 +1361,31 @@ final class ArgonUITests: XCTestCase {
       selectedWorktreePath: worktreeRoot.path,
       argonHome: argonHome.path
     )
+  }
+
+  private static func createLinkedWorkspaceWithUncommittedChanges() throws
+    -> WorkspaceLaunchTarget
+  {
+    let target = try createLinkedWorkspace()
+    try "work in progress\n".write(
+      to: URL(fileURLWithPath: target.selectedWorktreePath)
+        .appendingPathComponent("feature.txt"),
+      atomically: true,
+      encoding: .utf8
+    )
+    return target
+  }
+
+  private static func createLinkedWorkspaceBehindBase() throws -> WorkspaceLaunchTarget {
+    let target = try createLinkedWorkspace()
+    let repoRoot = URL(fileURLWithPath: target.repoRoot)
+    try "initial\nmain update\n".write(
+      to: repoRoot.appendingPathComponent("README.md"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repoRoot, ["commit", "-am", "Advance main"])
+    return target
   }
 
   private static func createLazyRestoreWorkspace() throws -> RestoredWorkspaceLaunchTarget {
@@ -2319,6 +2454,73 @@ final class ArgonUITests: XCTestCase {
     }
   }
 
+  @MainActor
+  private func launchFakeFinalizeAgent(
+    in app: XCUIApplication,
+    delayMilliseconds: Int = 750,
+    message: String,
+    postResponseSleepMilliseconds: Int
+  ) throws {
+    let customCommandCard = app.buttons["agent-launch-custom-command-card"]
+    XCTAssertTrue(customCommandCard.waitForExistence(timeout: 10))
+    customCommandCard.click()
+
+    let sandboxCheckbox = app.checkBoxes["Sandboxed"]
+    if sandboxCheckbox.exists, isCheckboxChecked(sandboxCheckbox) {
+      sandboxCheckbox.click()
+    }
+
+    let commandField = app.descendants(matching: .any)["workspace-agent-custom-command-field"]
+    XCTAssertTrue(commandField.waitForExistence(timeout: 10))
+
+    let command = [
+      shellQuote(Self.argonCLIPath()),
+      "agent", "dev", "fake-control-agent",
+      "--delay-ms", "\(delayMilliseconds)",
+      "--post-response-sleep-ms", "\(postResponseSleepMilliseconds)",
+      "--message", shellQuote(message),
+    ].joined(separator: " ")
+    pasteText(command, into: commandField, app: app)
+
+    let launchButton = app.buttons["workspace-agent-launch-button"]
+    XCTAssertTrue(launchButton.waitForExistence(timeout: 10))
+    XCTAssertTrue(waitForEnabledState(launchButton, enabled: true, timeout: 5))
+    launchButton.click()
+  }
+
+  @MainActor
+  private func pasteText(_ text: String, into element: XCUIElement, app: XCUIApplication) {
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    pasteboard.setString(text, forType: .string)
+    element.click()
+    app.typeKey("v", modifierFlags: .command)
+  }
+
+  @MainActor
+  private func isCheckboxChecked(_ checkbox: XCUIElement) -> Bool {
+    if let value = checkbox.value as? String {
+      return value == "1" || value.caseInsensitiveCompare("true") == .orderedSame
+    }
+    if let value = checkbox.value as? NSNumber {
+      return value.boolValue
+    }
+    return checkbox.isSelected
+  }
+
+  private static func argonCLIPath() -> String {
+    let repoRoot = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    let releaseCLI = repoRoot.appendingPathComponent("target/release/argon").path
+    if FileManager.default.isExecutableFile(atPath: releaseCLI) {
+      return releaseCLI
+    }
+    return repoRoot.appendingPathComponent("target/debug/argon").path
+  }
+
   private func shellQuote(_ value: String) -> String {
     "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
   }
@@ -2400,6 +2602,31 @@ final class ArgonUITests: XCTestCase {
         if hasConflictMarker == expected {
           return true
         }
+      }
+      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    return false
+  }
+
+  @MainActor
+  private func waitForSidebarRowLabel(
+    in app: XCUIApplication,
+    worktreePath: String,
+    containing expectedText: String,
+    timeout: TimeInterval
+  ) -> Bool {
+    let row = app.descendants(matching: .any)[
+      Self.workspaceSidebarAccessibilityIdentifier(for: worktreePath)
+    ]
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+      if row.exists,
+        row.label.range(
+          of: expectedText,
+          options: [.caseInsensitive, .diacriticInsensitive]
+        ) != nil
+      {
+        return true
       }
       RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     }

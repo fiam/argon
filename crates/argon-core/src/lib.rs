@@ -8,7 +8,8 @@ pub mod target;
 pub mod workspace;
 
 pub use agent_control::{
-    AgentControlAction, AgentControlRequest, FinalizeAction, ReviewSummaryDraft,
+    AgentControlAction, AgentControlRequest, AgentControlResponse, AgentControlStatus,
+    FinalizeAction, ReviewSummaryDraft,
 };
 pub use diff::{
     DiffError, DiffHunk, DiffLine, DiffLineKind, FileDiff, ReviewDiff, anchor_at,

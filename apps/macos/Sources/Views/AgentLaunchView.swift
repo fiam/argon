@@ -662,6 +662,7 @@ struct CustomAgentPickerCard: View {
     }
     .buttonStyle(.plain)
     .help("Run any command in a new agent tab.")
+    .accessibilityIdentifier("agent-launch-custom-command-card")
   }
 }
 

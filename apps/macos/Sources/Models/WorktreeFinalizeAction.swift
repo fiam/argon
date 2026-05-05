@@ -2,6 +2,7 @@ import Foundation
 
 enum WorktreeFinalizeAction: String, Identifiable, Sendable {
   case rebaseOntoBase
+  case mergeBackToBase
   case fastForwardToBase
   case mergeCommitToBase
   case rebaseAndMergeToBase
@@ -14,7 +15,8 @@ enum WorktreeFinalizeAction: String, Identifiable, Sendable {
     switch self {
     case .rebaseOntoBase, .openPullRequest:
       false
-    case .fastForwardToBase, .mergeCommitToBase, .rebaseAndMergeToBase, .squashAndMergeToBase:
+    case .mergeBackToBase, .fastForwardToBase, .mergeCommitToBase, .rebaseAndMergeToBase,
+      .squashAndMergeToBase:
       true
     }
   }
@@ -23,6 +25,8 @@ enum WorktreeFinalizeAction: String, Identifiable, Sendable {
     switch self {
     case .rebaseOntoBase:
       "rebase"
+    case .mergeBackToBase:
+      "merge back"
     case .fastForwardToBase:
       "fast-forward"
     case .mergeCommitToBase:
@@ -40,6 +44,8 @@ enum WorktreeFinalizeAction: String, Identifiable, Sendable {
     switch self {
     case .rebaseOntoBase:
       "Rebase onto Base"
+    case .mergeBackToBase:
+      "Merge Back"
     case .fastForwardToBase:
       "Fast-Forward Base"
     case .mergeCommitToBase:
@@ -57,6 +63,8 @@ enum WorktreeFinalizeAction: String, Identifiable, Sendable {
     switch self {
     case .rebaseOntoBase:
       "Launch Rebase Agent"
+    case .mergeBackToBase:
+      "Launch Merge Agent"
     case .fastForwardToBase:
       "Launch Fast-Forward Agent"
     case .mergeCommitToBase:
@@ -74,6 +82,8 @@ enum WorktreeFinalizeAction: String, Identifiable, Sendable {
     switch self {
     case .rebaseOntoBase:
       "Launch an agent to rebase this worktree onto the base branch."
+    case .mergeBackToBase:
+      "Launch an agent to inspect this worktree and merge it back into the base branch."
     case .fastForwardToBase:
       "Launch an agent to fast-forward the base branch to this worktree."
     case .mergeCommitToBase:
@@ -91,6 +101,8 @@ enum WorktreeFinalizeAction: String, Identifiable, Sendable {
     switch self {
     case .rebaseOntoBase:
       "Select the live agent tab that should rebase this worktree onto the base branch."
+    case .mergeBackToBase:
+      "Select the live agent tab that should inspect this worktree and merge it back into the base branch."
     case .fastForwardToBase:
       "Select the live agent tab that should fast-forward the base branch to this worktree."
     case .mergeCommitToBase:
@@ -108,7 +120,8 @@ enum WorktreeFinalizeAction: String, Identifiable, Sendable {
     switch self {
     case .rebaseOntoBase:
       false
-    case .fastForwardToBase, .mergeCommitToBase, .rebaseAndMergeToBase, .squashAndMergeToBase:
+    case .mergeBackToBase, .fastForwardToBase, .mergeCommitToBase, .rebaseAndMergeToBase,
+      .squashAndMergeToBase:
       true
     case .openPullRequest:
       false
@@ -160,6 +173,26 @@ enum WorktreeFinalizeAction: String, Identifiable, Sendable {
         4. Do not merge into \(baseRef), open a pull request, or delete the worktree or branch.
 
         When you are done, summarize the rebase result, the new branch head, and any follow-up.
+        """
+    case .mergeBackToBase:
+      return """
+        You are finalizing a linked Git worktree for Argon.
+
+        Task: Merge this worktree back into the base branch.
+        Base worktree: \(repoRoot)
+        Linked worktree: \(worktreePath)
+        Feature branch: \(branchName)
+        Base branch: \(baseRef)\(compareSection)\(commitBeforeLandingSection)
+
+        Expectations:
+        1. Inspect the linked worktree at \(worktreePath), including committed and uncommitted changes.
+        2. If there are uncommitted changes, stage the intended work and create one clear commit on \(branchName) before landing it.
+        3. Inspect the relationship between \(branchName) and \(baseRef), then choose the safest way to land the work.
+        4. Prefer a simple fast-forward when it is valid; if the base moved, rebase or merge carefully based on the repository state.
+        5. Resolve conflicts carefully, validate the result, and run the relevant tests before finishing.
+        6. Do not delete the worktree or branch after landing.
+
+        When you are done, summarize what landed on the base branch, the final commit(s), and any follow-up.
         """
     case .fastForwardToBase:
       return """

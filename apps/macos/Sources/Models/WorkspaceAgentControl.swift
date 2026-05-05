@@ -206,6 +206,8 @@ struct WorkspaceAgentControlRequest: Identifiable, Equatable, Sendable {
       switch action {
       case .rebaseOntoBase:
         "Rebased the worktree onto the base branch."
+      case .mergeBackToBase:
+        "Merged the worktree back into the base branch."
       case .fastForwardToBase:
         "Fast-forwarded the base branch to the worktree."
       case .mergeCommitToBase:
@@ -397,6 +399,8 @@ extension WorktreeFinalizeAction {
     switch self {
     case .rebaseOntoBase:
       "rebase_onto_base"
+    case .mergeBackToBase:
+      "merge_back_to_base"
     case .fastForwardToBase:
       "fast_forward_to_base"
     case .mergeCommitToBase:
@@ -414,6 +418,8 @@ extension WorktreeFinalizeAction {
     switch agentControlIdentifier {
     case "rebase_onto_base":
       self = .rebaseOntoBase
+    case "merge_back_to_base":
+      self = .mergeBackToBase
     case "fast_forward_to_base":
       self = .fastForwardToBase
     case "merge_commit_to_base":
