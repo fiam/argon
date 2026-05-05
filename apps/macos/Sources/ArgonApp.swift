@@ -5,6 +5,7 @@ import SwiftUI
 struct ArgonApp: App {
   private static let cliLaunchRequest = AppLaunchTarget.current()
   private static let launchAppearance = LaunchAppearance.current()
+  private static let runtimeMode = AppRuntimeMode.current()
   @NSApplicationDelegateAdaptor(ArgonApplicationDelegate.self) private var appDelegate
   @FocusedValue(\.appState) private var focusedAppState
   @State private var recentProjects = RecentProjects()
@@ -19,6 +20,9 @@ struct ArgonApp: App {
 
   init() {
     AppSignalHandling.installEmbeddedTerminalHandlers()
+    if Self.runtimeMode.suppressesVisibleAppHost {
+      _ = NSApplication.shared.setActivationPolicy(.prohibited)
+    }
     if let appearance = Self.launchAppearance.nsAppearance {
       NSApplication.shared.appearance = appearance
     }
@@ -26,32 +30,41 @@ struct ArgonApp: App {
 
   var body: some Scene {
     Window("Argon", id: "welcome") {
-      WelcomeView(launchRequest: Self.cliLaunchRequest)
-        .environment(recentProjects)
-        .environment(savedAgents)
-        .environment(agentAvailability)
-        .environment(commandContext)
-        .environment(reviewWindowRegistry)
-        .environment(workspaceWindowRegistry)
-        .environment(terminalAttentionNotifier)
-        .preferredColorScheme(Self.launchAppearance.colorScheme)
-        .task(id: savedAgents.profiles) {
-          agentAvailability.refresh(for: savedAgents.profiles)
-        }
-        .task {
-          terminalAttentionNotifier.bind(workspaceWindowRegistry: workspaceWindowRegistry)
-        }
-        .task {
-          WindowCloseShortcutRetargeter.install()
-        }
-        .task {
-          await cliInstallStartupPrompt.presentIfNeeded()
-        }
+      if Self.runtimeMode.suppressesVisibleAppHost {
+        AppHostedUnitTestHostView()
+      } else {
+        WelcomeView(launchRequest: Self.cliLaunchRequest)
+          .environment(recentProjects)
+          .environment(savedAgents)
+          .environment(agentAvailability)
+          .environment(commandContext)
+          .environment(reviewWindowRegistry)
+          .environment(workspaceWindowRegistry)
+          .environment(terminalAttentionNotifier)
+          .preferredColorScheme(Self.launchAppearance.colorScheme)
+          .task(id: savedAgents.profiles) {
+            agentAvailability.refresh(for: savedAgents.profiles)
+          }
+          .task {
+            terminalAttentionNotifier.bind(workspaceWindowRegistry: workspaceWindowRegistry)
+          }
+          .task {
+            WindowCloseShortcutRetargeter.install()
+          }
+          .task {
+            await cliInstallStartupPrompt.presentIfNeeded()
+          }
+      }
     }
-    .defaultSize(width: Self.cliLaunchRequest == nil ? 560 : 300, height: 560)
+    .defaultSize(
+      width: Self.runtimeMode.suppressesVisibleAppHost
+        ? 1 : Self.cliLaunchRequest == nil ? 560 : 300,
+      height: Self.runtimeMode.suppressesVisibleAppHost ? 1 : 560)
 
     WindowGroup(for: WorkspaceTarget.self) { $target in
-      if let target {
+      if Self.runtimeMode.suppressesVisibleAppHost {
+        EmptyView()
+      } else if let target {
         workspaceRoot(target: target)
       } else {
         NilSceneRecoveryView()
@@ -61,7 +74,9 @@ struct ArgonApp: App {
 
     // Review windows (one per session)
     WindowGroup(for: ReviewTarget.self) { $target in
-      if let target {
+      if Self.runtimeMode.suppressesVisibleAppHost {
+        EmptyView()
+      } else if let target {
         reviewRoot(target: target)
       } else {
         NilSceneRecoveryView()
@@ -135,15 +150,19 @@ struct ArgonApp: App {
     }
 
     Settings {
-      SettingsView()
-        .environment(commandContext)
-        .environment(savedAgents)
-        .environment(agentAvailability)
-        .environment(terminalAttentionNotifier)
-        .environmentObject(appUpdateController)
-        .task(id: savedAgents.profiles) {
-          agentAvailability.refresh(for: savedAgents.profiles)
-        }
+      if Self.runtimeMode.suppressesVisibleAppHost {
+        EmptyView()
+      } else {
+        SettingsView()
+          .environment(commandContext)
+          .environment(savedAgents)
+          .environment(agentAvailability)
+          .environment(terminalAttentionNotifier)
+          .environmentObject(appUpdateController)
+          .task(id: savedAgents.profiles) {
+            agentAvailability.refresh(for: savedAgents.profiles)
+          }
+      }
     }
   }
 
@@ -196,6 +215,24 @@ struct ArgonApp: App {
       .task {
         await cliInstallStartupPrompt.presentIfNeeded()
       }
+  }
+}
+
+private struct AppHostedUnitTestHostView: NSViewRepresentable {
+  func makeNSView(context: Context) -> NSView {
+    let view = NSView(frame: .zero)
+    orderWindowOut(for: view)
+    return view
+  }
+
+  func updateNSView(_ nsView: NSView, context: Context) {
+    orderWindowOut(for: nsView)
+  }
+
+  private func orderWindowOut(for view: NSView) {
+    DispatchQueue.main.async {
+      view.window?.orderOut(nil)
+    }
   }
 }
 

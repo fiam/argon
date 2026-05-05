@@ -36,12 +36,13 @@ test: test-rust test-swift
 test-rust:
 	cargo test --workspace
 
-# Swift tests (builds app + runs test bundle)
+# Swift tests (builds app + runs serial, headless app-hosted test bundle)
 test-swift: build-swift
-	xcodebuild test \
+	ARGON_APP_HOSTED_UNIT_TESTS=1 xcodebuild test \
 		-project apps/macos/Argon.xcodeproj \
 		-scheme Argon \
 		-configuration Debug \
+		-parallel-testing-enabled NO \
 		-destination "$(XCODE_DESTINATION)"
 
 # macOS UI smoke tests

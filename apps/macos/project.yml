@@ -28,6 +28,9 @@ schemes:
       targets:
         Argon: all
     test:
+      environmentVariables:
+        # Keep app-hosted unit tests from opening normal app windows.
+        ARGON_APP_HOSTED_UNIT_TESTS: "1"
       targets:
         - ArgonTests
 
