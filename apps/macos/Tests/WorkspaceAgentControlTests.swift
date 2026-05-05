@@ -58,11 +58,11 @@ struct WorkspaceAgentControlTests {
     )
 
     let prompt = try request.promptWithResponseContract(
-      responseFilePath: "/tmp/repo/.tmp/argon-agent-control/response.json"
+      responseFilePath: "/var/folders/example/T/argon-agent-control/w-abc123/response.json"
     )
 
     #expect(prompt.contains("Structured response contract:"))
-    #expect(prompt.contains("/tmp/repo/.tmp/argon-agent-control/response.json"))
+    #expect(prompt.contains("/var/folders/example/T/argon-agent-control/w-abc123/response.json"))
     #expect(prompt.contains(request.id.uuidString))
     #expect(prompt.contains("\"kind\" : \"review_summary\""))
   }

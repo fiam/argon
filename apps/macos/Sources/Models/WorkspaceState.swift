@@ -3987,9 +3987,23 @@ final class WorkspaceState {
   }
 
   nonisolated private static func agentControlDirectoryURL(for worktreePath: String) -> URL {
-    URL(fileURLWithPath: worktreePath)
-      .appendingPathComponent(".tmp", isDirectory: true)
+    let normalizedWorktreePath = URL(fileURLWithPath: worktreePath).standardizedFileURL.path
+    return FileManager.default.temporaryDirectory
       .appendingPathComponent("argon-agent-control", isDirectory: true)
+      .appendingPathComponent("w-\(pathHash(normalizedWorktreePath))", isDirectory: true)
+  }
+
+  nonisolated private static func pathHash(_ path: String) -> String {
+    String(format: "%016llx", fnv1a64(Array(path.utf8)))
+  }
+
+  nonisolated private static func fnv1a64(_ bytes: [UInt8]) -> UInt64 {
+    var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+    for byte in bytes {
+      hash ^= UInt64(byte)
+      hash = hash &* 0x100_0000_01b3
+    }
+    return hash
   }
 
   private func mergeBackOptions(for topology: BranchTopology) -> [WorktreeFinalizeAction] {

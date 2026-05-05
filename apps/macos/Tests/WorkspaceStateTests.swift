@@ -522,6 +522,7 @@ struct WorkspaceStateTests {
     )
 
     #expect(prompt.contains(pending.responseFilePath))
+    expectTemporaryAgentControlPath(pending.responseFilePath)
     #expect(state.isRequestingReviewSummary(for: "/tmp/repo/feature"))
 
     let response = WorkspaceAgentControlResponse.reviewSummary(
@@ -908,6 +909,7 @@ struct WorkspaceStateTests {
     )
 
     #expect(prompt.contains(pending.responseFilePath))
+    expectTemporaryAgentControlPath(pending.responseFilePath)
 
     let response = WorkspaceAgentControlResponse.finalize(
       requestID: pending.request.id,
@@ -954,6 +956,7 @@ struct WorkspaceStateTests {
     tab.agentActivityState = .waitingForHuman
 
     #expect(prompt.contains(pending.responseFilePath))
+    expectTemporaryAgentControlPath(pending.responseFilePath)
     #expect(state.isMergeBackInProgress(for: "/tmp/repo/feature") == true)
 
     let response = WorkspaceAgentControlResponse.finalize(
@@ -4162,6 +4165,19 @@ struct WorkspaceStateTests {
     encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
     let data = try encoder.encode(agentControlResponse)
     try data.write(to: url, options: .atomic)
+  }
+
+  private func expectTemporaryAgentControlPath(
+    _ path: String,
+    worktreePath: String = "/tmp/repo/feature"
+  ) {
+    let responsePath = URL(fileURLWithPath: path).standardizedFileURL.path
+    let normalizedWorktreePath = URL(fileURLWithPath: worktreePath).standardizedFileURL.path
+    let temporaryPath = FileManager.default.temporaryDirectory.standardizedFileURL.path
+
+    #expect(responsePath.hasPrefix("\(temporaryPath)/"))
+    #expect(!responsePath.hasPrefix("\(normalizedWorktreePath)/"))
+    #expect(responsePath.contains("/argon-agent-control/"))
   }
 
   private static func testTerminalSessionLaunchBuilder(
