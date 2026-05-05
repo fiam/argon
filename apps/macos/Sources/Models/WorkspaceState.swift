@@ -452,6 +452,11 @@ final class WorkspaceState {
 
     let validPaths = Set(worktrees.map { normalizedPath($0.path) })
     if !validPaths.isEmpty {
+      if let selectedWorktreePath = normalizedSelectedWorktreePath,
+        validPaths.contains(selectedWorktreePath)
+      {
+        materializePendingRunningAgentTabs(for: selectedWorktreePath)
+      }
       startRunningBackgroundAgentRestores(
         validPaths: validPaths,
         excluding: normalizedSelectedWorktreePath
@@ -521,6 +526,11 @@ final class WorkspaceState {
 
     for changedPath in changedPaths {
       refreshPendingAgentActivitySummary(for: changedPath)
+    }
+    if let selectedWorktreePath = normalizedSelectedWorktreePath,
+      changedPaths.contains(selectedWorktreePath)
+    {
+      materializePendingRunningAgentTabs(for: selectedWorktreePath)
     }
     if !validPaths.isEmpty {
       startRunningBackgroundAgentRestores(
@@ -955,6 +965,7 @@ final class WorkspaceState {
   func beginReviewLaunchFlow() {
     guard let selectedWorktree else { return }
     let worktreePath = normalizedPath(selectedWorktree.path)
+    materializePendingRunningAgentTabs(for: worktreePath)
     let candidates = eligibleReviewAgentTabs()
     reviewAgentCandidates = candidates
     pendingReviewPreparation = WorkspaceReviewPreparation(
@@ -1090,6 +1101,9 @@ final class WorkspaceState {
 
   private func beginAgentFinalizeFlow(_ action: WorktreeFinalizeAction) {
     activeFinalizeAction = action
+    if let selectedWorktreePath = normalizedSelectedWorktreePath {
+      materializePendingRunningAgentTabs(for: selectedWorktreePath)
+    }
     let candidates = eligibleFinalizeAgentTabs(for: action)
 
     switch candidates.count {
@@ -2879,11 +2893,13 @@ final class WorkspaceState {
     let validPaths = Set(data.worktrees.map { normalizedPath($0.path) })
     pruneWorktreeState(validPaths: validPaths)
     configureWatchers(validPaths: validPaths)
+    let selectedWorktreePath = normalizedPath(data.selectedWorktreePath)
+    materializePendingRunningAgentTabs(for: selectedWorktreePath)
     startRunningBackgroundAgentRestores(
       validPaths: validPaths,
-      excluding: normalizedPath(data.selectedWorktreePath)
+      excluding: selectedWorktreePath
     )
-    startPendingTabRestoreIfNeeded(for: normalizedPath(data.selectedWorktreePath))
+    startPendingTabRestoreIfNeeded(for: selectedWorktreePath)
     notifyRestorableStateChanged()
   }
 
@@ -3058,69 +3074,105 @@ final class WorkspaceState {
 
       guard let self, !Task.isCancelled else { return }
       self.pendingTabRestoreTasksByWorktreePath.removeValue(forKey: normalizedPath)
-      let restoredTabs = restored.persistedTabs.map(Self.restoredTerminalTab(from:))
-      let currentTabs = self.terminalTabsByWorktreePath[normalizedPath] ?? []
-      let currentTabsByID = Dictionary(uniqueKeysWithValues: currentTabs.map { ($0.id, $0) })
-      var mergedTabs: [WorkspaceTerminalTab] = []
-      var seenTabIDs = Set<UUID>()
+      self.applyRestoredPersistedTabs(
+        restored,
+        for: normalizedPath,
+        removeRestoredTabsFromPending: removeRestoredTabsFromPending
+      )
+    }
+  }
 
-      for restoredTab in restoredTabs {
-        let tab = currentTabsByID[restoredTab.id] ?? restoredTab
-        guard seenTabIDs.insert(tab.id).inserted else { continue }
-        mergedTabs.append(tab)
-      }
+  @discardableResult
+  private func materializePendingRunningAgentTabs(for worktreePath: String) -> Bool {
+    let normalizedPath = normalizedPath(worktreePath)
+    guard pendingTabRestoreTasksByWorktreePath[normalizedPath] == nil,
+      let persistedTabs = pendingRestorableTabsByWorktreePath[normalizedPath],
+      !persistedTabs.isEmpty
+    else {
+      return false
+    }
 
-      for currentTab in currentTabs where seenTabIDs.insert(currentTab.id).inserted {
-        mergedTabs.append(currentTab)
-      }
+    let restored = Self.restoreRunningBackgroundAgentTabs(persistedTabs)
+    guard !restored.persistedTabs.isEmpty else {
+      refreshPendingAgentActivitySummary(for: normalizedPath)
+      return false
+    }
 
-      self.terminalTabsByWorktreePath[normalizedPath] = mergedTabs
-      if removeRestoredTabsFromPending {
-        let restoredTabIDs = Set(restored.persistedTabs.map(\.id))
-        var pendingTabs = self.pendingRestorableTabsByWorktreePath[normalizedPath] ?? []
-        pendingTabs.removeAll { restoredTabIDs.contains($0.id) }
-        if pendingTabs.isEmpty {
-          self.pendingRestorableTabsByWorktreePath.removeValue(forKey: normalizedPath)
-        } else {
-          self.pendingRestorableTabsByWorktreePath[normalizedPath] = pendingTabs
-        }
-        self.refreshPendingAgentActivitySummary(for: normalizedPath)
-      }
-      let pendingTabs = self.pendingRestorableTabsByWorktreePath[normalizedPath] ?? []
+    applyRestoredPersistedTabs(
+      restored,
+      for: normalizedPath,
+      removeRestoredTabsFromPending: true
+    )
+    return true
+  }
 
-      if let selectedTabID = self.selectedTerminalTabIDsByWorktreePath[normalizedPath],
-        !mergedTabs.contains(where: { $0.id == selectedTabID })
-      {
-        if !pendingTabs.contains(where: { $0.id == selectedTabID }) {
-          self.selectedTerminalTabIDsByWorktreePath[normalizedPath] = mergedTabs.first?.id
-        }
-      } else if self.selectedTerminalTabIDsByWorktreePath[normalizedPath] == nil
-        && pendingTabs.isEmpty
-      {
-        self.selectedTerminalTabIDsByWorktreePath[normalizedPath] = mergedTabs.first?.id
-      }
+  private func applyRestoredPersistedTabs(
+    _ restored: RestoredPersistedTabs,
+    for normalizedPath: String,
+    removeRestoredTabsFromPending: Bool
+  ) {
+    let restoredTabs = restored.persistedTabs.map(Self.restoredTerminalTab(from:))
+    let currentTabs = terminalTabsByWorktreePath[normalizedPath] ?? []
+    let currentTabsByID = Dictionary(uniqueKeysWithValues: currentTabs.map { ($0.id, $0) })
+    var mergedTabs: [WorkspaceTerminalTab] = []
+    var seenTabIDs = Set<UUID>()
 
-      if self.normalizedSelectedWorktreePath == normalizedPath {
-        if self.selectedTerminalTabIDsByWorktreePath[normalizedPath] != nil {
-          self.requestTerminalFocus(in: normalizedPath)
-        } else {
-          self.terminalFocusRequestIDsByWorktreePath.removeValue(forKey: normalizedPath)
-        }
-      }
+    for restoredTab in restoredTabs {
+      let tab = currentTabsByID[restoredTab.id] ?? restoredTab
+      guard seenTabIDs.insert(tab.id).inserted else { continue }
+      mergedTabs.append(tab)
+    }
 
-      if restored.missingAgentCount > 0 {
-        self.restoreFailureMessage = Self.formattedRestoreFailureMessage(
-          missingAgentCount: restored.missingAgentCount,
-          worktreeLabel: self.restoredWorktreeLabel(for: normalizedPath)
-        )
-      }
+    for currentTab in currentTabs where seenTabIDs.insert(currentTab.id).inserted {
+      mergedTabs.append(currentTab)
+    }
 
-      self.notifyRestorableStateChanged()
-      if self.normalizedSelectedWorktreePath == normalizedPath,
-        self.pendingRestorableTabsByWorktreePath[normalizedPath]?.isEmpty == false
-      {
-        self.startPendingTabRestoreIfNeeded(for: normalizedPath)
+    terminalTabsByWorktreePath[normalizedPath] = mergedTabs
+    if removeRestoredTabsFromPending {
+      let restoredTabIDs = Set(restored.persistedTabs.map(\.id))
+      var pendingTabs = pendingRestorableTabsByWorktreePath[normalizedPath] ?? []
+      pendingTabs.removeAll { restoredTabIDs.contains($0.id) }
+      if pendingTabs.isEmpty {
+        pendingRestorableTabsByWorktreePath.removeValue(forKey: normalizedPath)
+      } else {
+        pendingRestorableTabsByWorktreePath[normalizedPath] = pendingTabs
       }
+      refreshPendingAgentActivitySummary(for: normalizedPath)
+    }
+    let pendingTabs = pendingRestorableTabsByWorktreePath[normalizedPath] ?? []
+
+    if let selectedTabID = selectedTerminalTabIDsByWorktreePath[normalizedPath],
+      !mergedTabs.contains(where: { $0.id == selectedTabID })
+    {
+      if !pendingTabs.contains(where: { $0.id == selectedTabID }) {
+        selectedTerminalTabIDsByWorktreePath[normalizedPath] = mergedTabs.first?.id
+      }
+    } else if selectedTerminalTabIDsByWorktreePath[normalizedPath] == nil
+      && pendingTabs.isEmpty
+    {
+      selectedTerminalTabIDsByWorktreePath[normalizedPath] = mergedTabs.first?.id
+    }
+
+    if normalizedSelectedWorktreePath == normalizedPath {
+      if selectedTerminalTabIDsByWorktreePath[normalizedPath] != nil {
+        requestTerminalFocus(in: normalizedPath)
+      } else {
+        terminalFocusRequestIDsByWorktreePath.removeValue(forKey: normalizedPath)
+      }
+    }
+
+    if restored.missingAgentCount > 0 {
+      restoreFailureMessage = Self.formattedRestoreFailureMessage(
+        missingAgentCount: restored.missingAgentCount,
+        worktreeLabel: restoredWorktreeLabel(for: normalizedPath)
+      )
+    }
+
+    notifyRestorableStateChanged()
+    if normalizedSelectedWorktreePath == normalizedPath,
+      pendingRestorableTabsByWorktreePath[normalizedPath]?.isEmpty == false
+    {
+      startPendingTabRestoreIfNeeded(for: normalizedPath)
     }
   }
 

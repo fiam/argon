@@ -636,6 +636,83 @@ struct WorkspaceStateTests {
     #expect(state.isPresentingAgentLaunchSheet == false)
   }
 
+  @Test("finalize flow materializes a selected restored running agent before launching a new one")
+  @MainActor
+  func finalizeFlowMaterializesSelectedRestoredRunningAgentBeforeLaunchingNewOne() throws {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    let liveTabID = UUID(uuidString: "12121212-1212-1212-1212-121212121212")!
+    let runningSession = TerminalSessionReference(
+      backendID: "argon",
+      sessionID: "argon-selected-finalize",
+      context: [
+        TerminalSessionReferenceContextKey.storageDirectory:
+          "/tmp/argon-workspace-state-selected-finalize"
+      ]
+    )
+    WorkspaceState.terminalSessionReconnectChecker = { session in
+      session.sessionID == runningSession.sessionID
+    }
+    WorkspaceState.terminalSessionRunningChecker = { session in
+      session.sessionID == runningSession.sessionID
+    }
+    defer {
+      restoreExperiment()
+      WorkspaceState.terminalSessionReconnectChecker = { session in
+        TerminalSessionBackends.canReconnect(reference: session)
+      }
+      WorkspaceState.terminalSessionRunningChecker = { session in
+        TerminalSessionBackends.isRunning(reference: session)
+      }
+    }
+
+    let snapshot = PersistedWorkspaceWindowSnapshot(
+      target: WorkspaceTarget(
+        repoRoot: "/tmp/repo",
+        repoCommonDir: "/tmp/repo/.git",
+        selectedWorktreePath: "/tmp/repo/feature"
+      ),
+      terminalTabsByWorktreePath: [
+        "/tmp/repo/feature": [
+          PersistedWorkspaceTerminalTab(
+            id: liveTabID,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Codex",
+            commandDescription: "codex --yolo",
+            kind: .agent(profileName: "Codex", icon: "codex"),
+            agentFamilyID: .codex,
+            createdAt: Date(timeIntervalSince1970: 11),
+            isSandboxed: false,
+            writableRoots: [],
+            keepsRunningAfterQuit: true,
+            terminalSession: runningSession,
+            agentActivityState: .thinking
+          )
+        ]
+      ],
+      selectedTerminalTabIDsByWorktreePath: [
+        "/tmp/repo/feature": liveTabID
+      ]
+    )
+
+    let state = makeState()
+    let loadedWorktrees = state.worktrees
+    state.worktrees = []
+    state.applyPersistedWindowSnapshot(snapshot)
+
+    #expect(state.selectedWorktreePath == "/tmp/repo/feature")
+    #expect(state.selectedTerminalTabs.isEmpty)
+
+    state.worktrees = loadedWorktrees
+    state.beginFinalizeFlow(.rebaseAndMergeToBase)
+
+    #expect(state.selectedTerminalTabs.map(\.id) == [liveTabID])
+    #expect(state.activeFinalizeAction == .rebaseAndMergeToBase)
+    #expect(state.pendingFinalizeAgentTabID == liveTabID)
+    #expect(state.isPresentingFinalizeAgentPicker == false)
+    #expect(state.isPresentingAgentLaunchSheet == false)
+  }
+
   @Test("finalize flow launches a new agent when running tabs lack required writable roots")
   @MainActor
   func finalizeFlowLaunchesNewAgentWhenRunningTabsLackRequiredWritableRoots() {
@@ -1784,6 +1861,78 @@ struct WorkspaceStateTests {
     )
     #expect(state.selectedWorktreePath == "/tmp/repo")
     #expect(state.selectedTerminalTabs.isEmpty)
+    #expect(state.activeAgentCount(for: "/tmp/repo/feature") == 1)
+    #expect(state.worktreeNeedsAttention(for: "/tmp/repo/feature"))
+  }
+
+  @Test("late snapshots materialize running agents for the selected worktree")
+  @MainActor
+  func lateSnapshotsMaterializeRunningAgentsForSelectedWorktree() {
+    let restoreExperiment = setExperimentalPersistentAgentTerminalsForTest(true)
+    let liveTabID = UUID(uuidString: "89898989-8989-8989-8989-898989898989")!
+    let runningSession = TerminalSessionReference(
+      backendID: "argon",
+      sessionID: "argon-late-selected-running",
+      context: [
+        TerminalSessionReferenceContextKey.storageDirectory:
+          "/tmp/argon-workspace-state-late-selected-running"
+      ]
+    )
+    WorkspaceState.terminalSessionReconnectChecker = { session in
+      session.sessionID == runningSession.sessionID
+    }
+    WorkspaceState.terminalSessionRunningChecker = { session in
+      session.sessionID == runningSession.sessionID
+    }
+    defer {
+      restoreExperiment()
+      WorkspaceState.terminalSessionReconnectChecker = { session in
+        TerminalSessionBackends.canReconnect(reference: session)
+      }
+      WorkspaceState.terminalSessionRunningChecker = { session in
+        TerminalSessionBackends.isRunning(reference: session)
+      }
+    }
+
+    let snapshot = PersistedWorkspaceWindowSnapshot(
+      target: WorkspaceTarget(
+        repoRoot: "/tmp/repo",
+        repoCommonDir: "/tmp/repo/.git",
+        selectedWorktreePath: "/tmp/repo/feature"
+      ),
+      terminalTabsByWorktreePath: [
+        "/tmp/repo/feature": [
+          PersistedWorkspaceTerminalTab(
+            id: liveTabID,
+            worktreePath: "/tmp/repo/feature",
+            worktreeLabel: "feature/window",
+            title: "Codex",
+            commandDescription: "codex --yolo",
+            kind: .agent(profileName: "Codex", icon: "codex"),
+            agentFamilyID: .codex,
+            createdAt: Date(timeIntervalSince1970: 10),
+            isSandboxed: true,
+            writableRoots: ["/tmp/repo/feature"],
+            keepsRunningAfterQuit: true,
+            terminalSession: runningSession,
+            hasAttention: true,
+            agentActivityState: .waitingForHuman
+          )
+        ]
+      ],
+      selectedTerminalTabIDsByWorktreePath: [
+        "/tmp/repo/feature": liveTabID
+      ]
+    )
+
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+
+    state.mergePersistedRunningAgentTabs(from: snapshot)
+
+    #expect(state.selectedWorktreePath == "/tmp/repo/feature")
+    #expect(state.selectedTerminalTabs.map(\.id) == [liveTabID])
+    #expect(state.selectedTerminalTab?.id == liveTabID)
     #expect(state.activeAgentCount(for: "/tmp/repo/feature") == 1)
     #expect(state.worktreeNeedsAttention(for: "/tmp/repo/feature"))
   }
