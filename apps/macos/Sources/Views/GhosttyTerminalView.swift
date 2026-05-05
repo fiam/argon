@@ -243,6 +243,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
   let terminalID: UUID?
   var terminalFontSize: CGFloat = 12
   var ghosttyConfigurationText = ""
+  var isRenderVisible = true
   var waitAfterCommand = true
   var onProcessExit: (() -> Void)?
   var onAttention: ((TerminalAttentionEvent) -> Void)?
@@ -254,13 +255,15 @@ struct GhosttyTerminalView: NSViewRepresentable {
   init(
     agent: ReviewerAgentInstance,
     terminalFontSize: CGFloat = 12,
-    ghosttyConfigurationText: String = ""
+    ghosttyConfigurationText: String = "",
+    isRenderVisible: Bool = true
   ) {
     self.controller = agent
     self.launch = .forReviewerAgent(agent)
     self.terminalID = nil
     self.terminalFontSize = terminalFontSize
     self.ghosttyConfigurationText = ghosttyConfigurationText
+    self.isRenderVisible = isRenderVisible
     self.uiTestReadySignal = "reviewer-tabs-appeared"
   }
 
@@ -270,6 +273,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
     terminalID: UUID? = nil,
     terminalFontSize: CGFloat = 12,
     ghosttyConfigurationText: String = "",
+    isRenderVisible: Bool = true,
     waitAfterCommand: Bool = true,
     onProcessExit: (() -> Void)? = nil,
     onAttention: ((TerminalAttentionEvent) -> Void)? = nil,
@@ -282,6 +286,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
     self.terminalID = terminalID
     self.terminalFontSize = terminalFontSize
     self.ghosttyConfigurationText = ghosttyConfigurationText
+    self.isRenderVisible = isRenderVisible
     self.waitAfterCommand = waitAfterCommand
     self.onProcessExit = onProcessExit
     self.onAttention = onAttention
@@ -292,6 +297,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
 
   func makeNSView(context: Context) -> GhosttyTerminalHostView {
     if let terminalID, let host = GhosttyHostRegistry.host(for: terminalID) {
+      host.updateRenderVisibility(isRenderVisible)
       host.prepareForAttachment()
       writeUITestReadySignals()
       return host
@@ -304,6 +310,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
       terminalID: terminalID,
       terminalFontSize: terminalFontSize,
       ghosttyConfigurationText: ghosttyConfigurationText,
+      isRenderVisible: isRenderVisible,
       waitAfterCommand: waitAfterCommand,
       onProcessExit: onProcessExit,
       onAttention: onAttention,
@@ -326,6 +333,7 @@ struct GhosttyTerminalView: NSViewRepresentable {
   func updateNSView(_ nsView: GhosttyTerminalHostView, context: Context) {
     nsView.updateTerminalFontSize(terminalFontSize)
     nsView.updateGhosttyConfigurationText(ghosttyConfigurationText)
+    nsView.updateRenderVisibility(isRenderVisible)
     nsView.updateProcessExitHandler(onProcessExit)
     nsView.updateAttentionHandler(onAttention)
     nsView.updateTitleChangeHandler(onTitleChange)
@@ -408,6 +416,7 @@ final class GhosttyTerminalHostView: NSView {
   private var onTitleChange: ((TerminalTitleChange) -> Void)?
   private var pendingFocusRequestID: UUID?
   private var appliedFocusRequestID: UUID?
+  private var isRenderVisible: Bool
   private var callbackUserdata: UnsafeMutableRawPointer?
   private var app: ghostty_app_t?
   private var config: ghostty_config_t?
@@ -445,6 +454,7 @@ final class GhosttyTerminalHostView: NSView {
     terminalID: UUID?,
     terminalFontSize: CGFloat,
     ghosttyConfigurationText: String,
+    isRenderVisible: Bool,
     waitAfterCommand: Bool,
     onProcessExit: (() -> Void)?,
     onAttention: ((TerminalAttentionEvent) -> Void)?,
@@ -456,6 +466,7 @@ final class GhosttyTerminalHostView: NSView {
     self.terminalID = terminalID
     self.terminalFontSize = terminalFontSize
     self.ghosttyConfigurationText = ghosttyConfigurationText
+    self.isRenderVisible = isRenderVisible
     self.waitAfterCommand = waitAfterCommand
     self.onProcessExit = onProcessExit
     self.onAttention = onAttention
@@ -528,6 +539,15 @@ final class GhosttyTerminalHostView: NSView {
     reloadGhosttyConfiguration()
   }
 
+  func updateRenderVisibility(_ newValue: Bool) {
+    guard isRenderVisible != newValue else { return }
+    isRenderVisible = newValue
+    syncSurfaceVisibility()
+    if isRenderVisible {
+      refreshRenderingSoon()
+    }
+  }
+
   func updateProcessExitHandler(_ onProcessExit: (() -> Void)?) {
     self.onProcessExit = onProcessExit
   }
@@ -554,6 +574,7 @@ final class GhosttyTerminalHostView: NSView {
   }
 
   func refreshRenderingSoon() {
+    guard isRenderVisible else { return }
     guard renderingRefreshTask == nil else { return }
 
     renderingRefreshTask = Task { @MainActor [weak self] in
@@ -1061,7 +1082,7 @@ final class GhosttyTerminalHostView: NSView {
 
   private func syncSurfaceVisibility() {
     guard let surface else { return }
-    let visible = window?.occlusionState.contains(.visible) ?? false
+    let visible = isRenderVisible && (window?.occlusionState.contains(.visible) ?? false)
     ghostty_surface_set_occlusion(surface, visible)
   }
 
@@ -1199,6 +1220,7 @@ final class GhosttyTerminalHostView: NSView {
 
   private func refreshRenderingNow() {
     guard let surface else { return }
+    guard isRenderVisible else { return }
 
     updateSurfaceMetrics()
     syncSurfaceDisplay()
@@ -1398,10 +1420,17 @@ final class GhosttyTerminalHostView: NSView {
   }
 
   nonisolated fileprivate static func wakeup(_ userdata: UnsafeMutableRawPointer?) {
+    guard let userdata else { return }
+    let key = UInt(bitPattern: userdata)
+    guard GhosttyWakeupCoalescer.shared.schedule(key) else { return }
+
     let userdataBox = UnsafeRawPointerBox(value: userdata)
-    MainActorDispatch.async {
-      guard let host = host(from: userdataBox.value) else { return }
-      host.appTick()
+    DispatchQueue.main.async {
+      MainActor.assumeIsolated {
+        GhosttyWakeupCoalescer.shared.beginExecuting(key)
+        guard let host = host(from: userdataBox.value) else { return }
+        host.appTick()
+      }
     }
   }
 

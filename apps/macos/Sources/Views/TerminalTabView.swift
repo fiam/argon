@@ -33,12 +33,14 @@ struct AgentTerminalView: View {
   let agent: ReviewerAgentInstance
   var terminalFontSize: CGFloat = 12
   var ghosttyConfigurationText = ""
+  var isRenderVisible = true
 
   var body: some View {
     GhosttyTerminalView(
       agent: agent,
       terminalFontSize: terminalFontSize,
-      ghosttyConfigurationText: ghosttyConfigurationText
+      ghosttyConfigurationText: ghosttyConfigurationText,
+      isRenderVisible: isRenderVisible
     )
   }
 }
@@ -86,7 +88,8 @@ struct ReviewerAgentTabsView: View {
             AgentTerminalView(
               agent: agent,
               terminalFontSize: effectiveTerminalFontSize,
-              ghosttyConfigurationText: ghosttyConfigurationText
+              ghosttyConfigurationText: ghosttyConfigurationText,
+              isRenderVisible: isSelected
             )
             .id(agent.id)
             .zIndex(isSelected ? 1 : 0)

@@ -2148,6 +2148,7 @@ private struct WorkspaceTerminalStage: View {
           terminalID: tab.id,
           terminalFontSize: effectiveTerminalFontSize,
           ghosttyConfigurationText: ghosttyConfigurationText,
+          isRenderVisible: isSelected,
           waitAfterCommand: waitAfterCommand(for: tab),
           onProcessExit: {
             workspaceState.handleTerminalExit(
