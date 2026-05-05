@@ -282,11 +282,11 @@ struct SettingsView: View {
             "Persistent agent terminals",
             isOn: $experimentalPersistentAgentTerminals
           )
-          .help("Keep thinking agents running through a terminal session wrapper.")
+          .help("Keep working agents running through a terminal session wrapper.")
           .disabled(!TerminalSessionBackends.isAvailable())
 
           Text(
-            "Experimental. Keeps thinking agents running after Argon quits, then reconnects to them on the next launch."
+            "Experimental. Keeps working agents running after Argon quits, then reconnects to them on the next launch."
           )
           .font(.caption)
           .foregroundStyle(.secondary)

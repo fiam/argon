@@ -25,6 +25,19 @@ enum WorkspaceAgentActivityState: String, Codable, Equatable, Sendable {
   case waitingForHuman
 }
 
+extension WorkspaceAgentActivityState {
+  var displayLabel: String {
+    switch self {
+    case .idle:
+      "idle"
+    case .thinking:
+      "working"
+    case .waitingForHuman:
+      "waiting"
+    }
+  }
+}
+
 struct WorktreeAgentActivitySummary: Equatable, Sendable {
   let waitingForHumanCount: Int
   let thinkingCount: Int

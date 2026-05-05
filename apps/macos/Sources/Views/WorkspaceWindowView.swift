@@ -984,9 +984,9 @@ private enum WorkspaceSidebarAgentActivityKind: Equatable {
   var sidebarLabel: String {
     switch self {
     case .needsInput(let count):
-      count == 1 ? "1 needs input" : "\(count) need input"
+      count == 1 ? "1 waiting" : "\(count) waiting"
     case .thinking(let count):
-      count == 1 ? "1 thinking" : "\(count) thinking"
+      count == 1 ? "1 working" : "\(count) working"
     case .active(let count):
       count == 1 ? "1 agent" : "\(count) agents"
     }
@@ -995,9 +995,9 @@ private enum WorkspaceSidebarAgentActivityKind: Equatable {
   var compactSidebarLabel: String {
     switch self {
     case .needsInput:
-      "input"
+      "waiting"
     case .thinking:
-      "thinking"
+      "working"
     case .active(let count):
       count == 1 ? "agent" : "\(count) agents"
     }
@@ -1788,14 +1788,7 @@ private struct WorkspaceTerminalTabItem: View {
   }
 
   private var agentActivityHelpLabel: String {
-    switch tab.agentActivityState {
-    case .idle:
-      "idle"
-    case .thinking:
-      "thinking"
-    case .waitingForHuman:
-      "waiting for input"
-    }
+    tab.agentActivityState.displayLabel
   }
 
   private func thinkingRotation(at date: Date) -> Angle {

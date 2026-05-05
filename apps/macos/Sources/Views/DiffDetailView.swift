@@ -728,7 +728,7 @@ struct InlineThreadView: View {
             HStack(spacing: 3) {
               ProgressView()
                 .controlSize(.mini)
-              Text("thinking")
+              Text("working")
                 .font(.system(size: 9, weight: .medium))
             }
             .padding(.horizontal, 5)

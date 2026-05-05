@@ -53,8 +53,8 @@ final class ArgonTerminationCoordinator {
   private func messageText(for summary: WorkspaceQuitAgentSummary) -> String {
     if summary.thinkingCount > 0 {
       return summary.warningCount == 1
-        ? "Agent Is Still Thinking"
-        : "Agents Are Still Thinking"
+        ? "Agent Is Still Working"
+        : "Agents Are Still Working"
     }
 
     return summary.warningCount == 1
@@ -65,14 +65,14 @@ final class ArgonTerminationCoordinator {
   private func informativeText(for summary: WorkspaceQuitAgentSummary) -> String {
     if summary.keepRunningCount == 0 {
       return summary.warningCount == 1
-        ? "Quitting will stop this thinking agent. Argon will try to resume the session on the next launch."
-        : "Quitting will stop these \(summary.warningCount) thinking agents. Argon will try to resume the sessions on the next launch."
+        ? "Quitting will stop this working agent. Argon will try to resume the session on the next launch."
+        : "Quitting will stop these \(summary.warningCount) working agents. Argon will try to resume the sessions on the next launch."
     }
 
     let keepRunningText =
       summary.keepRunningCount == 1
-      ? "Argon will keep this thinking agent running after quitting and reconnect on the next launch."
-      : "Argon will keep \(summary.keepRunningCount) thinking agents running after quitting and reconnect on the next launch."
+      ? "Argon will keep this working agent running after quitting and reconnect on the next launch."
+      : "Argon will keep \(summary.keepRunningCount) working agents running after quitting and reconnect on the next launch."
 
     let fallbackText =
       summary.keepRunningCount == 1
@@ -85,8 +85,8 @@ final class ArgonTerminationCoordinator {
 
     let stoppedText =
       stoppedCount == 1
-      ? "One other thinking agent will stop."
-      : "\(stoppedCount) other thinking agents will stop."
+      ? "One other working agent will stop."
+      : "\(stoppedCount) other working agents will stop."
     return "\(keepRunningText) \(stoppedText) \(fallbackText)"
   }
 }

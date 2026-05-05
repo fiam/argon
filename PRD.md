@@ -75,7 +75,7 @@ screen anymore. The workspace window is.
   bookkeeping.
 - Make terminals first-class so coding work can happen inside Argon, not
   beside it.
-- Make agent activity visible so humans can tell which agents are thinking,
+- Make agent activity visible so humans can tell which agents are working,
   idle, blocked, or done without opening every terminal.
 - Keep review explicit, native, and machine-readable.
 - Detect merge conflicts continuously as the base branch changes.
@@ -128,7 +128,7 @@ screen anymore. The workspace window is.
 - Deterministic state: worktree status, review status, and conflict status
   should be explicit and inspectable.
 - Human-visible agent state: Argon should expose whether agents are
-  thinking, waiting, idle, or finished at the tab and workspace levels.
+  working, waiting, idle, or finished at the tab and workspace levels.
 - Machine-readable first: CLI and internal contracts should stay stable
   for agent workflows.
 - MCP-first for live tools: when an agent needs ongoing workspace,
@@ -299,7 +299,7 @@ Requirements:
 - tabs stay associated with one worktree
 - tab titles should expose worktree + terminal identity
 - agent tabs should surface current agent activity, including when the
-  agent appears to be thinking
+  agent appears to be working
 - closed tabs should not destroy worktree state
 
 #### FR-5 Agent Activity Awareness
@@ -311,9 +311,9 @@ At minimum, Argon should distinguish:
 
 - unknown
 - idle
-- thinking
+- thinking (displayed as working)
 - running a command
-- waiting for human input
+- waiting for human input (displayed as waiting)
 - finished
 - failed
 
@@ -325,24 +325,27 @@ Detection should use the most reliable available signal for each agent:
 - conservative terminal-output heuristics as a fallback
 
 Many agents write transient status text near the top of the terminal or tab
-area while they are thinking. Argon should use Ghostty integration points to
+area while they are working. Argon should use Ghostty integration points to
 observe that status where possible, but the UI must treat heuristic detection
 as best-effort and allow an unknown state.
 
 The tab strip must show agent activity directly on each agent tab, with a
-clear visual treatment for thinking agents.
+clear visual treatment for working agents.
 
 The worktree sidebar row must aggregate agent activity for that worktree so
-the user can scan the workspace list and see whether any agent is thinking,
+the user can scan the workspace list and see whether any agent is working,
 blocked, failed, or done without selecting the worktree.
+
+Human-facing labels should render the active `thinking` state as
+`working`, and `waiting_for_human` as `waiting`.
 
 Argon should include a setting:
 
-- `Prevent sleep while agents are thinking`
+- `Prevent sleep while agents are running`
 
 The setting should default to enabled. When enabled, Argon should prevent
-system sleep while any agent tab is in the thinking state. The prevention
-must end promptly when no agent is thinking, the relevant workspace closes,
+system sleep while any agent tab is running. The prevention
+must end promptly when no agent is running, the relevant workspace closes,
 or Argon exits. The UI should make this behavior discoverable without
 interrupting normal agent work.
 
@@ -542,7 +545,7 @@ The repository-level config must support:
 - base branch selection
 - merge-back cleanup policy
 - default agent selection
-- prevent sleep while agents are thinking, default enabled
+- prevent sleep while agents are running, default enabled
 - GitHub remote preference if multiple remotes exist
 - connector defaults and per-worktree connector availability
 - default subagent harness selection and inheritance behavior
@@ -894,7 +897,7 @@ terminal activity.
 
 - worktree rows with branch, short path, and badges
 - inline status badges for review / conflict / PR presence
-- aggregate agent activity badges, including a visible thinking state
+- aggregate agent activity badges, including a visible working state
 - sorting by base worktree first, then active worktrees, then recency
 - action affordance to create a new worktree
 
@@ -1290,13 +1293,13 @@ Exit criteria:
 - support agent tabs
 - bind tabs to selected worktree
 - detect and display agent activity state in each agent tab
-- add the default-enabled sleep prevention setting for thinking agents
+- add the default-enabled sleep prevention setting for running agents
 - aggregate agent activity state into each worktree row
 
 Exit criteria:
 
 - user can do actual coding work inside Argon and can see which agents are
-  actively thinking without opening each terminal
+  actively working without opening each terminal
 
 ### Phase 4 - Diff Inspector and Review Handoff
 

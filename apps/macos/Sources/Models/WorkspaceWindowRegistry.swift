@@ -589,8 +589,8 @@ final class WorkspaceWindowRegistry {
   private static func closeMessageText(for summary: WorkspaceQuitAgentSummary) -> String {
     if summary.thinkingCount > 0 {
       return summary.warningCount == 1
-        ? "Agent Is Still Thinking"
-        : "Agents Are Still Thinking"
+        ? "Agent Is Still Working"
+        : "Agents Are Still Working"
     }
 
     return summary.warningCount == 1
@@ -601,21 +601,21 @@ final class WorkspaceWindowRegistry {
   private static func closeInformativeText(for summary: WorkspaceQuitAgentSummary) -> String {
     if summary.keepRunningCount == 0 {
       return summary.warningCount == 1
-        ? "Closing this window will hide the thinking agent. It will keep running while Argon stays open."
-        : "Closing this window will hide these \(summary.warningCount) thinking agents. They will keep running while Argon stays open."
+        ? "Closing this window will hide the working agent. It will keep running while Argon stays open."
+        : "Closing this window will hide these \(summary.warningCount) working agents. They will keep running while Argon stays open."
     }
 
     let persistentText =
       summary.keepRunningCount == 1
-      ? "Argon will keep this thinking agent running in its terminal session and reconnect when you reopen the workspace."
-      : "Argon will keep \(summary.keepRunningCount) thinking agents running in their terminal sessions and reconnect when you reopen the workspace."
+      ? "Argon will keep this working agent running in its terminal session and reconnect when you reopen the workspace."
+      : "Argon will keep \(summary.keepRunningCount) working agents running in their terminal sessions and reconnect when you reopen the workspace."
     let otherCount = summary.warningCount - summary.keepRunningCount
     guard otherCount > 0 else { return persistentText }
 
     let otherText =
       otherCount == 1
-      ? "One other thinking agent will keep running while Argon stays open."
-      : "\(otherCount) other thinking agents will keep running while Argon stays open."
+      ? "One other working agent will keep running while Argon stays open."
+      : "\(otherCount) other working agents will keep running while Argon stays open."
     return "\(persistentText) \(otherText)"
   }
 }

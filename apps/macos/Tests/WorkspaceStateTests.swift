@@ -6,6 +6,13 @@ import Testing
 @Suite("WorkspaceState", .serialized)
 struct WorkspaceStateTests {
 
+  @Test("agent activity states expose concise display labels")
+  func agentActivityStatesExposeConciseDisplayLabels() {
+    #expect(WorkspaceAgentActivityState.idle.displayLabel == "idle")
+    #expect(WorkspaceAgentActivityState.thinking.displayLabel == "working")
+    #expect(WorkspaceAgentActivityState.waitingForHuman.displayLabel == "waiting")
+  }
+
   @Test("shell tabs stay scoped to their worktree")
   @MainActor
   func shellTabsStayScopedToTheirWorktree() {
