@@ -1207,13 +1207,14 @@ final class WorkspaceState {
   func launchAgent(using options: WorkspaceAgentLaunchOptions) async throws {
     guard shouldLaunchReviewAfterNextAgentTab else {
       if let finalizeAction = activeFinalizeAction {
-        let prompt = try prepareFinalizePrompt(for: finalizeAction, sourceTabID: nil)
-        let additionalWritableRoots =
-          finalizeAction.requiresBaseRepoWriteAccess ? [target.repoRoot] : []
+        let prompt = try prepareFinalizePrompt(
+          for: finalizeAction,
+          sourceTabID: nil,
+          sourceSandboxed: options.sandboxEnabled
+        )
         let openedTab = openAgentTab(
           options.buildRequest(
-            prompt: prompt,
-            additionalWritableRoots: additionalWritableRoots
+            prompt: prompt
           ))
         guard openedTab != nil else {
           cancelFinalizeRequest(for: finalizeAction)
@@ -3728,7 +3729,9 @@ final class WorkspaceState {
   private func eligibleFinalizeAgentTabs(for action: WorktreeFinalizeAction)
     -> [WorkspaceTerminalTab]
   {
-    let requiredRoots = requiredWritableRoots(for: action).map(normalizedPath)
+    // Base-worktree updates for sandboxed finalizers are brokered through Argon.
+    // Only direct writes in the linked worktree need to be present on the tab.
+    let requiredRoots = requiredDirectWritableRoots(for: action).map(normalizedPath)
 
     return selectedTerminalTabs.filter { tab in
       guard tab.isRunning else { return false }
@@ -3745,7 +3748,8 @@ final class WorkspaceState {
 
   func prepareFinalizePrompt(
     for action: WorktreeFinalizeAction,
-    sourceTabID: UUID?
+    sourceTabID: UUID?,
+    sourceSandboxed: Bool? = nil
   ) throws -> String {
     let request = try finalizeControlRequest(for: action)
     let pendingRequest = try beginAgentControlRequest(
@@ -3754,6 +3758,36 @@ final class WorkspaceState {
       sourceTabID: sourceTabID
     )
     return try request.promptWithResponseContract(responseFilePath: pendingRequest.responseFilePath)
+      + finalizeSandboxBrokerInstructions(
+        for: action,
+        sourceTabID: sourceTabID,
+        sourceSandboxed: sourceSandboxed
+      )
+  }
+
+  private func finalizeSandboxBrokerInstructions(
+    for action: WorktreeFinalizeAction,
+    sourceTabID: UUID?,
+    sourceSandboxed: Bool?
+  ) -> String {
+    guard action.requiresBaseRepoWriteAccess else { return "" }
+
+    let tabIsSandboxed =
+      sourceSandboxed
+      ?? sourceTabID
+      .flatMap { terminalTab(for: $0) }?
+      .isSandboxed
+    guard tabIsSandboxed == true else { return "" }
+    let worktreePath = selectedWorktree?.path ?? "the linked worktree"
+
+    return """
+
+      Sandboxed finalize note:
+      - If this tab is sandboxed, do not treat base worktree write denial as a reason to launch another agent.
+      - Make linked-worktree changes directly in \(worktreePath).
+      - Use the Argon sandbox broker exposed by this terminal for operations that update the base worktree at \(target.repoRoot).
+      - If the broker is unavailable or rejects the operation, report `status: "failed"` with the broker error.
+      """
   }
 
   func cancelFinalizeRequest(for action: WorktreeFinalizeAction) {
@@ -4099,11 +4133,8 @@ final class WorkspaceState {
     notifyRestorableStateChanged()
   }
 
-  private func requiredWritableRoots(for action: WorktreeFinalizeAction) -> [String] {
+  private func requiredDirectWritableRoots(for _: WorktreeFinalizeAction) -> [String] {
     guard let selectedWorktree else { return [target.repoRoot] }
-    if action.requiresBaseRepoWriteAccess {
-      return [selectedWorktree.path, target.repoRoot]
-    }
     return [selectedWorktree.path]
   }
 

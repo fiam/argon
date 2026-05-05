@@ -713,25 +713,33 @@ struct WorkspaceStateTests {
     #expect(state.isPresentingAgentLaunchSheet == false)
   }
 
-  @Test("finalize flow launches a new agent when running tabs lack required writable roots")
+  @Test("finalize flow can use sandboxed agents with linked-worktree write access")
   @MainActor
-  func finalizeFlowLaunchesNewAgentWhenRunningTabsLackRequiredWritableRoots() {
+  func finalizeFlowCanUseSandboxedAgentsWithLinkedWorktreeWriteAccess() throws {
     let state = makeState()
     selectFeatureWorktree(in: state)
-    state.openAgentTab(
-      WorkspaceAgentLaunchRequest(
-        displayName: "Codex",
-        command: "codex",
-        icon: "codex",
-        sandboxEnabled: true
-      ))
+    let tab = try #require(
+      state.openAgentTab(
+        WorkspaceAgentLaunchRequest(
+          displayName: "Codex",
+          command: "codex",
+          icon: "codex",
+          sandboxEnabled: true
+        )))
 
     state.beginFinalizeFlow(.mergeCommitToBase)
 
     #expect(state.activeFinalizeAction == .mergeCommitToBase)
-    #expect(state.pendingFinalizeAgentTabID == nil)
+    #expect(state.pendingFinalizeAgentTabID == tab.id)
     #expect(state.isPresentingFinalizeAgentPicker == false)
-    #expect(state.isPresentingAgentLaunchSheet == true)
+    #expect(state.isPresentingAgentLaunchSheet == false)
+
+    let prompt = try state.prepareFinalizePrompt(
+      for: .mergeCommitToBase,
+      sourceTabID: tab.id
+    )
+    #expect(prompt.contains("Sandboxed finalize note:"))
+    #expect(prompt.contains("Use the Argon sandbox broker"))
   }
 
   @Test("finalize flow asks when multiple eligible running agent tabs exist")
@@ -907,9 +915,9 @@ struct WorkspaceStateTests {
     #expect(state.activeFinalizeAction == nil)
   }
 
-  @Test("launching a merge finalizer widens sandbox roots to include the base repo")
+  @Test("launching a sandboxed merge finalizer keeps roots narrow and explains broker use")
   @MainActor
-  func launchingMergeFinalizerWidensSandboxRootsToIncludeBaseRepo() async throws {
+  func launchingSandboxedMergeFinalizerKeepsRootsNarrowAndExplainsBrokerUse() async throws {
     let state = makeState()
     selectFeatureWorktree(in: state)
     state.activeFinalizeAction = .mergeCommitToBase
@@ -922,11 +930,13 @@ struct WorkspaceStateTests {
 
     let tab = try #require(state.selectedTerminalTab)
     #expect(tab.isSandboxed == true)
-    #expect(Set(tab.writableRoots) == Set(["/tmp/repo/feature", "/tmp/repo"]))
+    #expect(Set(tab.writableRoots) == Set(["/tmp/repo/feature"]))
     #expect(
       tab.commandDescription.contains(
         "Task: Merge this worktree back into the base branch with a merge commit."
       ))
+    #expect(tab.commandDescription.contains("Sandboxed finalize note:"))
+    #expect(tab.commandDescription.contains("Use the Argon sandbox broker"))
     #expect(state.activeFinalizeAction == nil)
   }
 
@@ -993,6 +1003,7 @@ struct WorkspaceStateTests {
     )
 
     #expect(prompt.contains(pending.responseFilePath))
+    #expect(prompt.contains("Sandboxed finalize note:") == false)
     expectTemporaryAgentControlPath(pending.responseFilePath)
 
     let response = WorkspaceAgentControlResponse.finalize(
@@ -1040,6 +1051,7 @@ struct WorkspaceStateTests {
     tab.agentActivityState = .waitingForHuman
 
     #expect(prompt.contains(pending.responseFilePath))
+    #expect(prompt.contains("Sandboxed finalize note:") == false)
     expectTemporaryAgentControlPath(pending.responseFilePath)
     #expect(state.isMergeBackInProgress(for: "/tmp/repo/feature") == true)
 
