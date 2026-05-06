@@ -121,6 +121,8 @@ final class WorkspaceState {
   private var isPreparingForTerminalDetach = false
   @ObservationIgnored
   nonisolated(unsafe) private var reviewSessionCloseObserver: NSObjectProtocol?
+  @ObservationIgnored
+  nonisolated(unsafe) private var reviewSessionUpdateObserver: NSObjectProtocol?
 
   init(
     target: WorkspaceTarget,
@@ -140,11 +142,24 @@ final class WorkspaceState {
         self?.refreshReviewSnapshot(for: repoRoot)
       }
     }
+    reviewSessionUpdateObserver = NotificationCenter.default.addObserver(
+      forName: .reviewSessionDidUpdate,
+      object: nil,
+      queue: .main
+    ) { [weak self] notification in
+      guard let repoRoot = ReviewSessionLifecycle.repoRoot(from: notification) else { return }
+      Task { @MainActor [weak self] in
+        self?.refreshReviewSnapshot(for: repoRoot)
+      }
+    }
   }
 
   deinit {
     if let reviewSessionCloseObserver {
       NotificationCenter.default.removeObserver(reviewSessionCloseObserver)
+    }
+    if let reviewSessionUpdateObserver {
+      NotificationCenter.default.removeObserver(reviewSessionUpdateObserver)
     }
   }
 
@@ -983,18 +998,31 @@ final class WorkspaceState {
     dismissMergeBackOptions()
   }
 
-  func beginReviewLaunchFlow() {
-    guard let selectedWorktree else { return }
+  @discardableResult
+  func beginReviewLaunchFlow() -> WorkspaceReviewLaunchDecision? {
+    guard let selectedWorktree else { return nil }
     let worktreePath = normalizedPath(selectedWorktree.path)
     materializePendingRunningAgentTabs(for: worktreePath)
     let candidates = eligibleReviewAgentTabs()
     reviewAgentCandidates = candidates
-    pendingReviewPreparation = WorkspaceReviewPreparation(
+    let preparation = WorkspaceReviewPreparation(
       worktreePath: worktreePath,
       draft: reviewSummaryDraftsByWorktreePath[worktreePath] ?? .empty,
       selectedAgentTabID: candidates.count == 1 ? candidates[0].id : nil
     )
-    isPresentingReviewPreparationSheet = true
+    pendingReviewPreparation = preparation
+
+    switch candidates.count {
+    case 0:
+      isPresentingReviewPreparationSheet = false
+      return .launchAgent
+    case 1:
+      isPresentingReviewPreparationSheet = false
+      return .useExistingAgent(candidates[0].id, preparation)
+    default:
+      isPresentingReviewPreparationSheet = true
+      return .chooseExistingAgent
+    }
   }
 
   func updatePendingReviewPreparation(_ preparation: WorkspaceReviewPreparation) {
@@ -1029,6 +1057,7 @@ final class WorkspaceState {
     )
     isPresentingReviewPreparationSheet = false
     pendingReviewPreparation = nil
+    reviewAgentCandidates = []
     presentAgentLaunchSheet(reviewAfterLaunch: true)
   }
 

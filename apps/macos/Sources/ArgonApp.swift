@@ -432,6 +432,7 @@ enum OpenRecentMenuItemBuilder {
 }
 
 private struct WorkspaceWorktreeCommands: Commands {
+  @Environment(\.openWindow) private var openWindow
   let commandContext: CommandContext
   let reviewWindowRegistry: ReviewWindowRegistry
 
@@ -484,7 +485,11 @@ private struct WorkspaceWorktreeCommands: Commands {
     }
 
     guard reviewWindowRegistry.state(for: worktreePath) != .opening else { return }
-    workspaceState.beginReviewLaunchFlow()
+    WorkspaceReviewLauncher.startReview(
+      workspaceState: workspaceState,
+      reviewWindowRegistry: reviewWindowRegistry,
+      openWindow: { target in openWindow(value: target) }
+    )
   }
 }
 

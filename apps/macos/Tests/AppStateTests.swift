@@ -74,6 +74,10 @@ struct AppStateTests {
     #expect(state.coderConnectionState == .awaitingConnection)
     #expect(state.coderConnectionLabel == "No coder yet")
     #expect(state.coderConnectionHelpText.contains("No coder agent heartbeat yet"))
+    #expect(state.handoffPrompt.contains("agent describe --session"))
+    #expect(state.handoffPrompt.contains("--description-file <summary-file> --json"))
+    #expect(
+      state.handoffPrompt.contains("Do not interpolate the description text into a shell command"))
     #expect(state.handoffPrompt.contains("commit your changes"))
     #expect(state.handoffPrompt.contains("continue this loop without disconnecting"))
     #expect(state.handoffPrompt.contains("issue: fix this"))

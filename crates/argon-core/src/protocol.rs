@@ -19,6 +19,7 @@ pub enum CliCommand {
     Close,
     Reply,
     Ack,
+    Describe,
     Prompt,
     ReviewerPrompt,
     ReviewerWait,

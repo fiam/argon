@@ -369,25 +369,28 @@ It must include:
 
 #### FR-7 Review Action
 
-The right pane must expose a "Review" action that opens the existing
-review UI for the selected worktree.
+The right pane must expose a "Review" action that starts coder handoff
+before opening the review UI for the selected worktree.
 
-Before opening the review window, Argon must try to obtain a coder-agent
-summary of the changes to use as the review description / PR description.
+When exactly one eligible coder agent is already attached to the worktree,
+Argon must hand the review session prompt to that agent automatically and
+then open review. If multiple coder agents are attached, Argon must ask
+the human to choose the coder before opening review. If no eligible coder
+agent is attached, Argon must present the agent handoff dialog so the
+human can launch a saved coder, launch a custom coder command, or copy the
+prompt for an external agent. The review window opens only after a coder
+handoff path has been chosen.
 
-If there is:
-
-- one eligible coder agent
-  use it automatically
-- multiple eligible coder agents
-  ask the user to choose one
-- no eligible coder agent
-  prompt the user to launch one or continue with a manual summary
+The coder-agent prompt must tell the agent to inspect the review target
+and call back into the review session with a concise review description /
+PR description before entering the wait loop. The callback instructions
+must pass generated descriptions through an argv-safe or file-based input,
+not by interpolating arbitrary summary text into a shell command.
 
 The captured summary must be:
 
-- stored on the worktree
-- editable by the human before review submission
+- stored on the worktree or review session
+- visible to the human in review UI
 - passed to reviewer agents as context
 
 #### FR-8 Merge Back Action
@@ -983,8 +986,9 @@ The transport must support both:
 
 ### 11.6 Review Summary Spec
 
-When the user launches review from the workspace, Argon should request a
-structured summary from the chosen coder agent.
+When the user launches review from the workspace, Argon should open the
+review immediately and ask the chosen coder agent to call back with a
+structured summary through the review session hook.
 
 Required fields:
 
@@ -995,14 +999,19 @@ Required fields:
 
 Storage rules:
 
-- save it on the worktree record
-- prefill the review description UI
-- include it in reviewer-agent prompts
+- save it on the worktree record or review session
+- display it in the review UI when available
+- include it in coder handoff and reviewer-agent prompts as untrusted,
+  serialized context rather than executable instructions
 
 Fallback rules:
 
-- if the agent request fails or times out, let the human author the summary
-- do not block the review window forever on summary generation
+- if there is no attached coder agent, present the agent handoff dialog
+  with saved, custom, and external handoff options
+- if the agent request fails or times out, let the human proceed through
+  external handoff
+- do not block the review window on summary generation once a handoff path
+  has been chosen
 
 ### 11.7 Merge-Back Spec
 
@@ -1306,7 +1315,7 @@ Exit criteria:
 - add right-side diff summary
 - add full `git diff --stat`
 - add `Review` action from workspace
-- request coder summary before review launch
+- launch review immediately and request coder summary through the review hook
 - feed the summary into review sessions and reviewer prompts
 
 Exit criteria:

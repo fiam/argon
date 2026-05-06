@@ -490,6 +490,7 @@ final class ArgonUITests: XCTestCase {
     ]
     app.launchEnvironment["ARGON_HOME"] = target.argonHome
     app.launchEnvironment[Self.signalFileEnvironmentKey] = signalFile.path
+    app.launchEnvironment[Self.disableCLIInstallPromptEnvironmentKey] = "1"
     app.launch()
 
     XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
@@ -500,11 +501,10 @@ final class ArgonUITests: XCTestCase {
 
     let externalButton = app.buttons["workspace-review-external-button"]
     XCTAssertTrue(externalButton.waitForExistence(timeout: 10))
-    externalButton.tap()
+    externalButton.click()
 
-    XCTAssertTrue(waitForSignal("review-window-appeared", at: signalFile, timeout: 10))
-    XCTAssertTrue(waitForSignal("session-loaded", at: signalFile, timeout: 10))
-    XCTAssertTrue(app.staticTexts["Paste into agent"].waitForExistence(timeout: 10))
+    XCTAssertTrue(waitForSignal("review-window-appeared", at: signalFile, timeout: 20))
+    XCTAssertTrue(waitForSignal("session-loaded", at: signalFile, timeout: 20))
     let copyAgainButton = app.buttons.matching(
       NSPredicate(format: "label == %@", "Copy Prompt Again")
     ).firstMatch
@@ -514,9 +514,51 @@ final class ArgonUITests: XCTestCase {
     let copiedPrompt = NSPasteboard.general.string(forType: .string) ?? ""
     XCTAssertTrue(copiedPrompt.hasPrefix("You are reviewing feedback for Argon session"))
     XCTAssertTrue(copiedPrompt.contains("Execution contract:"))
+    XCTAssertTrue(copiedPrompt.contains("agent describe --session"))
+    XCTAssertTrue(copiedPrompt.contains("--description-file <summary-file> --json"))
     XCTAssertTrue(copiedPrompt.contains("agent wait"))
+    XCTAssertFalse(copiedPrompt.contains("--description \"<summary>\""))
     XCTAssertFalse(copiedPrompt.contains("session: "))
     XCTAssertFalse(copiedPrompt.contains("agent-prompt-command:"))
+  }
+
+  @MainActor
+  func testWorkspaceReviewLaunchesFakeCoderBeforeOpeningReview() throws {
+    let target = try Self.createWorkspace()
+    let app = XCUIApplication()
+    let signalFile = URL(fileURLWithPath: target.argonHome).appendingPathComponent("signal.txt")
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.fixtureRoot)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--workspace-repo-root", target.repoRoot,
+      "--workspace-common-dir", target.repoCommonDir,
+      "--selected-worktree-path", target.selectedWorktreePath,
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launchEnvironment[Self.signalFileEnvironmentKey] = signalFile.path
+    app.launchEnvironment[Self.disableCLIInstallPromptEnvironmentKey] = "1"
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+
+    let reviewButton = app.buttons["workspace-review-button"]
+    XCTAssertTrue(reviewButton.waitForExistence(timeout: 10))
+    reviewButton.tap()
+
+    try launchFakeReviewAgent(
+      in: app,
+      signalFile: signalFile,
+      description: "Fake review summary from UI test."
+    )
+
+    XCTAssertTrue(waitForSignal("review-window-appeared", at: signalFile, timeout: 20))
+    XCTAssertTrue(waitForSignal("session-loaded", at: signalFile, timeout: 20))
+    XCTAssertTrue(waitForSignal("fake-review-agent-described", at: signalFile, timeout: 20))
   }
 
   @MainActor
@@ -2479,6 +2521,40 @@ final class ArgonUITests: XCTestCase {
       "--delay-ms", "\(delayMilliseconds)",
       "--post-response-sleep-ms", "\(postResponseSleepMilliseconds)",
       "--message", shellQuote(message),
+    ].joined(separator: " ")
+    pasteText(command, into: commandField, app: app)
+
+    let launchButton = app.buttons["workspace-agent-launch-button"]
+    XCTAssertTrue(launchButton.waitForExistence(timeout: 10))
+    XCTAssertTrue(waitForEnabledState(launchButton, enabled: true, timeout: 5))
+    launchButton.click()
+  }
+
+  @MainActor
+  private func launchFakeReviewAgent(
+    in app: XCUIApplication,
+    signalFile: URL,
+    description: String,
+    postDescribeSleepMilliseconds: Int = 1500
+  ) throws {
+    let customCommandCard = app.buttons["agent-launch-custom-command-card"]
+    XCTAssertTrue(customCommandCard.waitForExistence(timeout: 10))
+    customCommandCard.click()
+
+    let sandboxCheckbox = app.checkBoxes["Sandboxed"]
+    if sandboxCheckbox.exists, isCheckboxChecked(sandboxCheckbox) {
+      sandboxCheckbox.click()
+    }
+
+    let commandField = app.descendants(matching: .any)["workspace-agent-custom-command-field"]
+    XCTAssertTrue(commandField.waitForExistence(timeout: 10))
+
+    let command = [
+      shellQuote(Self.argonCLIPath()),
+      "agent", "dev", "fake-review-agent",
+      "--signal-file", shellQuote(signalFile.path),
+      "--description", shellQuote(description),
+      "--post-describe-sleep-ms", "\(postDescribeSleepMilliseconds)",
     ].joined(separator: " ")
     pasteText(command, into: commandField, app: app)
 

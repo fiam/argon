@@ -430,10 +430,16 @@ struct WorkspaceStateTests {
         ))
     )
 
-    state.beginReviewLaunchFlow()
+    let decision = state.beginReviewLaunchFlow()
 
     #expect(state.pendingReviewPreparation?.selectedAgentTabID == tab.id)
-    #expect(state.isPresentingReviewPreparationSheet == true)
+    if case .useExistingAgent(let agentTabID, let preparation) = decision {
+      #expect(agentTabID == tab.id)
+      #expect(preparation.selectedAgentTabID == tab.id)
+    } else {
+      Issue.record("Expected a single running coder to launch directly")
+    }
+    #expect(state.isPresentingReviewPreparationSheet == false)
     #expect(state.isPresentingAgentLaunchSheet == false)
   }
 
@@ -459,9 +465,10 @@ struct WorkspaceStateTests {
         ))
     )
 
-    state.beginReviewLaunchFlow()
+    let decision = state.beginReviewLaunchFlow()
 
     #expect(state.pendingReviewPreparation?.selectedAgentTabID == nil)
+    #expect(decision == .chooseExistingAgent)
     #expect(state.isPresentingReviewPreparationSheet == true)
     #expect(state.reviewAgentCandidates.count == 2)
     state.updatePendingReviewPreparation(
@@ -474,16 +481,17 @@ struct WorkspaceStateTests {
     #expect(state.pendingReviewPreparation?.selectedAgentTabID == second.id)
   }
 
-  @Test("review preparation allows manual summary when no running agent tabs exist")
+  @Test("review launch asks for an agent when no running agent tabs exist")
   @MainActor
-  func reviewPreparationAllowsManualSummaryWhenNoRunningAgentTabsExist() {
+  func reviewLaunchAsksForAgentWhenNoRunningAgentTabsExist() {
     let state = makeState()
     state.openShellTab()
 
-    state.beginReviewLaunchFlow()
+    let decision = state.beginReviewLaunchFlow()
 
     #expect(state.pendingReviewPreparation?.selectedAgentTabID == nil)
-    #expect(state.isPresentingReviewPreparationSheet == true)
+    #expect(decision == .launchAgent)
+    #expect(state.isPresentingReviewPreparationSheet == false)
     #expect(state.isPresentingAgentLaunchSheet == false)
     #expect(state.reviewAgentCandidates.isEmpty)
   }
@@ -2676,9 +2684,9 @@ struct WorkspaceStateTests {
     #expect(state.selectedDiffStat == "2 files changed")
   }
 
-  @Test("review session close notifications refresh workspace review snapshots")
+  @Test("review session lifecycle notifications refresh workspace review snapshots")
   @MainActor
-  func reviewSessionCloseNotificationsRefreshWorkspaceReviewSnapshots() async throws {
+  func reviewSessionLifecycleNotificationsRefreshWorkspaceReviewSnapshots() async throws {
     let storageRoot = FileManager.default.temporaryDirectory
       .appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: storageRoot, withIntermediateDirectories: true)
@@ -2725,8 +2733,21 @@ struct WorkspaceStateTests {
     try write(
       session: makeReviewSession(
         repoRoot: "/tmp/repo",
-        status: .closed,
+        status: .approved,
         updatedAt: Date(timeIntervalSince1970: 20)
+      ),
+      to: sessionURL
+    )
+    ReviewSessionLifecycle.postSessionUpdated(repoRoot: "/tmp/repo")
+    await Task.yield()
+
+    #expect(state.reviewSnapshot(for: "/tmp/repo")?.status == .approved)
+
+    try write(
+      session: makeReviewSession(
+        repoRoot: "/tmp/repo",
+        status: .closed,
+        updatedAt: Date(timeIntervalSince1970: 30)
       ),
       to: sessionURL
     )

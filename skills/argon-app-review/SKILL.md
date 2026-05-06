@@ -38,7 +38,7 @@ absolute `.app` path or `ARGON_CLI` to the absolute bundled CLI path.
 ```bash
 argon agent start --repo <directory> --mode <branch|uncommitted> \
   [--base <branch>] [--head <branch>] \
-  --description "<planned changes>" --wait --json
+  --description-file <summary-file> --wait --json
 ```
 
 You **must** provide:
@@ -46,9 +46,23 @@ You **must** provide:
 - `--mode` — one of:
   - `branch` — all branch changes from the inferred or supplied merge-base to working tree.
   - `uncommitted` — `HEAD` to working tree (staged, unstaged, and non-ignored untracked files).
-- `--description` — a short summary of the intended changes for the reviewer.
+- `--description-file` — path to a UTF-8 text file containing a short
+  summary of the intended changes for the reviewer. Do not interpolate
+  arbitrary summary text into a shell command.
 
 `--wait` blocks until the reviewer submits feedback or a decision.
+
+If Argon opened an existing session for you instead of asking you to start
+one, inspect the review target and set or refresh the review description
+before waiting. Write the summary to a temporary UTF-8 text file first.
+Run this as a standalone command; do not append description flags to
+`agent wait` and do not interpolate arbitrary summary text into a shell
+command:
+
+```bash
+argon agent describe --session <session-id> \
+  --description-file <summary-file> --json
+```
 
 ### 2. Handle feedback — acknowledge, implement, reply
 

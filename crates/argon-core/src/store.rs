@@ -518,6 +518,19 @@ impl SessionStore {
         })
     }
 
+    pub fn set_change_summary(
+        &self,
+        session_id: Uuid,
+        change_summary: Option<String>,
+    ) -> Result<ReviewSession, StoreError> {
+        self.with_session_locked(session_id, |session| {
+            session.change_summary = change_summary;
+            session.agent_last_seen_at = Some(Utc::now());
+            session.touch();
+            Ok(())
+        })
+    }
+
     fn add_comment(&self, input: AddComment) -> Result<(ReviewSession, Uuid), StoreError> {
         let mut resolved_thread_id = Uuid::nil();
         let session = self.with_session_locked(input.session_id, |session| {
@@ -863,6 +876,30 @@ mod tests {
         assert!(session.agent_last_seen_at.is_none());
 
         let updated = store.mark_agent_seen(session.id).expect("mark agent seen");
+        assert!(updated.agent_last_seen_at.is_some());
+    }
+
+    #[test]
+    fn set_change_summary_updates_summary_and_marks_agent_seen() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let store = test_store(temp_dir.path());
+        let session = store
+            .create_session("main", "feature/test", "deadbeef")
+            .expect("session");
+        assert!(session.change_summary.is_none());
+        assert!(session.agent_last_seen_at.is_none());
+
+        let updated = store
+            .set_change_summary(
+                session.id,
+                Some("Tighten review launch and handoff.".to_string()),
+            )
+            .expect("set change summary");
+
+        assert_eq!(
+            updated.change_summary.as_deref(),
+            Some("Tighten review launch and handoff.")
+        );
         assert!(updated.agent_last_seen_at.is_some());
     }
 

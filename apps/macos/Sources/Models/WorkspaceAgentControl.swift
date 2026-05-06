@@ -59,6 +59,12 @@ struct WorkspaceReviewPreparation: Equatable, Sendable {
   }
 }
 
+enum WorkspaceReviewLaunchDecision: Equatable, Sendable {
+  case useExistingAgent(UUID, WorkspaceReviewPreparation)
+  case chooseExistingAgent
+  case launchAgent
+}
+
 struct PendingWorkspaceAgentControlRequest: Equatable, Sendable {
   let request: WorkspaceAgentControlRequest
   let worktreePath: String
