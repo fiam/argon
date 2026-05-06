@@ -1415,11 +1415,29 @@ enum GitService {
   }
 
   private static func normalizePath(_ path: String) -> String {
-    URL(fileURLWithPath: path)
+    let normalized = URL(fileURLWithPath: path)
       .standardizedFileURL
       .resolvingSymlinksInPath()
       .standardizedFileURL
       .path
+    return normalizedDarwinPrivatePath(normalized)
+  }
+
+  private static func normalizedDarwinPrivatePath(_ path: String) -> String {
+    for (privatePrefix, publicPrefix) in [
+      ("/private/tmp", "/tmp"),
+      ("/private/var", "/var"),
+      ("/private/etc", "/etc"),
+    ] {
+      if path == privatePrefix {
+        return publicPrefix
+      }
+      if path.hasPrefix("\(privatePrefix)/") {
+        return publicPrefix + path.dropFirst(privatePrefix.count)
+      }
+    }
+
+    return path
   }
 
   private static func runCommand(

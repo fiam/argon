@@ -2907,11 +2907,29 @@ final class WorkspaceState {
   }
 
   nonisolated private static func normalizedPath(_ path: String) -> String {
-    URL(fileURLWithPath: path)
+    let normalized = URL(fileURLWithPath: path)
       .standardizedFileURL
       .resolvingSymlinksInPath()
       .standardizedFileURL
       .path
+    return normalizedDarwinPrivatePath(normalized)
+  }
+
+  nonisolated private static func normalizedDarwinPrivatePath(_ path: String) -> String {
+    for (privatePrefix, publicPrefix) in [
+      ("/private/tmp", "/tmp"),
+      ("/private/var", "/var"),
+      ("/private/etc", "/etc"),
+    ] {
+      if path == privatePrefix {
+        return publicPrefix
+      }
+      if path.hasPrefix("\(privatePrefix)/") {
+        return publicPrefix + path.dropFirst(privatePrefix.count)
+      }
+    }
+
+    return path
   }
 
   nonisolated private static func launchWarningMessage(for target: WorkspaceTarget) -> String? {
