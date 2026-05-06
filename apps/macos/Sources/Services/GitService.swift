@@ -1415,7 +1415,11 @@ enum GitService {
   }
 
   private static func normalizePath(_ path: String) -> String {
-    URL(fileURLWithPath: path).standardizedFileURL.path
+    URL(fileURLWithPath: path)
+      .standardizedFileURL
+      .resolvingSymlinksInPath()
+      .standardizedFileURL
+      .path
   }
 
   private static func runCommand(

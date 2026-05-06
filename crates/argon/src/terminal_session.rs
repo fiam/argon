@@ -881,13 +881,25 @@ impl PtyChild {
 
         let mut master_fd: RawFd = -1;
         let mut slave_fd: RawFd = -1;
-        let mut winsize = libc::winsize {
+        let winsize = libc::winsize {
             ws_row: size.rows,
             ws_col: size.cols,
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
+        #[cfg(all(target_os = "linux", not(target_env = "uclibc")))]
         let open_result = unsafe {
+            libc::openpty(
+                &mut master_fd,
+                &mut slave_fd,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &winsize,
+            )
+        };
+        #[cfg(not(all(target_os = "linux", not(target_env = "uclibc"))))]
+        let open_result = unsafe {
+            let mut winsize = winsize;
             libc::openpty(
                 &mut master_fd,
                 &mut slave_fd,

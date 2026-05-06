@@ -2907,7 +2907,11 @@ final class WorkspaceState {
   }
 
   nonisolated private static func normalizedPath(_ path: String) -> String {
-    URL(fileURLWithPath: path).standardizedFileURL.path
+    URL(fileURLWithPath: path)
+      .standardizedFileURL
+      .resolvingSymlinksInPath()
+      .standardizedFileURL
+      .path
   }
 
   nonisolated private static func launchWarningMessage(for target: WorkspaceTarget) -> String? {
