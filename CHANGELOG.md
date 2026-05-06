@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.2.0](https://github.com/fiam/argon/compare/v0.1.0...v0.2.0) (2026-05-06)
+
+
+### Features
+
+* add agent launch defaults ([ac71424](https://github.com/fiam/argon/commit/ac714246c8f20c318c70e7c74d2e41a14cd00b0e))
+* detect worktree merge conflicts ([25cf3ba](https://github.com/fiam/argon/commit/25cf3ba8472a0f393ede4a853c11f4fbcce4c614))
+* improve agent settings ([c2ca080](https://github.com/fiam/argon/commit/c2ca080d29144dae7009ce467e9a7dc3f316a02c))
+* **macos:** add finalize agent feedback ([ba52396](https://github.com/fiam/argon/commit/ba5239673e4f2b14011739f8f7c95c36657559ff))
+* **macos:** improve merge back flow ([1b0f87a](https://github.com/fiam/argon/commit/1b0f87a240b95189ae021bf40f35155686082d50))
+* persist agent terminals ([78a0e63](https://github.com/fiam/argon/commit/78a0e63e97a639f44a0cb1658893367c2e898ce5))
+* **review:** harden coder handoff ([d262f51](https://github.com/fiam/argon/commit/d262f5187252d1d3df5bb11bd1c6a9e4e871111c))
+* **sandbox:** add Rust builtin ([2306406](https://github.com/fiam/argon/commit/230640652e0a094083f1ac19648b5ed2370c1988))
+* **sandbox:** support optional exec allow ([37251cc](https://github.com/fiam/argon/commit/37251cc5a9fda47f39196242da29064c6f37a214))
+* simplify diff modes ([dc8a573](https://github.com/fiam/argon/commit/dc8a57338f7379b1cb1cf4362070dbb65f05bc56))
+* support editable agent profiles ([efcd81e](https://github.com/fiam/argon/commit/efcd81efe47d60e27878f70dc7b4feb1bec3722b))
+
+
+### Bug Fixes
+
+* **ci:** handle path and openpty drift ([6d5be62](https://github.com/fiam/argon/commit/6d5be62d836132a1dc689a94a644cea95697766d))
+* clarify agent activity labels ([7bb087d](https://github.com/fiam/argon/commit/7bb087d73fc1b88531c2b97d7b2cd3fafe3a4da9))
+* **cli:** suppress stale terminal replay ([e7a7149](https://github.com/fiam/argon/commit/e7a714939097e8548b95c5179f45426792c14c30))
+* harden persistent terminal restore ([611822b](https://github.com/fiam/argon/commit/611822b507b91afe770585c483322d4be505667a))
+* keep agent responses out of worktrees ([8b67404](https://github.com/fiam/argon/commit/8b67404ceeb5aa14b3a802567bd39eb8fd6163d7))
+* keep terminal attach clients alive ([4c5053b](https://github.com/fiam/argon/commit/4c5053bee2cb110005145a54b1ef755f6a569369))
+* **macos:** clarify worktree branch bases ([1fc79a8](https://github.com/fiam/argon/commit/1fc79a833f84973517bcb2ad5ccff2cb26010fb8))
+* **macos:** clear visible tab attention ([b02e6df](https://github.com/fiam/argon/commit/b02e6df6ab7b99b52ade52fa4f629e1924214416))
+* **macos:** disable worktree fields while creating ([03a807f](https://github.com/fiam/argon/commit/03a807f1832cae1e34eed5b9843235f8f4164963))
+* **macos:** harden worktree removal ([fe9fa09](https://github.com/fiam/argon/commit/fe9fa0953f6e731c2523197e99d9fee7f195967d))
+* **macos:** keep unit tests headless ([0636a5a](https://github.com/fiam/argon/commit/0636a5abc11558bbae6a2d4abf5d173a89d7c006))
+* **macos:** load running agents in sidebar ([4e0e597](https://github.com/fiam/argon/commit/4e0e59784e1f961a9739ccf66ad1f30644b804fa))
+* **macos:** normalize private temp paths ([2c998db](https://github.com/fiam/argon/commit/2c998dbd1db1b457833d766001036aaec8c21cbe))
+* **macos:** polish worktree sidebar ([5f208bc](https://github.com/fiam/argon/commit/5f208bcedbb6c5ba723b2602be45c9ebf727b024))
+* **macos:** reduce hidden terminal rendering ([2953de6](https://github.com/fiam/argon/commit/2953de62a4cc8b6e0f5ee58b67b54e5208a4bd57))
+* **macos:** restore selected running agents ([769c523](https://github.com/fiam/argon/commit/769c523dd80c287e55f80ab5c91cc409ee6e0d6f))
+* **macos:** reuse sandboxed finalize agents ([05056ad](https://github.com/fiam/argon/commit/05056ad56a4ed84cea81f82befb08f5f09ec17ad))
+* **macos:** select nearby worktree ([7910568](https://github.com/fiam/argon/commit/79105681a80f662ab5a28056ead4a22c0a7d698b))
+* **macos:** show removal errors in alert ([5785739](https://github.com/fiam/argon/commit/5785739e33ed28ce59874f0ae203fbc14af81051))
+* **macos:** show restored agents in sidebar ([8d253aa](https://github.com/fiam/argon/commit/8d253aae22815ed024ef25a685d538191c380307))
+* **macos:** strip NO_COLOR from terminals ([b34b57b](https://github.com/fiam/argon/commit/b34b57b7556f4d84f5ce9fa8b9edebc404b5da97))
+* reattach persistent terminal views ([aaad6ec](https://github.com/fiam/argon/commit/aaad6ecf70ba18867490f9c41efda67e2dd4d1a2))
+* retarget close window shortcut ([c783228](https://github.com/fiam/argon/commit/c78322839c07bbeb535961941069ecbbf67f85b4))
+* **sandbox:** expose linked worktree git dirs ([180cfe2](https://github.com/fiam/argon/commit/180cfe2de86f189f6eb4b27479f93393e74e36eb))
+* **sandbox:** support macOS agent tools ([c4532d0](https://github.com/fiam/argon/commit/c4532d00b6c8b35041ecac158df6ec8cdcbff552))
+* shorten terminal session sockets ([653fc55](https://github.com/fiam/argon/commit/653fc55bfe032ea419e2ff6d5cfb5cd965265a5a))
+* sort worktrees by creation time ([9ab4d84](https://github.com/fiam/argon/commit/9ab4d84227c5f0356c6c52f22f5a7ba4685e46f3))
+* stabilize thinking detection ([66b8605](https://github.com/fiam/argon/commit/66b8605c24c44f78d139f896404930c99d2a9f1b))
+
 ## 0.1.0 (2026-04-26)
 
 
