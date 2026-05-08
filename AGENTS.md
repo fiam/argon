@@ -26,14 +26,39 @@ If behavior conflicts, prioritize `PRD.md` and update the other docs.
 5. Preserve comment thread identity across review iterations.
 6. Avoid interactive prompts in agent-facing commands.
 7. Favor deterministic behavior over convenience defaults.
+8. Keep refactors behavior-preserving unless the user explicitly asks for
+   product changes.
+9. Prefer small, focused source files over monolithic files; split by
+   workflow, UI surface, or domain responsibility when a file becomes hard
+   for agents to inspect safely.
+
+## Refactoring Guidelines
+
+- Refactor for readability, navigation, testability, or clearer ownership;
+  do not use a refactor pass to add features, redesign UI, or change
+  workflow semantics.
+- Keep behavior-preserving moves mechanical when possible: preserve public
+  names, accessibility identifiers, persisted data shapes, CLI output, and
+  review state transitions.
+- Split SwiftUI views by surface and responsibility. Window/root views should
+  orchestrate state, navigation, sheets, and environment wiring; sidebar,
+  inspector, terminal, review, and shared controls should live in focused
+  files.
+- Keep model and service logic out of SwiftUI view files unless it is truly
+  presentation-only. Move reusable logic into `Models/` or `Services/`.
+- When extracting code across Swift files, remember that cross-file helper
+  types cannot be `private`; keep names explicit and scoped by prefix
+  instead of making generic top-level names.
+- For pure refactors, update or add tests only when behavior is clarified or
+  risk changes; still run `make check` before commit.
 
 ## What `make check` runs
 
 1. `cargo fmt` + `swift-format` — format all Rust and Swift code.
 2. `cargo fmt --check` + `cargo clippy` + `swift-format lint` — verify formatting and lint.
 3. `cargo deny check` — license and advisory audit.
-4. `cargo test --workspace` — 39 Rust unit and integration tests.
-5. `xcodebuild test` — 10 Swift unit tests (DiffParser, SessionLoader).
+4. `cargo test --workspace` — Rust unit and integration tests.
+5. `xcodebuild test` — Swift unit tests.
 
 ## Repository Structure
 

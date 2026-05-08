@@ -74,6 +74,11 @@ Run `make check` before every commit.
 
 - Add or update unit tests and UI tests in the same commit as behavior
   changes.
+- Keep pure refactors behavior-preserving. Do not add product behavior,
+  redesign UI, or change workflow semantics in the same change.
+- Keep large files from becoming difficult for agents to inspect safely.
+  Split code by workflow, surface, or domain responsibility when ownership
+  becomes unclear.
 - Keep the CLI machine-readable first. `--json` output is required for
   agent workflows.
 - Keep review states explicit:
@@ -81,6 +86,35 @@ Run `make check` before every commit.
 - Preserve comment thread identity across review iterations.
 - Avoid interactive prompts in agent-facing commands.
 - Favor deterministic behavior over convenience defaults.
+
+## Refactoring Guidelines
+
+Refactors should make future changes easier without changing what users or
+agents observe. Preserve public names, accessibility identifiers, serialized
+data shapes, CLI output, and review state transitions unless the requested
+work explicitly changes them.
+
+For SwiftUI code:
+
+- Keep scene and window root views focused on orchestration: state wiring,
+  navigation, sheets, alerts, toolbars, and environment setup.
+- Put sidebar, terminal, inspector, review, agent launch, and shared controls
+  in focused files instead of one large view file.
+- Move reusable model or service behavior into `Models/` or `Services/`.
+  View files should only contain presentation logic and local UI helpers.
+- When helpers are needed across Swift files, use explicit Argon-specific
+  names and prefixes. Swift `private` declarations do not cross file
+  boundaries.
+
+For Rust code:
+
+- Keep CLI command parsing, command execution, prompt construction, sandbox
+  operations, and output formatting in separate modules when they grow.
+- Keep machine-readable response structs close to the commands that emit
+  them, and avoid ad hoc text parsing when structured data is available.
+
+Run `make check` after refactors. For very small intermediate moves, at least
+run the relevant formatter and targeted build/test before continuing.
 
 ## Commit Conventions
 

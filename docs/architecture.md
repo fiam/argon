@@ -39,6 +39,32 @@ The native macOS app. It is primarily SwiftUI, with AppKit used where the
 platform requires lower-level integration such as text editing and PTY
 terminal hosting.
 
+View files should stay organized by UI surface rather than accumulating into
+large window files. Root views own orchestration and environment wiring;
+focused files own sidebar, terminal, inspector, review, agent launch, and
+shared control surfaces. Presentation-only helpers may live beside the view
+that uses them; reusable state and behavior should move into `Models/` or
+`Services/`.
+
+The workspace window currently follows this split:
+
+- `WorkspaceWindowView.swift`: window shell, workspace-level sheets, alerts,
+  and review/finalize orchestration.
+- `WorkspaceSidebarViews.swift`: worktree list rows, metadata, and row
+  actions.
+- `WorkspaceCenterViews.swift`: center pane, toolbar items, and changed-file
+  panel.
+- `WorkspaceTerminalChromeViews.swift`: terminal deck, tab chrome, restore
+  menu, and status pills.
+- `WorkspaceTerminalStageViews.swift`: hosted terminal stage and empty/exited
+  terminal states.
+- `WorkspaceReviewViews.swift`: review preparation and review inspector UI.
+- `WorkspaceAgentSheetViews.swift`: agent launch and new-worktree sheets.
+- `WorkspaceInspectorViews.swift`: right inspector and sandbox network
+  activity UI.
+- `WorkspaceSharedViews.swift`: shared workspace surfaces, badges, diff
+  summaries, editor launcher, and worktree removal controls.
+
 ### `crates/argon-core`
 
 Shared domain logic:
@@ -79,6 +105,9 @@ integration path.
 - The CLI stays machine-readable first.
 - Draft review mode accumulates comments until submission.
 - Diff refresh is automatic through filesystem watching.
+- Refactors should preserve behavior and improve ownership boundaries. Avoid
+  mixing feature work with structural cleanup unless the behavior change
+  requires the refactor.
 
 ## Related Docs
 
