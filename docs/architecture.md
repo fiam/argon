@@ -65,6 +65,20 @@ The workspace window currently follows this split:
 - `WorkspaceSharedViews.swift`: shared workspace surfaces, badges, diff
   summaries, editor launcher, and worktree removal controls.
 
+Workspace state is split by workflow while keeping one observable
+`WorkspaceState` instance per window:
+
+- `WorkspaceState.swift`: stored state, lifecycle observers, and simple
+  selection/window computed properties.
+- `WorkspaceState+Worktrees.swift`: worktree inventory, diff-mode selection,
+  detail loading, filesystem watching, refreshes, and removal requests.
+- `WorkspaceState+TerminalTabs.swift`: shell/agent tab creation, terminal
+  selection, attention state, exit handling, and UI-test demo tab seeding.
+- `WorkspaceState+Persistence.swift`: persisted window snapshots, lazy tab
+  restoration, background agent restore metadata, and resumable sessions.
+- `WorkspaceState+ReviewFlow.swift`: review preparation, finalize flows,
+  agent control requests, and staged review launch handoff.
+
 ### `crates/argon-core`
 
 Shared domain logic:
