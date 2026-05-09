@@ -66,6 +66,7 @@ struct DiscoveredWorktree: Identifiable, Hashable, Sendable {
   let headSHA: String?
   let isBaseWorktree: Bool
   let isDetached: Bool
+  let isRebasing: Bool
   let createdAt: Date?
 
   init(
@@ -74,6 +75,7 @@ struct DiscoveredWorktree: Identifiable, Hashable, Sendable {
     headSHA: String?,
     isBaseWorktree: Bool,
     isDetached: Bool,
+    isRebasing: Bool = false,
     createdAt: Date? = nil
   ) {
     self.path = path
@@ -81,7 +83,34 @@ struct DiscoveredWorktree: Identifiable, Hashable, Sendable {
     self.headSHA = headSHA
     self.isBaseWorktree = isBaseWorktree
     self.isDetached = isDetached
+    self.isRebasing = isRebasing
     self.createdAt = createdAt
+  }
+
+  var displayName: String {
+    let name = URL(fileURLWithPath: path).lastPathComponent
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return name.isEmpty ? path : name
+  }
+
+  var branchLabel: String? {
+    guard let branchName = branchName?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !branchName.isEmpty,
+      branchName != displayName
+    else {
+      return nil
+    }
+    return branchName
+  }
+
+  var stateLabel: String? {
+    if isRebasing {
+      return "rebasing"
+    }
+    if isDetached {
+      return "detached"
+    }
+    return nil
   }
 }
 
@@ -169,6 +198,7 @@ enum GitService {
     return parseWorktreeList(
       output,
       baseWorktreePath: baseWorktreePath(repoCommonDir: repoCommonDir) ?? repoRoot,
+      isRebasingProvider: isRebaseInProgress,
       createdAtProvider: worktreeCreatedAt
     )
   }
@@ -1302,6 +1332,7 @@ enum GitService {
   static func parseWorktreeList(
     _ output: String,
     baseWorktreePath: String,
+    isRebasingProvider: (String) -> Bool = { _ in false },
     createdAtProvider: (String) -> Date?
   ) -> [DiscoveredWorktree] {
     let normalizedBasePath = normalizePath(baseWorktreePath)
@@ -1322,6 +1353,7 @@ enum GitService {
           headSHA: currentHeadSHA,
           isBaseWorktree: normalizedPath == normalizedBasePath,
           isDetached: isDetached,
+          isRebasing: isRebasingProvider(normalizedPath),
           createdAt: createdAtProvider(normalizedPath)
         ))
       currentPath = nil
@@ -1383,14 +1415,25 @@ enum GitService {
     _ lhs: DiscoveredWorktree,
     _ rhs: DiscoveredWorktree
   ) -> Bool {
-    let lhsName = lhs.branchName ?? lhs.path
-    let rhsName = rhs.branchName ?? rhs.path
+    let lhsName = lhs.displayName
+    let rhsName = rhs.displayName
     let nameComparison = lhsName.localizedStandardCompare(rhsName)
     if nameComparison != .orderedSame {
       return nameComparison == .orderedAscending
     }
 
     return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
+  }
+
+  private static func isRebaseInProgress(path: String) -> Bool {
+    for gitPath in ["rebase-merge", "rebase-apply"] {
+      let resolvedPath = runGit(["-C", path, "rev-parse", "--git-path", gitPath])
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      if !resolvedPath.isEmpty, FileManager.default.fileExists(atPath: resolvedPath) {
+        return true
+      }
+    }
+    return false
   }
 
   private static func worktreeCreatedAt(path: String) -> Date? {

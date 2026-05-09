@@ -605,6 +605,7 @@ extension WorkspaceState {
         || currentWorktree.headSHA != discoveredWorktree.headSHA
         || currentWorktree.isBaseWorktree != discoveredWorktree.isBaseWorktree
         || currentWorktree.isDetached != discoveredWorktree.isDetached
+        || currentWorktree.isRebasing != discoveredWorktree.isRebasing
         || currentWorktree.createdAt != discoveredWorktree.createdAt
       {
         return true

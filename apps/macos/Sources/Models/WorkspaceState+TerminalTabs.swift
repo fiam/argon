@@ -98,7 +98,7 @@ extension WorkspaceState {
     let tab = WorkspaceTerminalTab(
       id: tabID,
       worktreePath: worktreePath,
-      worktreeLabel: worktree.branchName ?? repoName,
+      worktreeLabel: worktree.displayName,
       title: sandboxed ? "Shell \(ordinal)" : "Privileged Shell \(ordinal)",
       commandDescription: sandboxed
         ? "Sandboxed \(UserShell.resolvedPath())"
@@ -240,7 +240,7 @@ extension WorkspaceState {
       id: tabID,
       profileID: request.profileID,
       worktreePath: worktreePath,
-      worktreeLabel: worktree.branchName ?? repoName,
+      worktreeLabel: worktree.displayName,
       title: agentTabTitle(for: request, ordinal: ordinal),
       commandDescription: request.command,
       baseCommandDescription: request.baseCommandDescription,
@@ -706,7 +706,7 @@ extension WorkspaceState {
     let tab = WorkspaceTerminalTab(
       id: tabID,
       worktreePath: worktreePath,
-      worktreeLabel: worktree.branchName ?? repoName,
+      worktreeLabel: worktree.displayName,
       title: title,
       commandDescription: commandDescription,
       kind: .agent(profileName: title, icon: icon),

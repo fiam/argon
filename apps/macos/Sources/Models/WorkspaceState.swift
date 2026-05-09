@@ -169,21 +169,11 @@ final class WorkspaceState {
 
   var selectedWorktreeLabel: String? {
     guard let selectedWorktree else { return nil }
-
-    if let branchName = selectedWorktree.branchName?.trimmingCharacters(
-      in: .whitespacesAndNewlines),
-      !branchName.isEmpty
-    {
-      return branchName
-    }
-
-    return selectedWorktree.isDetached
-      ? "Detached HEAD"
-      : URL(fileURLWithPath: selectedWorktree.path).lastPathComponent
+    return selectedWorktree.displayName
   }
 
   var windowTitle: String {
-    guard let selectedWorktreeLabel else {
+    guard let selectedWorktreeLabel, selectedWorktreeLabel != repoName else {
       return "Argon — \(repoName)"
     }
 

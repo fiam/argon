@@ -84,16 +84,15 @@ struct WorkspaceSidebarRow: View {
       Button(action: onSelect) {
         VStack(alignment: .leading, spacing: 4) {
           HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(worktree.branchName ?? "Detached HEAD")
+            Text(worktree.displayName)
               .font(.body.weight(.semibold))
               .lineLimit(1)
               .truncationMode(.middle)
               .layoutPriority(1)
+              .accessibilityIdentifier("workspace-sidebar-worktree-name")
 
             if worktree.isBaseWorktree {
               WorkspaceBadge(label: "Base", tint: Color(nsColor: .controlAccentColor))
-            } else if worktree.isDetached {
-              WorkspaceBadge(label: "Detached", tint: .orange)
             }
 
             Spacer(minLength: 0)
@@ -220,6 +219,32 @@ struct WorkspaceSidebarRow: View {
 
   private var metadataTokens: [WorkspaceSidebarMetadataToken] {
     var tokens: [WorkspaceSidebarMetadataToken] = []
+
+    if let branchLabel = worktree.branchLabel {
+      tokens.append(
+        WorkspaceSidebarMetadataToken(
+          id: "branch",
+          label: branchLabel,
+          compactLabel: branchLabel,
+          symbolName: "arrow.triangle.branch",
+          tint: .secondary,
+          accessibilityIdentifier: "workspace-sidebar-branch"
+        )
+      )
+    }
+
+    if let stateLabel = worktree.stateLabel {
+      tokens.append(
+        WorkspaceSidebarMetadataToken(
+          id: "worktree-state",
+          label: stateLabel,
+          compactLabel: stateLabel,
+          symbolName: nil,
+          tint: .secondary,
+          accessibilityIdentifier: "workspace-sidebar-worktree-state"
+        )
+      )
+    }
 
     if let reviewStatusLabel {
       tokens.append(

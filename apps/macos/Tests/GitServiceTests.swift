@@ -526,6 +526,39 @@ struct GitServiceTests {
     #expect(discovered.map(\.createdAt) == [repoCreatedAt, startupCreatedAt, agentCreatedAt])
   }
 
+  @Test("worktree presentation prefers path identity")
+  func worktreePresentationPrefersPathIdentity() {
+    let matching = DiscoveredWorktree(
+      path: "/tmp/worktrees/mcp-client",
+      branchName: "mcp-client",
+      headSHA: "abc123",
+      isBaseWorktree: false,
+      isDetached: false
+    )
+    let namespaced = DiscoveredWorktree(
+      path: "/tmp/worktrees/api-client",
+      branchName: "feature/api-client",
+      headSHA: "def456",
+      isBaseWorktree: false,
+      isDetached: false
+    )
+    let rebasing = DiscoveredWorktree(
+      path: "/tmp/worktrees/rebase-agent",
+      branchName: nil,
+      headSHA: "fedcba",
+      isBaseWorktree: false,
+      isDetached: true,
+      isRebasing: true
+    )
+
+    #expect(matching.displayName == "mcp-client")
+    #expect(matching.branchLabel == nil)
+    #expect(namespaced.displayName == "api-client")
+    #expect(namespaced.branchLabel == "feature/api-client")
+    #expect(rebasing.displayName == "rebase-agent")
+    #expect(rebasing.stateLabel == "rebasing")
+  }
+
   @Test("createWorktree creates and discovers a new linked worktree")
   func createWorktreeCreatesAndDiscoversNewLinkedWorktree() throws {
     let fixture = try makeFixtureDirectory()

@@ -1283,7 +1283,7 @@ extension WorkspaceState {
   }
 
   func restoredWorktreeLabel(for worktreePath: String) -> String {
-    worktrees.first(where: { normalizedPath($0.path) == worktreePath })?.branchName
+    worktrees.first(where: { normalizedPath($0.path) == worktreePath })?.displayName
       ?? URL(fileURLWithPath: worktreePath).lastPathComponent
   }
 

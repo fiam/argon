@@ -1318,11 +1318,11 @@ struct WorkspaceStateTests {
   func windowTitleIncludesSelectedWorktreeLabel() {
     let state = makeState()
 
-    #expect(state.windowTitle == "Argon — repo — main")
+    #expect(state.windowTitle == "Argon — repo")
 
     state.selectedWorktreePath = "/tmp/repo/feature"
 
-    #expect(state.windowTitle == "Argon — repo — feature/window")
+    #expect(state.windowTitle == "Argon — repo — feature")
   }
 
   @Test("diff mode selector is forced to uncommitted for the base worktree")
@@ -1455,7 +1455,7 @@ struct WorkspaceStateTests {
     #expect(state.selectedTerminalTabs.map(\.title) == ["Shell 1"])
     #expect(state.selectedTerminalTab?.title == "Shell 1")
     #expect(state.restoreFailureMessage?.contains("1 agent tab") == true)
-    #expect(state.restoreFailureMessage?.contains("feature/window") == true)
+    #expect(state.restoreFailureMessage?.contains("feature") == true)
   }
 
   @Test("cold restorable agents stay lazy in sidebar status")

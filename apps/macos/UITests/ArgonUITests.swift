@@ -310,6 +310,70 @@ final class ArgonUITests: XCTestCase {
   }
 
   @MainActor
+  func testWorkspaceSidebarUsesWorktreeNamesForRows() throws {
+    let target = try Self.createSidebarDisplayWorkspace()
+    let app = XCUIApplication()
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.fixtureRoot)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--workspace-repo-root", target.repoRoot,
+      "--workspace-common-dir", target.repoCommonDir,
+      "--selected-worktree-path", target.matchingWorktreePath,
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+    XCTAssertTrue(
+      waitForSidebarTitle(
+        in: app,
+        worktreePath: target.matchingWorktreePath,
+        expected: "mcp-client",
+        timeout: 15
+      )
+    )
+    XCTAssertTrue(
+      waitForSidebarToken(
+        in: app,
+        worktreePath: target.matchingWorktreePath,
+        identifier: "workspace-sidebar-branch",
+        expected: false,
+        timeout: 1
+      )
+    )
+    XCTAssertTrue(
+      waitForSidebarTitle(
+        in: app,
+        worktreePath: target.detachedWorktreePath,
+        expected: "detached-agent",
+        timeout: 15
+      )
+    )
+    XCTAssertTrue(
+      waitForSidebarToken(
+        in: app,
+        worktreePath: target.detachedWorktreePath,
+        identifier: "workspace-sidebar-worktree-state",
+        expected: true,
+        timeout: 15
+      )
+    )
+    XCTAssertFalse(
+      waitForSidebarRowLabel(
+        in: app,
+        worktreePath: target.detachedWorktreePath,
+        containing: "Detached HEAD",
+        timeout: 0.5
+      )
+    )
+  }
+
+  @MainActor
   func testLinkedWorktreeShowsFinalizeActions() throws {
     let target = try Self.createLinkedWorkspace()
     let app = XCUIApplication()
@@ -912,6 +976,15 @@ final class ArgonUITests: XCTestCase {
     let argonHome: String
   }
 
+  private struct SidebarDisplayWorkspaceLaunchTarget {
+    let fixtureRoot: String
+    let repoRoot: String
+    let repoCommonDir: String
+    let matchingWorktreePath: String
+    let detachedWorktreePath: String
+    let argonHome: String
+  }
+
   private struct RestoredWorkspaceLaunchTarget {
     let fixtureRoot: String
     let featureWorktreePath: String
@@ -1328,6 +1401,57 @@ final class ArgonUITests: XCTestCase {
       repoRoot: repoRoot.path,
       repoCommonDir: repoRoot.appendingPathComponent(".git", isDirectory: true).path,
       selectedWorktreePath: worktreeRoot.path,
+      argonHome: argonHome.path
+    )
+  }
+
+  private static func createSidebarDisplayWorkspace() throws
+    -> SidebarDisplayWorkspaceLaunchTarget
+  {
+    let fixtureRoot = FileManager.default.temporaryDirectory
+      .appendingPathComponent("argon-ui-tests", isDirectory: true)
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let repoRoot = fixtureRoot.appendingPathComponent("repo", isDirectory: true)
+    let worktreesRoot = fixtureRoot.appendingPathComponent("worktrees", isDirectory: true)
+    let matchingWorktreeRoot = worktreesRoot.appendingPathComponent(
+      "mcp-client",
+      isDirectory: true
+    )
+    let detachedWorktreeRoot = worktreesRoot.appendingPathComponent(
+      "detached-agent",
+      isDirectory: true
+    )
+    let argonHome = fixtureRoot.appendingPathComponent("argon-home", isDirectory: true)
+
+    try FileManager.default.createDirectory(at: repoRoot, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: worktreesRoot, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: argonHome, withIntermediateDirectories: true)
+
+    try git(repoRoot, ["init"])
+    try git(repoRoot, ["config", "user.name", "Argon UI Test"])
+    try git(repoRoot, ["config", "user.email", "argon-ui-test@example.com"])
+
+    try "initial\n".write(
+      to: repoRoot.appendingPathComponent("README.md"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repoRoot, ["add", "README.md"])
+    try git(repoRoot, ["commit", "-m", "Initial commit"])
+    try git(repoRoot, ["branch", "-M", "main"])
+    try git(repoRoot, ["worktree", "add", "-b", "mcp-client", matchingWorktreeRoot.path, "HEAD"])
+    try git(
+      repoRoot,
+      ["worktree", "add", "-b", "detached-agent", detachedWorktreeRoot.path, "HEAD"]
+    )
+    try git(detachedWorktreeRoot, ["checkout", "--detach", "HEAD"])
+
+    return SidebarDisplayWorkspaceLaunchTarget(
+      fixtureRoot: fixtureRoot.path,
+      repoRoot: repoRoot.path,
+      repoCommonDir: repoRoot.appendingPathComponent(".git", isDirectory: true).path,
+      matchingWorktreePath: matchingWorktreeRoot.path,
+      detachedWorktreePath: detachedWorktreeRoot.path,
       argonHome: argonHome.path
     )
   }
@@ -2718,6 +2842,49 @@ final class ArgonUITests: XCTestCase {
           options: [.caseInsensitive, .diacriticInsensitive]
         ) != nil
       {
+        return true
+      }
+      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    return false
+  }
+
+  @MainActor
+  private func waitForSidebarTitle(
+    in app: XCUIApplication,
+    worktreePath: String,
+    expected: String,
+    timeout: TimeInterval
+  ) -> Bool {
+    let row = app.descendants(matching: .any)[
+      Self.workspaceSidebarAccessibilityIdentifier(for: worktreePath)
+    ]
+    let title = row.staticTexts["workspace-sidebar-worktree-name"]
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+      if row.exists, title.exists, title.label == expected {
+        return true
+      }
+      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    return false
+  }
+
+  @MainActor
+  private func waitForSidebarToken(
+    in app: XCUIApplication,
+    worktreePath: String,
+    identifier: String,
+    expected: Bool,
+    timeout: TimeInterval
+  ) -> Bool {
+    let row = app.descendants(matching: .any)[
+      Self.workspaceSidebarAccessibilityIdentifier(for: worktreePath)
+    ]
+    let token = row.descendants(matching: .any)[identifier]
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+      if row.exists, token.exists == expected {
         return true
       }
       RunLoop.current.run(until: Date().addingTimeInterval(0.1))
