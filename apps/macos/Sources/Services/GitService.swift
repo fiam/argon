@@ -499,8 +499,10 @@ enum GitService {
     return DiffParser.parse(diffOutput)
   }
 
-  static func hasConflicts(repoRoot: String) -> Bool {
-    if let mergeability = try? ArgonCLI.workspaceMergeability(repoRoot: repoRoot) {
+  static func hasConflicts(repoRoot: String, predictsMergeConflicts: Bool = true) -> Bool {
+    if predictsMergeConflicts,
+      let mergeability = try? ArgonCLI.workspaceMergeability(repoRoot: repoRoot)
+    {
       return mergeability.status == .conflicted
     }
 

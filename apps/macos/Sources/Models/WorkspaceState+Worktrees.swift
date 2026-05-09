@@ -527,7 +527,13 @@ extension WorkspaceState {
     let conflictStatesByWorktreePath = Dictionary(
       uniqueKeysWithValues: worktrees.map { worktree in
         let normalized = normalizedPath(worktree.path)
-        return (normalized, GitService.hasConflicts(repoRoot: worktree.path))
+        return (
+          normalized,
+          GitService.hasConflicts(
+            repoRoot: worktree.path,
+            predictsMergeConflicts: supportsAllChangesDiff(for: worktree)
+          )
+        )
       }
     )
     let selectedWorktreePath =
@@ -651,7 +657,8 @@ extension WorkspaceState {
 
   nonisolated static func loadRefreshedWorktree(
     for path: String,
-    diffMode: WorkspaceDiffMode
+    diffMode: WorkspaceDiffMode,
+    predictsMergeConflicts: Bool
   ) -> RefreshedWorktree {
     let details = loadSelectionDetails(for: path, diffMode: diffMode)
     return RefreshedWorktree(
@@ -661,7 +668,10 @@ extension WorkspaceState {
       pullRequestURL: details.pullRequestURL,
       reviewTarget: details.reviewTarget,
       branchTopology: details.branchTopology,
-      hasConflicts: GitService.hasConflicts(repoRoot: path)
+      hasConflicts: GitService.hasConflicts(
+        repoRoot: path,
+        predictsMergeConflicts: predictsMergeConflicts
+      )
     )
   }
 
@@ -968,8 +978,15 @@ extension WorkspaceState {
 
   func refreshWorktree(path: String) async {
     let diffMode = effectiveDiffMode(for: path)
+    let predictsMergeConflicts =
+      worktrees.first { normalizedPath($0.path) == normalizedPath(path) }
+      .map(Self.supportsAllChangesDiff(for:)) ?? false
     let result = await Task.detached {
-      Self.loadRefreshedWorktree(for: path, diffMode: diffMode)
+      Self.loadRefreshedWorktree(
+        for: path,
+        diffMode: diffMode,
+        predictsMergeConflicts: predictsMergeConflicts
+      )
     }.result
 
     switch result {

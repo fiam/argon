@@ -215,6 +215,14 @@ final class ArgonUITests: XCTestCase {
         timeout: 15
       )
     )
+    XCTAssertTrue(
+      waitForSidebarConflictMarker(
+        in: app,
+        worktreePath: target.repoRoot,
+        expected: false,
+        timeout: 5
+      )
+    )
   }
 
   @MainActor
@@ -243,6 +251,14 @@ final class ArgonUITests: XCTestCase {
         worktreePath: target.selectedWorktreePath,
         expected: true,
         timeout: 15
+      )
+    )
+    XCTAssertTrue(
+      waitForSidebarConflictMarker(
+        in: app,
+        worktreePath: target.repoRoot,
+        expected: false,
+        timeout: 5
       )
     )
   }
