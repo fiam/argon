@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.3.0](https://github.com/fiam/argon/compare/v0.2.0...v0.3.0) (2026-05-10)
+
+
+### Features
+
+* add Sandboxfile wizard ([856fbe6](https://github.com/fiam/argon/commit/856fbe676d0568a4e68855fec10bf88dde14180a))
+* **macos:** add new worktree shortcut ([883962b](https://github.com/fiam/argon/commit/883962b65b5ceafe73561685fae3a112f5afd2fd))
+* **macos:** add workspace navigation shortcuts ([43b9e71](https://github.com/fiam/argon/commit/43b9e71e6013f4b3fe8e792469365b9765ac26d3))
+* **macos:** refresh welcome window ([0949779](https://github.com/fiam/argon/commit/0949779bb389eba3d56a47b06f60fad584a489fc))
+* show CLI install toast ([deffc1c](https://github.com/fiam/argon/commit/deffc1cbad8d8f0c5f98cfe404ce149e378fcbe9))
+
+
+### Bug Fixes
+
+* **macos:** restore workspace selection ([204a31d](https://github.com/fiam/argon/commit/204a31d6dbdda700c9d95d52b3f9230de70b3e25))
+* remove CLI install dialog ([a969677](https://github.com/fiam/argon/commit/a969677fa1560ade44be2705b61ccad48b2b08bb))
+* **workspace:** keep conflicts off base row ([a61999f](https://github.com/fiam/argon/commit/a61999fb65e83b569dcb33f8e00e45feac11b410))
+* **workspace:** show worktree row names ([296cbc5](https://github.com/fiam/argon/commit/296cbc5eff6545c33f0e363f490474c68216e0cf))
+
 ## [0.2.0](https://github.com/fiam/argon/compare/v0.1.0...v0.2.0) (2026-05-06)
 
 
