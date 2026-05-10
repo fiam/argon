@@ -295,6 +295,16 @@ private struct WorkspaceFileCommands: Commands {
   var body: some Commands {
     CommandGroup(replacing: .newItem) {
       Button {
+        commandContext.activeWorkspaceState?.presentNewWorktreeSheet()
+      } label: {
+        Label("New Worktree…", systemImage: "square.stack.badge.plus")
+      }
+      .keyboardShortcut("n", modifiers: .command)
+      .disabled(commandContext.activeWorkspaceState == nil)
+
+      Divider()
+
+      Button {
         pickDirectory()
       } label: {
         Label("Open…", systemImage: "folder")

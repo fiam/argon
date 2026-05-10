@@ -11,9 +11,10 @@ func workspaceSidebarAccessibilityIdentifier(for path: String) -> String {
 
 struct WorkspaceSidebar: View {
   @Environment(WorkspaceState.self) private var workspaceState
-  @State private var showNewWorktreeSheet = false
 
   var body: some View {
+    @Bindable var workspaceState = workspaceState
+
     GeometryReader { proxy in
       VStack(spacing: 0) {
         if workspaceState.worktrees.isEmpty && workspaceState.isLoading {
@@ -51,7 +52,7 @@ struct WorkspaceSidebar: View {
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
         Button {
-          showNewWorktreeSheet = true
+          workspaceState.presentNewWorktreeSheet()
         } label: {
           Image(systemName: "plus")
         }
@@ -59,8 +60,8 @@ struct WorkspaceSidebar: View {
         .accessibilityIdentifier("workspace-new-worktree-button")
       }
     }
-    .sheet(isPresented: $showNewWorktreeSheet) {
-      WorkspaceNewWorktreeSheet(isPresented: $showNewWorktreeSheet)
+    .sheet(isPresented: $workspaceState.isPresentingNewWorktreeSheet) {
+      WorkspaceNewWorktreeSheet(isPresented: $workspaceState.isPresentingNewWorktreeSheet)
     }
     .background(Color(nsColor: .controlBackgroundColor))
     .overlay(alignment: .trailing) {

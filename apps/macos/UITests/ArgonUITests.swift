@@ -548,6 +548,38 @@ final class ArgonUITests: XCTestCase {
   }
 
   @MainActor
+  func testCommandNOpensNewWorktreeSheet() throws {
+    let target = try Self.createWorkspace()
+    let app = XCUIApplication()
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.fixtureRoot)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--workspace-repo-root", target.repoRoot,
+      "--workspace-common-dir", target.repoCommonDir,
+      "--selected-worktree-path", target.selectedWorktreePath,
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launchEnvironment[Self.disableCLIInstallPromptEnvironmentKey] = "1"
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+
+    let newWorktreeButton = app.buttons["workspace-new-worktree-button"]
+    XCTAssertTrue(newWorktreeButton.waitForExistence(timeout: 15))
+
+    app.windows.firstMatch.click()
+    app.typeKey("n", modifierFlags: .command)
+
+    XCTAssertTrue(
+      app.textFields["workspace-new-worktree-branch-name-field"].waitForExistence(timeout: 5))
+  }
+
+  @MainActor
   func testNewWorktreeFieldsDisableWhileCreatingWorktree() throws {
     let target = try Self.createWorkspaceWithSlowPostCheckoutHook()
     let app = XCUIApplication()

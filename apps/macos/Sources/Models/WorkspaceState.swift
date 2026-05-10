@@ -75,6 +75,7 @@ final class WorkspaceState {
   var isLaunchingReview = false
   var isCreatingWorktree = false
   var isRemovingWorktree = false
+  var isPresentingNewWorktreeSheet = false
   var isPresentingTabCreationSheet = false
   var isPresentingAgentLaunchSheet = false
   var isPresentingReviewPreparationSheet = false

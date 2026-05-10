@@ -1,6 +1,14 @@
 import Foundation
 
 extension WorkspaceState {
+  func presentNewWorktreeSheet() {
+    isPresentingNewWorktreeSheet = true
+  }
+
+  func dismissNewWorktreeSheet() {
+    isPresentingNewWorktreeSheet = false
+  }
+
   func selectDiffMode(_ mode: WorkspaceDiffMode) {
     guard let selectedWorktree else { return }
     let path = normalizedPath(selectedWorktree.path)
