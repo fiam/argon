@@ -142,15 +142,24 @@ quit_running_argon() {
 
 quit_running_argon
 
-echo "==> Launching workspace for $TARGET_REPO"
-open -n -a "$APP_PATH" --args \
-    --workspace-repo-root "$TARGET_REPO_ROOT" \
-    --workspace-common-dir "$TARGET_COMMON_DIR" \
+launch_args=(
+    --workspace-repo-root "$TARGET_REPO_ROOT"
+    --workspace-common-dir "$TARGET_COMMON_DIR"
     --selected-worktree-path "$TARGET_WORKTREE"
+)
 
+echo "==> Launching workspace for $TARGET_REPO"
 echo "workspace: $TARGET_REPO_ROOT"
 echo "common-dir: $TARGET_COMMON_DIR"
 echo "selected-worktree: $TARGET_WORKTREE"
+
+if [[ -n "${ARGON_FORCE_CLI_INSTALL_TOAST:-}" ]]; then
+    echo "==> Running Argon in the foreground"
+    "$APP_PATH/Contents/MacOS/Argon" "${launch_args[@]}"
+    exit $?
+fi
+
+open -n -a "$APP_PATH" --args "${launch_args[@]}"
 
 for _ in {1..50}; do
     launched_pids=()

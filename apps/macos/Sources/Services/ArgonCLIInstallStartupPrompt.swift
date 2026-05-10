@@ -6,129 +6,19 @@ import SwiftUI
 @MainActor
 @Observable
 final class ArgonCLIInstallStartupPrompt {
+  static let forceShowEnvironmentKey = "ARGON_FORCE_CLI_INSTALL_TOAST"
   private static let disableEnvironmentKey = "ARGON_UI_TEST_DISABLE_CLI_INSTALL_PROMPT"
 
-  enum Action: Sendable {
-    case repair
-    case notNow
-  }
-
-  struct Decision: Sendable {
-    let action: Action
-    let suppressFuturePrompts: Bool
-  }
-
-  struct Presenter {
-    let present: @MainActor @Sendable (ArgonCLIInstallOnboarding) async -> Decision
-    let presentError: @MainActor @Sendable (String) async -> Void
-
-    static let live = Self(
-      present: { onboarding in
-        if let window = await presentationWindow() {
-          return await presentSheet(onboarding: onboarding, parentWindow: window)
-        }
-
-        return await presentSheet(onboarding: onboarding, parentWindow: nil)
-      },
-      presentError: { message in
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Unable to Install the Argon Command Line Tool"
-        alert.informativeText = message
-        alert.runModal()
-      }
-    )
-
-    @MainActor
-    private static func presentationWindow() async -> NSWindow? {
-      for _ in 0..<20 {
-        if let window = NSApp.keyWindow ?? NSApp.mainWindow
-          ?? NSApp.windows.first(where: \.isVisible)
-        {
-          return window
-        }
-        try? await Task.sleep(for: .milliseconds(100))
-      }
-      return nil
-    }
-
-    @MainActor
-    private static func presentSheet(
-      onboarding: ArgonCLIInstallOnboarding,
-      parentWindow: NSWindow?
-    ) async -> Decision {
-      await withCheckedContinuation { continuation in
-        final class DecisionBox {
-          var continuation: CheckedContinuation<Decision, Never>?
-          var decision: Decision?
-        }
-
-        let box = DecisionBox()
-        box.continuation = continuation
-
-        let hostingController = NSHostingController(
-          rootView: ArgonCLIInstallStartupPromptSheetView(onboarding: onboarding) { decision in
-            box.decision = decision
-          }
-        )
-
-        let sheet = NSPanel(
-          contentRect: NSRect(x: 0, y: 0, width: 540, height: 260),
-          styleMask: [.titled, .fullSizeContentView],
-          backing: .buffered,
-          defer: false
-        )
-        sheet.titleVisibility = .hidden
-        sheet.titlebarAppearsTransparent = true
-        sheet.isMovable = false
-        sheet.isReleasedWhenClosed = false
-        sheet.standardWindowButton(.closeButton)?.isHidden = true
-        sheet.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        sheet.standardWindowButton(.zoomButton)?.isHidden = true
-        sheet.contentViewController = hostingController
-        sheet.contentMinSize = NSSize(width: 540, height: 260)
-        sheet.contentMaxSize = NSSize(width: 540, height: 260)
-        sheet.center()
-
-        let finish: (Decision) -> Void = { decision in
-          guard let continuation = box.continuation else { return }
-          box.continuation = nil
-          continuation.resume(returning: decision)
-        }
-
-        hostingController.rootView = ArgonCLIInstallStartupPromptSheetView(onboarding: onboarding) {
-          decision in
-          if let parent = sheet.sheetParent {
-            parent.endSheet(sheet, returnCode: .OK)
-          } else {
-            NSApp.stopModal()
-            sheet.orderOut(nil)
-          }
-          finish(decision)
-        }
-
-        if let parentWindow {
-          parentWindow.beginSheet(sheet)
-        } else {
-          NSApp.activate(ignoringOtherApps: true)
-          sheet.makeKeyAndOrderFront(nil)
-          NSApp.runModal(for: sheet)
-          if let decision = box.decision {
-            finish(decision)
-          } else {
-            let fallback = Decision(action: .notNow, suppressFuturePrompts: false)
-            finish(fallback)
-          }
-        }
-      }
-    }
-  }
+  private(set) var currentOnboarding: ArgonCLIInstallOnboarding?
+  private(set) var errorMessage: String?
+  private(set) var isRepairing = false
 
   private let userDefaults: UserDefaults
   private let statusProvider: @MainActor @Sendable () -> ArgonCLIInstallLinkStatus
   private let repairAction: @MainActor @Sendable () throws -> ArgonCLIInstallLinkStatus
   private let environmentProvider: @MainActor @Sendable () -> [String: String]
-  private let presenter: Presenter
+  private let appVersionProvider: @MainActor @Sendable () -> String
+  private var activePresentationID: UUID?
   private var didAttemptThisLaunch = false
   private var isPresenting = false
 
@@ -143,54 +33,83 @@ final class ArgonCLIInstallStartupPrompt {
     environmentProvider: @escaping @MainActor @Sendable () -> [String: String] = {
       ProcessInfo.processInfo.environment
     },
-    presenter: Presenter = .live
+    appVersionProvider: @escaping @MainActor @Sendable () -> String = {
+      ArgonCLIInstallStartupPrompt.currentAppVersionIdentifier()
+    }
   ) {
     self.userDefaults = userDefaults
     self.statusProvider = statusProvider
     self.repairAction = repairAction
     self.environmentProvider = environmentProvider
-    self.presenter = presenter
+    self.appVersionProvider = appVersionProvider
   }
 
-  func presentIfNeeded() async {
+  func presentIfNeeded(presentationID: UUID = UUID()) async {
     guard !didAttemptThisLaunch, !isPresenting else { return }
     guard !isDisabledForCurrentProcess else {
       didAttemptThisLaunch = true
       return
     }
 
+    didAttemptThisLaunch = true
+
     let status = statusProvider()
+    let appVersion = currentAppVersion
+    migrateLegacyDismissalIfNeeded(status: status, appVersion: appVersion)
+    guard shouldForceShowToast || dismissedAppVersion != appVersion else { return }
     guard
       let onboarding = ArgonCLIInstallOnboarding.current(
         status: status,
-        dismissedTargetPath: dismissedTargetPath
+        forceShow: shouldForceShowToast
       )
-    else {
-      didAttemptThisLaunch = true
-      return
-    }
+    else { return }
 
+    activePresentationID = presentationID
+    currentOnboarding = onboarding
+    errorMessage = nil
     isPresenting = true
-    defer {
-      isPresenting = false
-      didAttemptThisLaunch = true
-    }
+  }
 
-    let decision = await presenter.present(onboarding)
+  func onboarding(for presentationID: UUID) -> ArgonCLIInstallOnboarding? {
+    activePresentationID == presentationID ? currentOnboarding : nil
+  }
 
-    switch decision.action {
-    case .repair:
-      do {
-        _ = try repairAction()
-        dismissedTargetPath = nil
-      } catch {
-        await presenter.presentError(error.localizedDescription)
-      }
-    case .notNow:
-      if decision.suppressFuturePrompts {
-        dismissedTargetPath = status.expectedTargetPath
-      }
+  func dismissToast(for presentationID: UUID? = nil) {
+    guard presentationID == nil || activePresentationID == presentationID else { return }
+    clearToast()
+  }
+
+  func suppressUntilNextVersion(for presentationID: UUID? = nil) {
+    guard presentationID == nil || activePresentationID == presentationID else { return }
+    guard currentOnboarding != nil else { return }
+
+    dismissedAppVersion = currentAppVersion
+    dismissedTargetPath = nil
+    clearToast()
+  }
+
+  func repairFromToast(for presentationID: UUID? = nil) async {
+    guard presentationID == nil || activePresentationID == presentationID else { return }
+    guard currentOnboarding?.status.canRepair == true, !isRepairing else { return }
+
+    isRepairing = true
+    defer { isRepairing = false }
+
+    do {
+      _ = try repairAction()
+      dismissedTargetPath = nil
+      dismissedAppVersion = nil
+      clearToast()
+    } catch {
+      errorMessage = error.localizedDescription
     }
+  }
+
+  private func clearToast() {
+    currentOnboarding = nil
+    errorMessage = nil
+    activePresentationID = nil
+    isPresenting = false
   }
 
   private var dismissedTargetPath: String? {
@@ -207,56 +126,211 @@ final class ArgonCLIInstallStartupPrompt {
     }
   }
 
+  private var dismissedAppVersion: String? {
+    get {
+      let value = userDefaults.string(forKey: ArgonCLIInstallOnboarding.versionDismissalStorageKey)
+      return value?.isEmpty == false ? value : nil
+    }
+    set {
+      if let newValue, !newValue.isEmpty {
+        userDefaults.set(newValue, forKey: ArgonCLIInstallOnboarding.versionDismissalStorageKey)
+      } else {
+        userDefaults.removeObject(forKey: ArgonCLIInstallOnboarding.versionDismissalStorageKey)
+      }
+    }
+  }
+
+  private var currentAppVersion: String {
+    let version = appVersionProvider()
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return version.isEmpty ? "unknown" : version
+  }
+
+  private func migrateLegacyDismissalIfNeeded(
+    status: ArgonCLIInstallLinkStatus,
+    appVersion: String
+  ) {
+    guard let expectedTargetPath = status.expectedTargetPath else { return }
+    guard dismissedTargetPath == expectedTargetPath else { return }
+
+    dismissedAppVersion = appVersion
+    dismissedTargetPath = nil
+  }
+
   private var isDisabledForCurrentProcess: Bool {
-    let value = environmentProvider()[Self.disableEnvironmentKey]?
+    Self.parseBool(environmentProvider()[Self.disableEnvironmentKey])
+  }
+
+  private var shouldForceShowToast: Bool {
+    Self.parseBool(environmentProvider()[Self.forceShowEnvironmentKey])
+  }
+
+  private static func parseBool(_ value: String?) -> Bool {
+    let normalizedValue = value?
       .trimmingCharacters(in: .whitespacesAndNewlines)
       .lowercased()
-    return switch value {
+    return switch normalizedValue {
     case "1", "true", "yes", "on":
       true
     default:
       false
     }
   }
+
+  private static func currentAppVersionIdentifier(bundle: Bundle = .main) -> String {
+    if let shortVersion =
+      (bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+      as? String)?
+      .trimmingCharacters(in: .whitespacesAndNewlines),
+      !shortVersion.isEmpty
+    {
+      return shortVersion
+    }
+
+    if let buildVersion = (bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String)?
+      .trimmingCharacters(in: .whitespacesAndNewlines),
+      !buildVersion.isEmpty
+    {
+      return buildVersion
+    }
+
+    return "unknown"
+  }
 }
 
-private struct ArgonCLIInstallStartupPromptSheetView: View {
+extension View {
+  func argonCLIInstallStartupToast(
+    _ prompt: ArgonCLIInstallStartupPrompt,
+    isEnabled: Bool = true
+  ) -> some View {
+    modifier(ArgonCLIInstallStartupToastModifier(prompt: prompt, isEnabled: isEnabled))
+  }
+}
+
+private struct ArgonCLIInstallStartupToastModifier: ViewModifier {
+  let prompt: ArgonCLIInstallStartupPrompt
+  let isEnabled: Bool
+  @State private var presentationID = UUID()
+
+  func body(content: Content) -> some View {
+    content
+      .overlay(alignment: .bottomTrailing) {
+        if let onboarding = prompt.onboarding(for: presentationID) {
+          ArgonCLIInstallStartupToastView(
+            onboarding: onboarding,
+            errorMessage: prompt.errorMessage,
+            isRepairing: prompt.isRepairing,
+            onRepair: {
+              Task {
+                await prompt.repairFromToast(for: presentationID)
+              }
+            },
+            onSuppress: {
+              prompt.suppressUntilNextVersion(for: presentationID)
+            },
+            onDismiss: {
+              prompt.dismissToast(for: presentationID)
+            }
+          )
+          .padding(.trailing, 18)
+          .padding(.bottom, 18)
+          .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+      }
+      .animation(
+        .easeInOut(duration: 0.18),
+        value: prompt.onboarding(for: presentationID) != nil
+      )
+      .task {
+        guard isEnabled else { return }
+        await prompt.presentIfNeeded(presentationID: presentationID)
+      }
+  }
+}
+
+private struct ArgonCLIInstallStartupToastView: View {
   let onboarding: ArgonCLIInstallOnboarding
-  let onDecision: (ArgonCLIInstallStartupPrompt.Decision) -> Void
-  @State private var suppressFuturePrompts = false
+  let errorMessage: String?
+  let isRepairing: Bool
+  let onRepair: () -> Void
+  let onSuppress: () -> Void
+  let onDismiss: () -> Void
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      Text(onboarding.title)
-        .font(.title3.weight(.semibold))
+    HStack(alignment: .top, spacing: 10) {
+      Image(systemName: "terminal.fill")
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(.orange)
+        .frame(width: 18, height: 22)
 
-      Text(onboarding.detail)
-        .font(.body)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
+      VStack(alignment: .leading, spacing: 8) {
+        HStack(alignment: .top, spacing: 8) {
+          Text("Command Line Tool")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.primary)
 
-      Toggle("Don’t ask again", isOn: $suppressFuturePrompts)
-        .toggleStyle(.checkbox)
+          Spacer(minLength: 8)
 
-      HStack(spacing: 12) {
-        Spacer()
-
-        Button("Not Now") {
-          onDecision(
-            .init(action: .notNow, suppressFuturePrompts: suppressFuturePrompts)
-          )
+          Button(action: onDismiss) {
+            Image(systemName: "xmark")
+              .font(.system(size: 11, weight: .semibold))
+              .frame(width: 18, height: 18)
+          }
+          .buttonStyle(.plain)
+          .foregroundStyle(.secondary)
+          .accessibilityLabel("Dismiss")
         }
-        .keyboardShortcut(.cancelAction)
 
-        Button(onboarding.buttonTitle) {
-          onDecision(
-            .init(action: .repair, suppressFuturePrompts: suppressFuturePrompts)
-          )
+        VStack(alignment: .leading, spacing: 4) {
+          Text(onboarding.toastMessage)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+          if let errorMessage {
+            Text(errorMessage)
+              .font(.caption2)
+              .foregroundStyle(.red)
+              .lineLimit(2)
+              .fixedSize(horizontal: false, vertical: true)
+          }
         }
-        .keyboardShortcut(.defaultAction)
+
+        HStack(spacing: 8) {
+          Spacer(minLength: 0)
+
+          if onboarding.status.canRepair {
+            Button("Don't Install") {
+              onSuppress()
+            }
+            .controlSize(.small)
+            .accessibilityIdentifier("cli-install-startup-toast-suppress-button")
+          }
+
+          if isRepairing {
+            ProgressView()
+              .controlSize(.small)
+              .frame(width: 44, height: 22)
+          } else {
+            Button(onboarding.buttonTitle) {
+              onRepair()
+            }
+            .controlSize(.small)
+            .disabled(!onboarding.status.canRepair)
+            .accessibilityIdentifier("cli-install-startup-toast-repair-button")
+          }
+        }
       }
     }
-    .padding(24)
-    .frame(width: 540, alignment: .leading)
+    .padding(12)
+    .frame(width: 380, alignment: .leading)
+    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .overlay(
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 1)
+    )
+    .shadow(color: .black.opacity(0.14), radius: 10, y: 4)
+    .accessibilityElement(children: .combine)
+    .accessibilityIdentifier("cli-install-startup-toast")
   }
 }

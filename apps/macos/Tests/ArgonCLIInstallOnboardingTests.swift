@@ -13,53 +13,36 @@ struct ArgonCLIInstallOnboardingTests {
       state: .missing
     )
 
-    let onboarding = ArgonCLIInstallOnboarding.current(
-      status: status,
-      dismissedTargetPath: nil
-    )
+    let onboarding = ArgonCLIInstallOnboarding.current(status: status)
 
     #expect(onboarding?.title == "Install Argon Command Line Tool")
     #expect(onboarding?.buttonTitle == "Install")
     #expect(onboarding?.detail.contains("`argon <dir>`") == true)
     #expect(onboarding?.detail.contains("`argon review <dir>`") == true)
     #expect(onboarding?.detail.contains("/usr/local/bin/argon") == false)
+    #expect(
+      onboarding?.toastMessage
+        == "The command line tool is not installed. Install it to launch Argon from Terminal.")
   }
 
-  @Test("current onboarding is hidden after dismissing the same bundle target")
-  func currentOnboardingIsHiddenAfterDismissingTheSameBundleTarget() {
-    let targetPath = "/Applications/Argon.app/Contents/Helpers/argon"
-    let status = ArgonCLIInstallLinkStatus(
-      linkPath: "/usr/local/bin/argon",
-      expectedTargetPath: targetPath,
-      state: .missing
-    )
-
-    let onboarding = ArgonCLIInstallOnboarding.current(
-      status: status,
-      dismissedTargetPath: targetPath
-    )
-
-    #expect(onboarding == nil)
-  }
-
-  @Test("current onboarding reappears when the bundled target changes")
-  func currentOnboardingReappearsWhenTheBundledTargetChanges() {
+  @Test("current onboarding is shown for broken links")
+  func currentOnboardingIsShownForBrokenLinks() {
     let status = ArgonCLIInstallLinkStatus(
       linkPath: "/usr/local/bin/argon",
       expectedTargetPath: "/Applications/Argon 2.app/Contents/Helpers/argon",
       state: .pointsElsewhere(currentTarget: "/Applications/Argon.app/Contents/Helpers/argon")
     )
 
-    let onboarding = ArgonCLIInstallOnboarding.current(
-      status: status,
-      dismissedTargetPath: "/Applications/Argon.app/Contents/Helpers/argon"
-    )
+    let onboarding = ArgonCLIInstallOnboarding.current(status: status)
 
     #expect(onboarding?.title == "Repair Argon Command Line Tool")
     #expect(onboarding?.buttonTitle == "Repair")
     #expect(onboarding?.detail.contains("looks out of date or broken") == true)
     #expect(onboarding?.detail.contains("`argon review <dir>`") == true)
     #expect(onboarding?.detail.contains("/Applications/Argon.app") == false)
+    #expect(
+      onboarding?.toastMessage
+        == "The command line tool needs repair before it can launch Argon from Terminal.")
   }
 
   @Test("current onboarding is omitted for healthy or unavailable states")
@@ -75,9 +58,22 @@ struct ArgonCLIInstallOnboardingTests {
       state: .bundledCLIUnavailable
     )
 
-    #expect(
-      ArgonCLIInstallOnboarding.current(status: installedStatus, dismissedTargetPath: nil) == nil)
-    #expect(
-      ArgonCLIInstallOnboarding.current(status: unavailableStatus, dismissedTargetPath: nil) == nil)
+    #expect(ArgonCLIInstallOnboarding.current(status: installedStatus) == nil)
+    #expect(ArgonCLIInstallOnboarding.current(status: unavailableStatus) == nil)
+  }
+
+  @Test("forced onboarding is shown for healthy states")
+  func forcedOnboardingIsShownForHealthyStates() {
+    let installedStatus = ArgonCLIInstallLinkStatus(
+      linkPath: "/usr/local/bin/argon",
+      expectedTargetPath: "/Applications/Argon.app/Contents/Helpers/argon",
+      state: .installed
+    )
+
+    let onboarding = ArgonCLIInstallOnboarding.current(status: installedStatus, forceShow: true)
+
+    #expect(onboarding?.title == "Argon Command Line Tool")
+    #expect(onboarding?.buttonTitle == "Installed")
+    #expect(onboarding?.toastMessage == "Argon’s command line tool is installed.")
   }
 }

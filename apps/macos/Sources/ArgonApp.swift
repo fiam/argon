@@ -42,6 +42,10 @@ struct ArgonApp: App {
           .environment(workspaceWindowRegistry)
           .environment(terminalAttentionNotifier)
           .preferredColorScheme(Self.launchAppearance.colorScheme)
+          .argonCLIInstallStartupToast(
+            cliInstallStartupPrompt,
+            isEnabled: Self.cliLaunchRequest == nil
+          )
           .task(id: savedAgents.profiles) {
             agentAvailability.refresh(for: savedAgents.profiles)
           }
@@ -50,9 +54,6 @@ struct ArgonApp: App {
           }
           .task {
             WindowCloseShortcutRetargeter.install()
-          }
-          .task {
-            await cliInstallStartupPrompt.presentIfNeeded()
           }
       }
     }
@@ -180,6 +181,10 @@ struct ArgonApp: App {
     .environment(workspaceWindowRegistry)
     .environment(terminalAttentionNotifier)
     .preferredColorScheme(Self.launchAppearance.colorScheme)
+    .argonCLIInstallStartupToast(
+      cliInstallStartupPrompt,
+      isEnabled: Self.cliLaunchRequest == nil
+    )
     .task {
       recentProjects.add(repoRoot: target.repoRoot)
     }
@@ -192,9 +197,6 @@ struct ArgonApp: App {
     .task {
       WindowCloseShortcutRetargeter.install()
     }
-    .task {
-      await cliInstallStartupPrompt.presentIfNeeded()
-    }
   }
 
   @ViewBuilder
@@ -206,14 +208,15 @@ struct ArgonApp: App {
       .environment(commandContext)
       .environment(reviewWindowRegistry)
       .preferredColorScheme(Self.launchAppearance.colorScheme)
+      .argonCLIInstallStartupToast(
+        cliInstallStartupPrompt,
+        isEnabled: Self.cliLaunchRequest == nil
+      )
       .task(id: savedAgents.profiles) {
         agentAvailability.refresh(for: savedAgents.profiles)
       }
       .task {
         WindowCloseShortcutRetargeter.install()
-      }
-      .task {
-        await cliInstallStartupPrompt.presentIfNeeded()
       }
   }
 }
