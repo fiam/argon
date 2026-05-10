@@ -3095,6 +3095,37 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn containing_macos_app_bundle_resolves_bundled_helper() {
+        let executable = PathBuf::from("/Users/me/Build/Argon.app/Contents/Helpers/argon");
+
+        assert_eq!(
+            containing_macos_app_bundle(&executable),
+            Some(PathBuf::from("/Users/me/Build/Argon.app"))
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn containing_macos_app_bundle_resolves_app_executable() {
+        let executable = PathBuf::from("/Users/me/Build/Argon.app/Contents/MacOS/Argon");
+
+        assert_eq!(
+            containing_macos_app_bundle(&executable),
+            Some(PathBuf::from("/Users/me/Build/Argon.app"))
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn containing_macos_app_bundle_ignores_standalone_cli() {
+        assert_eq!(
+            containing_macos_app_bundle(Path::new("/usr/local/bin/argon")),
+            None
+        );
+    }
+
     #[test]
     fn agent_describe_accepts_description_as_subcommand_arg() {
         let session_id = Uuid::new_v4().to_string();
@@ -3889,13 +3920,7 @@ fn try_launch_desktop_app_for_session(
             let app = PathBuf::from(app_path);
             if app.exists()
                 && spawn_desktop_command(
-                    {
-                        let mut command = Command::new("open");
-                        command.args(["-a", &app.to_string_lossy()]);
-                        command.arg("--args");
-                        command.args(&launch_args);
-                        command
-                    },
+                    open_macos_app_command(&app, &launch_args),
                     repo_root,
                     &envs,
                 )
@@ -3903,6 +3928,13 @@ fn try_launch_desktop_app_for_session(
             {
                 return Ok("argon-app-env");
             }
+        }
+
+        if let Some(app) = current_macos_app_bundle()
+            && spawn_desktop_command(open_macos_app_command(&app, &launch_args), repo_root, &envs)
+                .is_ok()
+        {
+            return Ok("bundled-app");
         }
 
         // Try launching Argon.app via macOS `open` (installed in /Applications or Spotlight-indexed)
@@ -3972,13 +4004,7 @@ fn try_launch_desktop_app_for_workspace(
             let app = PathBuf::from(app_path);
             if app.exists()
                 && spawn_desktop_command(
-                    {
-                        let mut command = Command::new("open");
-                        command.args(["-a", &app.to_string_lossy()]);
-                        command.arg("--args");
-                        command.args(&launch_args);
-                        command
-                    },
+                    open_macos_app_command(&app, &launch_args),
                     &target.selected_worktree_root,
                     &envs,
                 )
@@ -3986,6 +4012,17 @@ fn try_launch_desktop_app_for_workspace(
             {
                 return Ok("argon-app-env");
             }
+        }
+
+        if let Some(app) = current_macos_app_bundle()
+            && spawn_desktop_command(
+                open_macos_app_command(&app, &launch_args),
+                &target.selected_worktree_root,
+                &envs,
+            )
+            .is_ok()
+        {
+            return Ok("bundled-app");
         }
 
         if spawn_desktop_command(
@@ -4008,6 +4045,35 @@ fn try_launch_desktop_app_for_workspace(
     bail!(
         "no compatible launch method found (use --desktop-launch, ARGON_APP, or install Argon.app)"
     )
+}
+
+#[cfg(target_os = "macos")]
+fn open_macos_app_command(app: &Path, launch_args: &[String]) -> Command {
+    let mut command = Command::new("open");
+    command.arg("-a");
+    command.arg(app);
+    command.arg("--args");
+    command.args(launch_args);
+    command
+}
+
+#[cfg(target_os = "macos")]
+fn current_macos_app_bundle() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    let executable = executable.canonicalize().unwrap_or(executable);
+    containing_macos_app_bundle(&executable)
+}
+
+#[cfg(target_os = "macos")]
+fn containing_macos_app_bundle(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .find(|ancestor| {
+            ancestor
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension == "app")
+        })
+        .map(Path::to_path_buf)
 }
 
 fn spawn_desktop_command(
