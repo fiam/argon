@@ -572,6 +572,15 @@ final class ArgonUITests: XCTestCase {
     let newWorktreeButton = app.buttons["workspace-new-worktree-button"]
     XCTAssertTrue(newWorktreeButton.waitForExistence(timeout: 15))
 
+    let worktreeMenu = app.menuBars.menuBarItems["Worktree"]
+    XCTAssertTrue(worktreeMenu.waitForExistence(timeout: 5))
+    worktreeMenu.click()
+
+    let newWorktreeMenuItem = app.menuBars.menuItems["New Worktree…"]
+    XCTAssertTrue(newWorktreeMenuItem.waitForExistence(timeout: 5))
+    XCTAssertTrue(newWorktreeMenuItem.isEnabled)
+    app.typeKey(.escape, modifierFlags: [])
+
     app.windows.firstMatch.click()
     app.typeKey("n", modifierFlags: .command)
 

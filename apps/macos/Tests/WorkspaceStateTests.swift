@@ -73,6 +73,48 @@ struct WorkspaceStateTests {
     #expect(state.selectedTerminalTab?.id == firstID)
   }
 
+  @Test("terminal tab keyboard navigation wraps through selected tabs")
+  @MainActor
+  func terminalTabKeyboardNavigationWrapsThroughSelectedTabs() {
+    let state = makeState()
+
+    #expect(state.selectNextTerminalTab() == false)
+
+    state.openShellTab()
+    state.openShellTab()
+
+    let firstID = state.selectedTerminalTabs[0].id
+    let secondID = state.selectedTerminalTabs[1].id
+    #expect(state.selectedTerminalTab?.id == secondID)
+    #expect(state.canSelectNextTerminalTab)
+    #expect(state.canSelectPreviousTerminalTab)
+
+    #expect(state.selectNextTerminalTab())
+    #expect(state.selectedTerminalTab?.id == firstID)
+
+    #expect(state.selectPreviousTerminalTab())
+    #expect(state.selectedTerminalTab?.id == secondID)
+  }
+
+  @Test("worktree keyboard navigation wraps in sidebar order")
+  @MainActor
+  func worktreeKeyboardNavigationWrapsInSidebarOrder() {
+    let state = makeState()
+
+    #expect(state.canSelectNextWorktree)
+    #expect(state.canSelectPreviousWorktree)
+    #expect(state.normalizedSelectedWorktreePath == "/tmp/repo")
+
+    #expect(state.selectNextWorktree())
+    #expect(state.normalizedSelectedWorktreePath == "/tmp/repo/feature")
+
+    #expect(state.selectNextWorktree())
+    #expect(state.normalizedSelectedWorktreePath == "/tmp/repo")
+
+    #expect(state.selectPreviousWorktree())
+    #expect(state.normalizedSelectedWorktreePath == "/tmp/repo/feature")
+  }
+
   @Test("active agent count only includes running agent tabs")
   @MainActor
   func activeAgentCountOnlyIncludesRunningAgentTabs() {

@@ -446,7 +446,7 @@ struct WorkspaceNewWorktreeSheet: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 20) {
       HStack(spacing: 10) {
-        Image(systemName: "square.stack.badge.plus")
+        Image(systemName: "plus.square")
           .font(.title2)
           .foregroundStyle(.blue)
         VStack(alignment: .leading, spacing: 2) {

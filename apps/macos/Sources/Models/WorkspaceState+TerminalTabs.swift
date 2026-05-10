@@ -278,6 +278,24 @@ extension WorkspaceState {
     notifyRestorableStateChanged()
   }
 
+  var canSelectNextTerminalTab: Bool {
+    selectedTerminalTabs.count > 1
+  }
+
+  var canSelectPreviousTerminalTab: Bool {
+    selectedTerminalTabs.count > 1
+  }
+
+  @discardableResult
+  func selectNextTerminalTab() -> Bool {
+    selectTerminalTab(offset: 1)
+  }
+
+  @discardableResult
+  func selectPreviousTerminalTab() -> Bool {
+    selectTerminalTab(offset: -1)
+  }
+
   @discardableResult
   func focusTerminal(tabID: UUID, in worktreePath: String) -> Bool {
     let normalizedWorktreePath = normalizedPath(worktreePath)
@@ -604,6 +622,18 @@ extension WorkspaceState {
     selectedTerminalTabIDsByWorktreePath[worktreePath] = tab.id
     requestTerminalFocus(in: worktreePath)
     notifyRestorableStateChanged()
+  }
+
+  @discardableResult
+  private func selectTerminalTab(offset: Int) -> Bool {
+    let tabs = selectedTerminalTabs
+    guard tabs.count > 1 else { return false }
+
+    let selectedID = selectedTerminalTab?.id
+    let currentIndex = tabs.firstIndex { $0.id == selectedID } ?? 0
+    let nextIndex = (currentIndex + offset + tabs.count) % tabs.count
+    selectTerminalTab(tabs[nextIndex].id)
+    return true
   }
 
   func configureUITestWebsiteDemo(useLiveAgentCommands: Bool) {

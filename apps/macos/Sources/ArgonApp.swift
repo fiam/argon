@@ -95,6 +95,7 @@ struct ArgonApp: App {
         commandContext: commandContext,
         reviewWindowRegistry: reviewWindowRegistry
       )
+      WorkspaceNavigationCommands(commandContext: commandContext)
 
       // Find menu
       CommandGroup(replacing: .textEditing) {
@@ -295,16 +296,6 @@ private struct WorkspaceFileCommands: Commands {
   var body: some Commands {
     CommandGroup(replacing: .newItem) {
       Button {
-        commandContext.activeWorkspaceState?.presentNewWorktreeSheet()
-      } label: {
-        Label("New Worktree…", systemImage: "square.stack.badge.plus")
-      }
-      .keyboardShortcut("n", modifiers: .command)
-      .disabled(commandContext.activeWorkspaceState == nil)
-
-      Divider()
-
-      Button {
         pickDirectory()
       } label: {
         Label("Open…", systemImage: "folder")
@@ -452,6 +443,16 @@ private struct WorkspaceWorktreeCommands: Commands {
   var body: some Commands {
     CommandMenu("Worktree") {
       Button(action: {
+        commandContext.activeWorkspaceState?.presentNewWorktreeSheet()
+      }) {
+        Label("New Worktree…", systemImage: "plus.square")
+      }
+      .keyboardShortcut("n", modifiers: .command)
+      .disabled(commandContext.activeWorkspaceState == nil)
+
+      Divider()
+
+      Button(action: {
         startReview()
       }) {
         Label("Start Review", systemImage: "text.magnifyingglass")
@@ -503,6 +504,40 @@ private struct WorkspaceWorktreeCommands: Commands {
       reviewWindowRegistry: reviewWindowRegistry,
       openWindow: { target in openWindow(value: target) }
     )
+  }
+}
+
+private struct WorkspaceNavigationCommands: Commands {
+  let commandContext: CommandContext
+
+  var body: some Commands {
+    CommandMenu("Navigate") {
+      Button("Previous Tab") {
+        commandContext.activeWorkspaceState?.selectPreviousTerminalTab()
+      }
+      .keyboardShortcut(.leftArrow, modifiers: [.command, .shift])
+      .disabled(!(commandContext.activeWorkspaceState?.canSelectPreviousTerminalTab ?? false))
+
+      Button("Next Tab") {
+        commandContext.activeWorkspaceState?.selectNextTerminalTab()
+      }
+      .keyboardShortcut(.rightArrow, modifiers: [.command, .shift])
+      .disabled(!(commandContext.activeWorkspaceState?.canSelectNextTerminalTab ?? false))
+
+      Divider()
+
+      Button("Previous Worktree") {
+        commandContext.activeWorkspaceState?.selectPreviousWorktree()
+      }
+      .keyboardShortcut(.upArrow, modifiers: [.command, .shift])
+      .disabled(!(commandContext.activeWorkspaceState?.canSelectPreviousWorktree ?? false))
+
+      Button("Next Worktree") {
+        commandContext.activeWorkspaceState?.selectNextWorktree()
+      }
+      .keyboardShortcut(.downArrow, modifiers: [.command, .shift])
+      .disabled(!(commandContext.activeWorkspaceState?.canSelectNextWorktree ?? false))
+    }
   }
 }
 

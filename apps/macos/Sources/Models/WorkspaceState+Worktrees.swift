@@ -111,6 +111,24 @@ extension WorkspaceState {
     loadSelectedWorktreeDetails(for: normalizedPath)
   }
 
+  var canSelectNextWorktree: Bool {
+    worktrees.count > 1
+  }
+
+  var canSelectPreviousWorktree: Bool {
+    worktrees.count > 1
+  }
+
+  @discardableResult
+  func selectNextWorktree() -> Bool {
+    selectWorktree(offset: 1)
+  }
+
+  @discardableResult
+  func selectPreviousWorktree() -> Bool {
+    selectWorktree(offset: -1)
+  }
+
   func createReviewTarget(
     launchContext: ReviewLaunchContext = .standalone,
     changeSummary: String? = nil
@@ -1021,6 +1039,22 @@ extension WorkspaceState {
 
   func requestTerminalFocus(in worktreePath: String) {
     terminalFocusRequestIDsByWorktreePath[worktreePath] = UUID()
+  }
+
+  @discardableResult
+  private func selectWorktree(offset: Int) -> Bool {
+    guard worktrees.count > 1 else { return false }
+
+    let selectedPath =
+      normalizedSelectedWorktreePath
+      ?? selectedWorktree.map { normalizedPath($0.path) }
+    let currentIndex =
+      selectedPath.flatMap { path in
+        worktrees.firstIndex { normalizedPath($0.path) == path }
+      } ?? 0
+    let nextIndex = (currentIndex + offset + worktrees.count) % worktrees.count
+    selectWorktree(path: worktrees[nextIndex].path)
+    return true
   }
 
   func notifyRestorableStateChanged() {
