@@ -60,9 +60,7 @@ final class AppUpdateController: NSObject, ObservableObject {
 
   init(bundle: Bundle = .main) {
     self.configuration = AppUpdateConfiguration(bundle: bundle)
-    self.currentVersion =
-      (bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
-      .trimmingCharacters(in: .whitespacesAndNewlines) ?? "Unknown"
+    self.currentVersion = AppBundleVersion.displayVersion(bundle: bundle)
 
     if configuration.isConfigured {
       let updaterController = SPUStandardUpdaterController(

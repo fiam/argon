@@ -59,8 +59,10 @@ struct ArgonApp: App {
     }
     .defaultSize(
       width: Self.runtimeMode.suppressesVisibleAppHost
-        ? 1 : Self.cliLaunchRequest == nil ? 560 : 300,
-      height: Self.runtimeMode.suppressesVisibleAppHost ? 1 : 560)
+        ? 1 : Self.cliLaunchRequest == nil ? 940 : 300,
+      height: Self.runtimeMode.suppressesVisibleAppHost ? 1 : 560
+    )
+    .windowStyle(.hiddenTitleBar)
 
     WindowGroup(for: WorkspaceTarget.self) { $target in
       if Self.runtimeMode.suppressesVisibleAppHost {

@@ -9,6 +9,9 @@ struct WelcomeView: View {
   @State private var isCreatingSession = false
   @State private var errorMessage: String?
   @State private var pendingLaunchRequest: AppLaunchTarget.LaunchRequest?
+  @State private var selectedRecentProjectID: String?
+  @State private var hoveredRecentProjectID: String?
+  @State private var welcomeTip: WelcomeTip?
 
   init(launchRequest: AppLaunchTarget.LaunchRequest? = nil) {
     self.launchRequest = launchRequest
@@ -20,12 +23,12 @@ struct WelcomeView: View {
       primaryPane
 
       Divider()
-        .overlay(Color.white.opacity(0.05))
+        .overlay(Color.black.opacity(0.06))
 
       recentProjectsPane
     }
-    .background(WelcomeBackground())
-    .frame(minWidth: 760, minHeight: 560)
+    .background(Color(nsColor: .windowBackgroundColor))
+    .frame(minWidth: 940, minHeight: 560)
     .onAppear {
       recentProjects.pruneMissingProjects()
       if let launchRequest = pendingLaunchRequest {
@@ -41,39 +44,29 @@ struct WelcomeView: View {
           openWindow(value: target)
         }
         dismissWindow(id: "welcome")
+        return
       } else {
         let restoredCount = workspaceWindowRegistry.restorePersistedWorkspacesIfNeeded { target in
           openWindow(value: target)
         }
         if restoredCount > 0 {
           dismissWindow(id: "welcome")
+          return
         }
+      }
+
+      if welcomeTip == nil {
+        welcomeTip = WelcomeTipRotator().nextTip()
       }
     }
   }
 
   private var primaryPane: some View {
     VStack(spacing: 0) {
-      Spacer(minLength: 0)
+      Spacer(minLength: 40)
 
-      VStack(spacing: 18) {
-        RoundedRectangle(cornerRadius: 28, style: .continuous)
-          .fill(Color.accentColor.opacity(0.10))
-          .frame(width: 156, height: 156)
-          .overlay {
-            Image(nsImage: NSApp.applicationIconImage)
-              .resizable()
-              .interpolation(.high)
-              .frame(width: 112, height: 112)
-          }
-
-        VStack(spacing: 4) {
-          Text("Argon")
-            .font(.system(size: 40, weight: .semibold, design: .default))
-          Text("Version \(appVersion)")
-            .font(.title3.weight(.medium))
-            .foregroundStyle(.secondary)
-        }
+      VStack(spacing: 68) {
+        appIdentity
 
         VStack(spacing: 12) {
           welcomeActionButton(
@@ -84,42 +77,49 @@ struct WelcomeView: View {
           }
           .keyboardShortcut("o", modifiers: .command)
           .disabled(isCreatingSession)
-        }
 
-        if let errorMessage {
-          Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-            .font(.caption)
-            .foregroundStyle(.red)
-            .lineLimit(3)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: 360)
-        }
+          if let welcomeTip {
+            WelcomeTipCard(tip: welcomeTip)
+          }
 
-        if isCreatingSession {
-          ProgressView()
-            .controlSize(.small)
+          if let errorMessage {
+            Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+              .font(.caption)
+              .foregroundStyle(.red)
+              .lineLimit(3)
+              .multilineTextAlignment(.center)
+              .fixedSize(horizontal: false, vertical: true)
+              .frame(width: 420)
+          }
         }
       }
-      .padding(.horizontal, 40)
 
-      Spacer(minLength: 0)
-
-      Text("Press Command-O to open a repository or worktree.")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .padding(.bottom, 18)
+      Spacer(minLength: 42)
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .frame(width: 560)
+    .frame(maxHeight: .infinity)
+    .background(Color(nsColor: .textBackgroundColor))
+  }
+
+  private var appIdentity: some View {
+    VStack(spacing: 20) {
+      Image(nsImage: NSApp.applicationIconImage)
+        .resizable()
+        .interpolation(.high)
+        .frame(width: 132, height: 132)
+
+      VStack(spacing: 4) {
+        Text("Argon")
+          .font(.system(size: 48, weight: .semibold, design: .default))
+        Text("Version \(appVersion)")
+          .font(.title3.weight(.medium))
+          .foregroundStyle(.secondary)
+      }
+    }
   }
 
   private var recentProjectsPane: some View {
     VStack(alignment: .leading, spacing: 0) {
-      Text("Recent Projects")
-        .font(.headline)
-        .padding(.horizontal, 20)
-        .padding(.top, 18)
-        .padding(.bottom, 14)
-
       if recentProjects.projects.isEmpty {
         Spacer()
 
@@ -136,36 +136,52 @@ struct WelcomeView: View {
         Spacer()
       } else {
         ScrollView {
-          LazyVStack(spacing: 0) {
-            ForEach(Array(recentProjects.projects.enumerated()), id: \.element.id) {
-              index, project in
-              VStack(spacing: 0) {
-                RecentProjectRow(project: project) {
-                  openProject(repoRoot: project.repoRoot)
-                }
-                .contextMenu {
-                  Button("Remove from Recents") {
-                    recentProjects.remove(repoRoot: project.repoRoot)
+          LazyVStack(spacing: 8) {
+            ForEach(recentProjects.projects) { project in
+              RecentProjectRow(
+                project: project,
+                isSelected: selectedRecentProjectID == project.id,
+                isHovered: hoveredRecentProjectID == project.id,
+                isDisabled: isCreatingSession,
+                onHover: { isHovered in
+                  if isHovered {
+                    hoveredRecentProjectID = project.id
+                  } else if hoveredRecentProjectID == project.id {
+                    hoveredRecentProjectID = nil
                   }
                 }
-
-                if index < recentProjects.projects.count - 1 {
-                  Divider()
-                    .overlay(Color.white.opacity(0.04))
-                    .padding(.leading, 68)
-                    .padding(.trailing, 16)
+              ) {
+                selectedRecentProjectID = project.id
+              } onOpen: {
+                openProject(repoRoot: project.repoRoot)
+              }
+              .contextMenu {
+                Button("Remove from Recents") {
+                  recentProjects.remove(repoRoot: project.repoRoot)
                 }
               }
             }
           }
-          .padding(.vertical, 4)
+          .padding(.horizontal, 18)
+          .padding(.vertical, 20)
         }
         .scrollIndicators(.hidden)
       }
     }
-    .frame(width: 340)
+    .frame(minWidth: 380, maxWidth: .infinity)
     .frame(maxHeight: .infinity, alignment: .topLeading)
-    .background(Color.white.opacity(0.03))
+    .background(recentProjectsPaneBackground)
+  }
+
+  private var recentProjectsPaneBackground: Color {
+    Color(
+      nsColor: NSColor(name: nil) { appearance in
+        let isDark =
+          appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return isDark
+          ? NSColor(calibratedWhite: 0.13, alpha: 1)
+          : NSColor(calibratedWhite: 0.965, alpha: 1)
+      })
   }
 
   private func welcomeActionButton(
@@ -174,24 +190,43 @@ struct WelcomeView: View {
     action: @escaping () -> Void
   ) -> some View {
     Button(action: action) {
-      HStack(spacing: 20) {
+      HStack(spacing: 14) {
         Image(systemName: systemImage)
           .font(.system(size: 20, weight: .semibold))
           .frame(width: 24, height: 24)
           .foregroundStyle(.secondary)
 
         Text(title)
-          .font(.headline)
+          .font(.title3.weight(.semibold))
           .foregroundStyle(.primary)
+          .lineLimit(1)
 
         Spacer(minLength: 0)
+
+        ZStack {
+          Text("⌘O")
+            .font(.caption.weight(.semibold))
+            .monospaced()
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+              Color.primary.opacity(0.05),
+              in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+            )
+            .opacity(isCreatingSession ? 0 : 1)
+
+          ProgressView()
+            .controlSize(.small)
+            .opacity(isCreatingSession ? 1 : 0)
+        }
+        .frame(width: 42, height: 24)
       }
-      .padding(.horizontal, 20)
-      .padding(.vertical, 18)
-      .frame(width: 360)
+      .padding(.horizontal, 18)
+      .frame(width: 420, height: 58)
       .background(
-        Color.white.opacity(0.04),
-        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+        Color.primary.opacity(0.06),
+        in: Capsule()
       )
     }
     .buttonStyle(.plain)
@@ -235,75 +270,131 @@ struct WelcomeView: View {
 
 extension WelcomeView {
   fileprivate var appVersion: String {
-    let bundle = Bundle.main
-    return (bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
-      .trimmingCharacters(in: .whitespacesAndNewlines) ?? "0.1.0"
+    AppBundleVersion.displayVersion()
   }
 }
 
-private struct WelcomeBackground: View {
+private struct WelcomeTipCard: View {
+  let tip: WelcomeTip
+
   var body: some View {
-    Color(nsColor: .windowBackgroundColor)
-      .overlay(alignment: .top) {
-        LinearGradient(
-          colors: [
-            Color.accentColor.opacity(0.08),
-            .clear,
-          ],
-          startPoint: .top,
-          endPoint: .bottom
-        )
-        .frame(height: 140)
+    HStack(alignment: .top, spacing: 10) {
+      Image(systemName: "lightbulb")
+        .font(.system(size: 15, weight: .semibold))
+        .foregroundStyle(.secondary)
+        .frame(width: 18, height: 18)
+        .padding(.top, 1)
+
+      VStack(alignment: .leading, spacing: 3) {
+        Text(tip.title)
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.primary)
+          .lineLimit(1)
+        Text(tip.message)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
       }
-      .ignoresSafeArea()
+
+      Spacer(minLength: 0)
+    }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 12)
+    .frame(width: 420, alignment: .leading)
+    .background(
+      Color.primary.opacity(0.04),
+      in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+    )
   }
 }
 
 private struct RecentProjectRow: View {
   let project: RecentProject
+  let isSelected: Bool
+  let isHovered: Bool
+  let isDisabled: Bool
+  let onHover: (Bool) -> Void
+  let onSelect: () -> Void
   let onOpen: () -> Void
-  @State private var isHovered = false
 
   var body: some View {
-    Button(action: onOpen) {
-      HStack(spacing: 14) {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-          .fill(Color.accentColor.opacity(isHovered ? 0.22 : 0.14))
-          .frame(width: 38, height: 38)
-          .overlay {
-            Image(systemName: "folder.fill")
-              .font(.system(size: 16, weight: .semibold))
-              .foregroundStyle(Color.accentColor)
-          }
-
-        VStack(alignment: .leading, spacing: 2) {
-          Text(project.repoName)
-            .fontWeight(.medium)
-          Text(project.repoRoot)
-            .font(.caption.monospaced())
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .truncationMode(.middle)
+    HStack(spacing: 12) {
+      RoundedRectangle(cornerRadius: 5, style: .continuous)
+        .fill(projectIconFill)
+        .frame(width: 36, height: 36)
+        .overlay {
+          Image(systemName: "folder.fill")
+            .font(.system(size: 17, weight: .medium))
+            .foregroundStyle(projectIconForeground)
         }
 
-        Spacer()
-
-        VStack(alignment: .trailing, spacing: 4) {
-          Text("Last opened")
-            .font(.caption2.weight(.medium))
-            .foregroundStyle(.tertiary)
-          Text(RecentProjectLastOpenedFormatter.label(for: project.lastOpened))
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
+      VStack(alignment: .leading, spacing: 2) {
+        Text(project.repoName)
+          .font(.headline)
+          .fontWeight(.medium)
+          .lineLimit(1)
+        Text(displayPath)
+          .font(.caption.monospaced())
+          .foregroundStyle(isSelected ? Color.white.opacity(0.78) : Color.secondary)
+          .lineLimit(1)
+          .truncationMode(.middle)
       }
-      .padding(.horizontal, 16)
-      .padding(.vertical, 12)
-      .background(Color.white.opacity(isHovered ? 0.04 : 0.0))
+      .layoutPriority(1)
+
+      Spacer()
     }
-    .buttonStyle(.plain)
-    .onHover { hovering in
-      isHovered = hovering
+    .foregroundStyle(isSelected ? Color.white : Color.primary)
+    .padding(.horizontal, 14)
+    .frame(height: 56)
+    .background(
+      rowBackground,
+      in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+    )
+    .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .opacity(isDisabled ? 0.62 : 1)
+    .onHover(perform: onHover)
+    .onTapGesture(count: 2) {
+      guard !isDisabled else { return }
+      onOpen()
     }
+    .onTapGesture(count: 1) {
+      guard !isDisabled else { return }
+      onSelect()
+    }
+  }
+
+  private var rowBackground: Color {
+    if isSelected {
+      return Color.accentColor
+    }
+    if isHovered {
+      return Color.primary.opacity(0.06)
+    }
+    return .clear
+  }
+
+  private var projectIconFill: Color {
+    if isSelected {
+      return .white.opacity(0.18)
+    }
+    return Color.accentColor.opacity(0.14)
+  }
+
+  private var projectIconForeground: Color {
+    if isSelected {
+      return .white
+    }
+    return Color.accentColor
+  }
+
+  private var displayPath: String {
+    let homePath = FileManager.default.homeDirectoryForCurrentUser.path
+    if project.repoRoot == homePath {
+      return "~"
+    }
+    if project.repoRoot.hasPrefix(homePath + "/") {
+      return "~" + project.repoRoot.dropFirst(homePath.count)
+    }
+    return project.repoRoot
   }
 }

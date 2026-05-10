@@ -178,23 +178,7 @@ final class ArgonCLIInstallStartupPrompt {
   }
 
   private static func currentAppVersionIdentifier(bundle: Bundle = .main) -> String {
-    if let shortVersion =
-      (bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString")
-      as? String)?
-      .trimmingCharacters(in: .whitespacesAndNewlines),
-      !shortVersion.isEmpty
-    {
-      return shortVersion
-    }
-
-    if let buildVersion = (bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String)?
-      .trimmingCharacters(in: .whitespacesAndNewlines),
-      !buildVersion.isEmpty
-    {
-      return buildVersion
-    }
-
-    return "unknown"
+    AppBundleVersion.versionIdentifier(bundle: bundle)
   }
 }
 
