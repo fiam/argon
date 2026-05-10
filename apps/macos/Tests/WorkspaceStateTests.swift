@@ -293,9 +293,11 @@ struct WorkspaceStateTests {
 
     actor CreatedSandboxfileRecorder {
       private(set) var repoRoot: String?
+      private(set) var configuration: SandboxfileWizardConfiguration?
 
-      func set(repoRoot: String) {
+      func set(repoRoot: String, configuration: SandboxfileWizardConfiguration) {
         self.repoRoot = repoRoot
+        self.configuration = configuration
       }
     }
 
@@ -307,18 +309,22 @@ struct WorkspaceStateTests {
         launchKind: launchKind
       )
     }
-    WorkspaceState.sandboxfileCreator = { request in
-      await createdSandboxfile.set(repoRoot: request.repoRoot)
+    WorkspaceState.sandboxfileCreator = { request, configuration in
+      await createdSandboxfile.set(repoRoot: request.repoRoot, configuration: configuration)
     }
 
     let state = makeState()
     state.requestSandboxedShellLaunch()
     #expect(await waitUntil { state.pendingShellSandboxfilePrompt != nil })
 
-    state.confirmSandboxedShellLaunch()
+    var configuration = SandboxfileWizardConfiguration.recommended
+    configuration.networkDefault = SandboxfileNetworkDefault.none
+    state.confirmSandboxedShellLaunch(configuration: configuration)
 
     #expect(await waitUntil { state.selectedTerminalTabs.count == 1 })
     #expect(await createdSandboxfile.repoRoot == "/tmp/repo")
+    #expect(
+      await createdSandboxfile.configuration?.networkDefault == SandboxfileNetworkDefault.none)
     #expect(state.selectedTerminalTab?.title == "Shell 1")
     #expect(state.pendingShellSandboxfilePrompt == nil)
   }
@@ -370,7 +376,7 @@ struct WorkspaceStateTests {
         launchKind: launchKind
       )
     }
-    WorkspaceState.sandboxfileCreator = { _ in
+    WorkspaceState.sandboxfileCreator = { _, _ in
       await recorder.record()
     }
 

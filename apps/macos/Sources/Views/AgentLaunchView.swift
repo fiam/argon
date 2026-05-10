@@ -203,21 +203,15 @@ struct AgentLaunchSheet: View {
     .onChange(of: agentAvailability.revision) { _, _ in
       syncSelectedAgent()
     }
-    .alert(
-      pendingSandboxfilePrompt?.title ?? "Create Sandboxfile?",
-      isPresented: pendingSandboxfileAlertIsPresented
-    ) {
-      Button(pendingSandboxfilePrompt?.confirmTitle ?? "Create and Launch") {
-        confirmSandboxedLaunch()
-      }
-      Button("Cancel", role: .cancel) {
-        pendingLaunchProfile = nil
-        pendingLaunchFocusPrompt = nil
-        pendingSandboxfilePrompt = nil
-      }
-    } message: {
+    .sheet(isPresented: pendingSandboxfileWizardIsPresented) {
       if let prompt = pendingSandboxfilePrompt {
-        Text(prompt.message)
+        SandboxfileWizardSheet(
+          request: prompt,
+          onCancel: cancelPendingSandboxedLaunch,
+          onCreate: { configuration in
+            confirmSandboxedLaunch(configuration: configuration)
+          }
+        )
       }
     }
   }
@@ -231,17 +225,21 @@ struct AgentLaunchSheet: View {
     return agentAvailability.status(for: saved) == .available
   }
 
-  private var pendingSandboxfileAlertIsPresented: Binding<Bool> {
+  private var pendingSandboxfileWizardIsPresented: Binding<Bool> {
     Binding(
       get: { pendingSandboxfilePrompt != nil },
       set: { isPresented in
         if !isPresented {
-          pendingLaunchProfile = nil
-          pendingLaunchFocusPrompt = nil
-          pendingSandboxfilePrompt = nil
+          cancelPendingSandboxedLaunch()
         }
       }
     )
+  }
+
+  private func cancelPendingSandboxedLaunch() {
+    pendingLaunchProfile = nil
+    pendingLaunchFocusPrompt = nil
+    pendingSandboxfilePrompt = nil
   }
 
   private func launch() {
@@ -300,7 +298,7 @@ struct AgentLaunchSheet: View {
     }
   }
 
-  private func confirmSandboxedLaunch() {
+  private func confirmSandboxedLaunch(configuration: SandboxfileWizardConfiguration) {
     guard let profile = pendingLaunchProfile, let prompt = pendingSandboxfilePrompt else { return }
     let focusPrompt = pendingLaunchFocusPrompt
     pendingLaunchProfile = nil
@@ -310,7 +308,7 @@ struct AgentLaunchSheet: View {
 
     Task { @MainActor in
       do {
-        try await createRepoSandboxfile(request: prompt)
+        try await createRepoSandboxfile(request: prompt, configuration: configuration)
         performLaunch(profile: profile, focusPrompt: focusPrompt)
       } catch {
         isLaunching = false

@@ -30,7 +30,7 @@ struct SandboxfileSettingsSource: Identifiable, Equatable, Sendable {
   }
 
   var highlightPath: String {
-    "sandbox.sh"
+    SandboxfileHelpContent.highlightPath
   }
 }
 

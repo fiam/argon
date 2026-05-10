@@ -556,17 +556,17 @@ pub fn resolved_config_paths(start_dir: &Path) -> Result<ResolvedConfigPaths, Sa
 
 pub fn ensure_sandboxfile(context: &SandboxContext) -> Result<SandboxInitResult, SandboxError> {
     let paths = resolved_config_paths_for_context(context)?;
-    if let Some(path) = paths.existing_paths.first().cloned() {
+    let path = paths
+        .init_path
+        .clone()
+        .ok_or(SandboxError::MissingRepoRoot)?;
+    if let Some(path) = existing_sandboxfile_in_init_dir(&paths, &path) {
         return Ok(SandboxInitResult {
             path,
             created: false,
         });
     }
 
-    let path = paths
-        .init_path
-        .clone()
-        .ok_or(SandboxError::MissingRepoRoot)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|source| SandboxError::Write {
             path: parent.to_path_buf(),
@@ -611,6 +611,22 @@ pub fn ensure_sandboxfile(context: &SandboxContext) -> Result<SandboxInitResult,
         path,
         created: true,
     })
+}
+
+fn existing_sandboxfile_in_init_dir(
+    paths: &ResolvedConfigPaths,
+    init_path: &Path,
+) -> Option<PathBuf> {
+    let init_dir = normalize_absolute_path(init_path.parent()?.to_path_buf());
+    paths
+        .existing_paths
+        .iter()
+        .find(|path| {
+            path.parent()
+                .map(|parent| normalize_absolute_path(parent.to_path_buf()))
+                == Some(init_dir.clone())
+        })
+        .cloned()
 }
 
 pub fn check(
@@ -2208,6 +2224,8 @@ fn resolve_builtin_request(request: &str) -> String {
 }
 
 fn default_sandboxfile_template() -> &'static str {
+    // Keep the default USE lines in sync with SandboxfileWizardBuiltin.projectDefaults
+    // in apps/macos/Sources/Services/SandboxfileHelpContent.swift.
     r#"# This file describes the Argon Sandbox configuration
 # Full docs: https://github.com/fiam/argon/blob/main/SANDBOX.md
 
@@ -4588,6 +4606,55 @@ END
         assert!(contents.contains("FS ALLOW READ ."));
         assert!(contents.contains("IF TEST -f ./Sandboxfile.local"));
         assert!(contents.contains("USE ./Sandboxfile.local"));
+    }
+
+    #[test]
+    fn ensure_sandboxfile_writes_project_template_when_only_parent_config_exists() {
+        let temp = tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let repo_root = home.join("repo");
+        fs::create_dir_all(&repo_root).expect("repo");
+        fs::create_dir_all(repo_root.join("home")).expect("home");
+        fs::write(home.join(REPO_SANDBOXFILE), "EXEC ALLOW OPTIONAL brew\n")
+            .expect("parent sandbox");
+        let context = context_for(&repo_root, &["/bin/zsh"]);
+
+        let result = ensure_sandboxfile(&context).expect("init");
+
+        assert!(result.created);
+        assert_eq!(
+            normalize_absolute_path(result.path.clone()),
+            normalize_absolute_path(repo_root.join(REPO_SANDBOXFILE))
+        );
+        let contents = fs::read_to_string(result.path).expect("read");
+        assert!(contents.contains("USE shell"));
+        let plan = build_execution_plan(&context, &[]).expect("plan");
+        assert!(
+            plan.policy
+                .executable_paths
+                .iter()
+                .any(|path| path.ends_with("bin/zsh"))
+        );
+    }
+
+    #[test]
+    fn ensure_sandboxfile_respects_existing_project_dot_sandboxfile() {
+        let temp = tempdir().expect("tempdir");
+        let repo_root = temp.path().join("repo");
+        fs::create_dir_all(&repo_root).expect("repo");
+        fs::create_dir_all(repo_root.join("home")).expect("home");
+        let project_dot_sandboxfile = repo_root.join(USER_SANDBOXFILE);
+        fs::write(&project_dot_sandboxfile, "USE shell\n").expect("project sandbox");
+        let context = context_for(&repo_root, &["/bin/zsh"]);
+
+        let result = ensure_sandboxfile(&context).expect("init");
+
+        assert!(!result.created);
+        assert_eq!(
+            normalize_absolute_path(result.path),
+            normalize_absolute_path(project_dot_sandboxfile)
+        );
+        assert!(!repo_root.join(REPO_SANDBOXFILE).exists());
     }
 
     #[test]

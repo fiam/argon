@@ -39,8 +39,10 @@ final class WorkspaceState {
       try await loadSandboxfilePromptIfNeeded(repoRoot: repoRoot, launchKind: launchKind)
     }
   nonisolated(unsafe) static var sandboxfileCreator:
-    (@Sendable (SandboxfilePromptRequest) async throws -> Void) = { request in
-      try await createRepoSandboxfile(request: request)
+    (@Sendable (SandboxfilePromptRequest, SandboxfileWizardConfiguration) async throws -> Void) = {
+      request,
+      configuration in
+      try await createRepoSandboxfile(request: request, configuration: configuration)
     }
   nonisolated(unsafe) static var fastForwardMergeBackPerformer:
     (@Sendable (FastForwardMergeBackRequest) throws -> FastForwardMergeBackResult) = {

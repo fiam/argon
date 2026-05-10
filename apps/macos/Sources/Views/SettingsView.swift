@@ -522,7 +522,11 @@ struct SettingsView: View {
           .pointingHandCursorOnHover()
         Spacer(minLength: 0)
 
-        SandboxLayerPillSelector(selection: $selectedSandboxLayer)
+        PillSelector(
+          items: SandboxfileSettingsLayer.allCases,
+          selection: $selectedSandboxLayer,
+          title: { $0.title }
+        )
 
         Button {
           insertSandboxScaffold()
@@ -838,7 +842,7 @@ struct SettingsView: View {
   }
 
   private var sandboxHighlightPath: String {
-    "sandbox.sh"
+    SandboxfileHelpContent.highlightPath
   }
 
   private var selectedSandboxSavePath: String? {
@@ -1003,38 +1007,6 @@ struct SettingsView: View {
     } catch {
       sandboxErrorMessage = error.localizedDescription
     }
-  }
-}
-
-private struct SandboxLayerPillSelector: View {
-  @Binding var selection: SandboxfileSettingsLayer
-
-  var body: some View {
-    HStack(spacing: 4) {
-      ForEach(SandboxfileSettingsLayer.allCases) { layer in
-        Button {
-          selection = layer
-        } label: {
-          Text(layer.title)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(selection == layer ? Color.white : Color.primary)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
-            .background(
-              Capsule()
-                .fill(selection == layer ? Color.accentColor : Color.clear)
-            )
-        }
-        .buttonStyle(.plain)
-      }
-    }
-    .padding(4)
-    .background(Color(nsColor: .controlBackgroundColor))
-    .clipShape(Capsule())
-    .overlay(
-      Capsule()
-        .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
-    )
   }
 }
 

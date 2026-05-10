@@ -256,19 +256,17 @@ private struct WorkspaceContentView: View {
     } message: {
       Text(mergeBackDialogMessage)
     }
-    .alert(
-      workspaceState.pendingShellSandboxfilePrompt?.title ?? "Create Sandboxfile?",
-      isPresented: pendingShellSandboxfileAlertIsPresented
-    ) {
-      Button(workspaceState.pendingShellSandboxfilePrompt?.confirmTitle ?? "Create and Launch") {
-        workspaceState.confirmSandboxedShellLaunch()
-      }
-      Button("Cancel", role: .cancel) {
-        workspaceState.dismissShellSandboxfilePrompt()
-      }
-    } message: {
+    .sheet(isPresented: pendingShellSandboxfileWizardIsPresented) {
       if let prompt = workspaceState.pendingShellSandboxfilePrompt {
-        Text(prompt.message)
+        SandboxfileWizardSheet(
+          request: prompt,
+          onCancel: {
+            workspaceState.dismissShellSandboxfilePrompt()
+          },
+          onCreate: { configuration in
+            workspaceState.confirmSandboxedShellLaunch(configuration: configuration)
+          }
+        )
       }
     }
     .onChange(of: workspaceState.pendingReviewAgentTabID) { _, tabID in
@@ -290,7 +288,7 @@ private struct WorkspaceContentView: View {
     return reviewWindowRegistry.state(for: worktreePath) == .opening
   }
 
-  private var pendingShellSandboxfileAlertIsPresented: Binding<Bool> {
+  private var pendingShellSandboxfileWizardIsPresented: Binding<Bool> {
     Binding(
       get: { workspaceState.pendingShellSandboxfilePrompt != nil },
       set: { isPresented in

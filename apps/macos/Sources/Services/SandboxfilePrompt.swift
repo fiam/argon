@@ -49,10 +49,11 @@ func sandboxfilePromptIfNeeded(
   launchKind: SandboxfileLaunchKind,
   paths: ArgonCLI.SandboxConfigPaths
 ) -> SandboxfilePromptRequest? {
-  guard paths.existingPaths.isEmpty else { return nil }
   let repoSandboxfilePath =
     paths.initPath
     ?? URL(fileURLWithPath: repoRoot).appendingPathComponent("Sandboxfile").path
+  guard !paths.hasProjectSandboxfile(at: repoSandboxfilePath) else { return nil }
+
   return SandboxfilePromptRequest(
     repoRoot: repoRoot,
     repoSandboxfilePath: repoSandboxfilePath,
@@ -72,10 +73,13 @@ func loadSandboxfilePromptIfNeeded(
 }
 
 @MainActor
-func createRepoSandboxfile(request: SandboxfilePromptRequest) async throws {
+func createRepoSandboxfile(
+  request: SandboxfilePromptRequest,
+  configuration: SandboxfileWizardConfiguration = .recommended
+) async throws {
   try await createSandboxfile(
     atPath: request.repoSandboxfilePath,
-    kind: .project
+    contents: configuration.renderProjectSandboxfile()
   )
 }
 
@@ -84,7 +88,14 @@ func createSandboxfile(
   atPath path: String,
   kind: SandboxfileScaffoldKind
 ) async throws {
-  let contents = renderSandboxfile(kind: kind)
+  try await createSandboxfile(atPath: path, contents: renderSandboxfile(kind: kind))
+}
+
+@MainActor
+func createSandboxfile(
+  atPath path: String,
+  contents: String
+) async throws {
   try await Task.detached(priority: .userInitiated) {
     let url = URL(fileURLWithPath: path)
     let parent = url.deletingLastPathComponent()
@@ -99,6 +110,22 @@ func createSandboxfile(
       return
     }
   }.value
+}
+
+extension ArgonCLI.SandboxConfigPaths {
+  fileprivate func hasProjectSandboxfile(at repoSandboxfilePath: String) -> Bool {
+    let repoSandboxfileDirectory = URL(fileURLWithPath: repoSandboxfilePath)
+      .deletingLastPathComponent()
+      .standardizedFileURL
+      .path
+
+    return existingPaths.contains { path in
+      URL(fileURLWithPath: path)
+        .deletingLastPathComponent()
+        .standardizedFileURL
+        .path == repoSandboxfileDirectory
+    }
+  }
 }
 
 @MainActor

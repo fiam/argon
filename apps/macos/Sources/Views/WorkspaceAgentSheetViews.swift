@@ -162,20 +162,15 @@ struct WorkspaceAgentTabSheet: View {
         useCustom = false
       }
     }
-    .alert(
-      pendingSandboxfilePrompt?.title ?? "Create Sandboxfile?",
-      isPresented: pendingSandboxfileAlertIsPresented
-    ) {
-      Button(pendingSandboxfilePrompt?.confirmTitle ?? "Create and Launch") {
-        confirmSandboxedLaunch()
-      }
-      Button("Cancel", role: .cancel) {
-        pendingSandboxedLaunchOptions = nil
-        pendingSandboxfilePrompt = nil
-      }
-    } message: {
+    .sheet(isPresented: pendingSandboxfileWizardIsPresented) {
       if let prompt = pendingSandboxfilePrompt {
-        Text(prompt.message)
+        SandboxfileWizardSheet(
+          request: prompt,
+          onCancel: cancelPendingSandboxedLaunch,
+          onCreate: { configuration in
+            confirmSandboxedLaunch(configuration: configuration)
+          }
+        )
       }
     }
   }
@@ -189,13 +184,12 @@ struct WorkspaceAgentTabSheet: View {
     return agentAvailability.status(for: selectedSavedAgent) == .available
   }
 
-  private var pendingSandboxfileAlertIsPresented: Binding<Bool> {
+  private var pendingSandboxfileWizardIsPresented: Binding<Bool> {
     Binding(
       get: { pendingSandboxfilePrompt != nil },
       set: { isPresented in
         if !isPresented {
-          pendingSandboxedLaunchOptions = nil
-          pendingSandboxfilePrompt = nil
+          cancelPendingSandboxedLaunch()
         }
       }
     )
@@ -235,7 +229,12 @@ struct WorkspaceAgentTabSheet: View {
     }
   }
 
-  private func confirmSandboxedLaunch() {
+  private func cancelPendingSandboxedLaunch() {
+    pendingSandboxedLaunchOptions = nil
+    pendingSandboxfilePrompt = nil
+  }
+
+  private func confirmSandboxedLaunch(configuration: SandboxfileWizardConfiguration) {
     guard let launchOptions = pendingSandboxedLaunchOptions,
       let prompt = pendingSandboxfilePrompt
     else { return }
@@ -245,7 +244,7 @@ struct WorkspaceAgentTabSheet: View {
 
     Task { @MainActor in
       do {
-        try await createRepoSandboxfile(request: prompt)
+        try await createRepoSandboxfile(request: prompt, configuration: configuration)
         await performLaunch(launchOptions)
       } catch {
         isLaunching = false

@@ -30,8 +30,8 @@ struct SandboxfilePromptTests {
     #expect(prompt?.message.contains("`os`, `git`, `shell`, and `agent`") == true)
   }
 
-  @Test("prompt is skipped when any ancestor Sandboxfile already exists")
-  func promptIsSkippedWhenAncestorSandboxfileAlreadyExists() {
+  @Test("prompt is produced when only an inherited Sandboxfile exists")
+  func promptIsProducedWhenOnlyAnInheritedSandboxfileExists() {
     let paths = ArgonCLI.SandboxConfigPaths(
       initPath: "/tmp/repo/Sandboxfile",
       entries: [
@@ -52,7 +52,62 @@ struct SandboxfilePromptTests {
       paths: paths
     )
 
+    #expect(prompt?.repoSandboxfilePath == "/tmp/repo/Sandboxfile")
+    #expect(prompt?.launchKind == .agent)
+  }
+
+  @Test("prompt is skipped when a project Sandboxfile already exists")
+  func promptIsSkippedWhenProjectSandboxfileAlreadyExists() {
+    let paths = ArgonCLI.SandboxConfigPaths(
+      initPath: "/tmp/repo/Sandboxfile",
+      entries: [
+        ArgonCLI.SandboxConfigEntry(
+          directory: "/tmp/repo",
+          sandboxfilePath: "/tmp/repo/Sandboxfile",
+          dotSandboxfilePath: "/tmp/repo/.Sandboxfile",
+          compatibilityPath: "/tmp/repo/.Sanboxfile",
+          existingPath: "/tmp/repo/.Sandboxfile"
+        )
+      ],
+      existingPaths: ["/tmp/repo/.Sandboxfile"]
+    )
+
+    let prompt = sandboxfilePromptIfNeeded(
+      repoRoot: "/tmp/repo",
+      launchKind: .agent,
+      paths: paths
+    )
+
     #expect(prompt == nil)
+  }
+
+  @Test("wizard configuration renders selected policies")
+  func wizardConfigurationRendersSelectedPolicies() throws {
+    var configuration = SandboxfileWizardConfiguration.recommended
+    configuration.networkDefault = SandboxfileNetworkDefault.none
+    configuration.executionDefault = .deny
+    let osBuiltin = try #require(
+      SandboxfileWizardBuiltin.projectDefaults.first { $0.name == "os" })
+    configuration.setBuiltin(osBuiltin, isEnabled: false)
+    configuration.includeLocalOverrides = false
+
+    let rendered = configuration.renderProjectSandboxfile()
+
+    #expect(rendered.contains("NET DEFAULT NONE"))
+    #expect(rendered.contains("EXEC DEFAULT DENY"))
+    #expect(!rendered.contains("USE os"))
+    #expect(rendered.contains("USE git"))
+    #expect(rendered.contains("USE shell"))
+    #expect(rendered.contains("USE agent"))
+    #expect(!rendered.contains("Sandboxfile.local"))
+
+    configuration.networkDefault = .proxy
+    let proxyRendered = configuration.renderProjectSandboxfile()
+    #expect(
+      proxyRendered.contains("NET DEFAULT NONE # Block direct outbound network access by default."))
+    #expect(
+      proxyRendered.contains(
+        "NET ALLOW PROXY * # Route proxy-aware HTTP(S) traffic through Argon's local proxy."))
   }
 
   @Test("renderSandboxfile uses the recommended default scaffold")
@@ -100,9 +155,9 @@ struct SandboxfilePromptTests {
     #expect(!rendered.contains("ENV DEFAULT NONE"))
   }
 
-  @Test("createRepoSandboxfile writes the default scaffold")
+  @Test("createRepoSandboxfile writes the configured scaffold")
   @MainActor
-  func createRepoSandboxfileWritesDefaultScaffold() async throws {
+  func createRepoSandboxfileWritesConfiguredScaffold() async throws {
     let tempDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
       "argon-sandboxfile-prompt-tests-\(UUID().uuidString)"
     )
@@ -116,7 +171,13 @@ struct SandboxfilePromptTests {
       launchKind: .shell
     )
 
-    try await createRepoSandboxfile(request: request)
+    var configuration = SandboxfileWizardConfiguration.recommended
+    configuration.networkDefault = SandboxfileNetworkDefault.none
+    let agentBuiltin = try #require(
+      SandboxfileWizardBuiltin.projectDefaults.first { $0.name == "agent" })
+    configuration.setBuiltin(agentBuiltin, isEnabled: false)
+
+    try await createRepoSandboxfile(request: request, configuration: configuration)
 
     let contents = try String(
       contentsOf: tempDirectory.appendingPathComponent("Sandboxfile"),
@@ -128,16 +189,14 @@ struct SandboxfilePromptTests {
         "EXEC DEFAULT ALLOW # Allow running any command by default."))
     #expect(
       contents.contains(
-        "NET DEFAULT ALLOW # Allow outbound network access by default."))
+        "NET DEFAULT NONE # Block outbound network access by default."))
     #expect(
       contents.contains(
         "USE git # Allow git, standard git config, and linked worktree Git directories."))
     #expect(
       contents.contains(
         "USE shell # Allow the current shell binary and shell history when they apply."))
-    #expect(
-      contents.contains(
-        "USE agent # Load agent-specific config and state when they apply."))
+    #expect(!contents.contains("USE agent # Load agent-specific config and state when they apply."))
     #expect(
       !FileManager.default.fileExists(atPath: tempDirectory.appendingPathComponent(".argon").path))
   }

@@ -158,7 +158,9 @@ extension WorkspaceState {
     pendingSandboxedShellLaunchCount = 0
   }
 
-  func confirmSandboxedShellLaunch() {
+  func confirmSandboxedShellLaunch(
+    configuration: SandboxfileWizardConfiguration = .recommended
+  ) {
     guard let prompt = pendingShellSandboxfilePrompt else { return }
     let launchCount = max(pendingSandboxedShellLaunchCount, 1)
     pendingShellSandboxfilePrompt = nil
@@ -166,7 +168,7 @@ extension WorkspaceState {
 
     Task { @MainActor in
       do {
-        try await Self.sandboxfileCreator(prompt)
+        try await Self.sandboxfileCreator(prompt, configuration)
         for _ in 0..<launchCount {
           openShellTab()
         }

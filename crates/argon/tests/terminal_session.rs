@@ -17,6 +17,30 @@ fn argon_terminal_attach(session_id: &str, storage_dir: &Path, command: &str) ->
     argon_terminal_attach_with_flags(session_id, storage_dir, &[], command)
 }
 
+fn argon_terminal_server_with_initial_client(
+    session_id: &str,
+    storage_dir: &Path,
+    cwd: &Path,
+    initial_client_pid: Option<u32>,
+    command: &str,
+) -> Command {
+    let mut process = Command::new(env!("CARGO_BIN_EXE_argon"));
+    process
+        .arg("terminal")
+        .arg("server")
+        .arg("--session-id")
+        .arg(session_id)
+        .arg("--storage-dir")
+        .arg(storage_dir)
+        .arg("--cwd")
+        .arg(cwd);
+    if let Some(pid) = initial_client_pid {
+        process.arg("--initial-client-pid").arg(pid.to_string());
+    }
+    process.arg("--").arg("/bin/sh").arg("-lc").arg(command);
+    process
+}
+
 fn argon_terminal_attach_with_flags(
     session_id: &str,
     storage_dir: &Path,
@@ -187,6 +211,20 @@ fn wait_for_file_contents(path: &Path, expected: &str, timeout: Duration) -> Res
                 expected,
                 last_contents
             );
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn wait_for_path(path: &Path, timeout: Duration) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if path.exists() {
+            return Ok(());
+        }
+
+        if Instant::now() >= deadline {
+            bail!("timed out waiting for {} to exist", path.display());
         }
         thread::sleep(Duration::from_millis(25));
     }
@@ -439,6 +477,73 @@ fn terminal_session_keeps_existing_client_when_another_client_attaches() -> Resu
 
     argon_terminal_stop(session_id, &storage_dir)?;
     let _ = wait_with_output_timeout(first_attach, Duration::from_secs(5))?;
+
+    Ok(())
+}
+
+#[test]
+fn terminal_session_replays_fast_exiting_session_to_first_attach() -> Result<()> {
+    let temp = TempDirBuilder::new()
+        .prefix("argon-ts-fast-exit")
+        .tempdir_in("/tmp")?;
+    let storage_dir = temp.path().join("s");
+    let socket_path = storage_dir.join("fast-exit.sock");
+    let session_id = "fast-exit";
+    let _cleanup = TerminalSessionCleanup {
+        session_id: session_id.to_string(),
+        storage_dir: storage_dir.clone(),
+    };
+
+    let mut server = argon_terminal_server_with_initial_client(
+        session_id,
+        &storage_dir,
+        temp.path(),
+        Some(std::process::id()),
+        "printf 'original-output\\n'; exit 42",
+    )
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::piped())
+    .spawn()
+    .context("failed to start fast-exit terminal server")?;
+
+    wait_for_path(&socket_path, Duration::from_secs(5))?;
+    thread::sleep(Duration::from_millis(300));
+
+    if server.try_wait()?.is_some() {
+        let output = server
+            .wait_with_output()
+            .context("failed to collect early fast-exit server output")?;
+        bail!(
+            "fast-exit server exited before the first attach\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let attach = argon_terminal_attach(
+        session_id,
+        &storage_dir,
+        "printf 'replacement-output\\n'; exit 7",
+    )?
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .context("failed to start fast-exit terminal attach")?;
+    let output = wait_with_output_timeout(attach, Duration::from_secs(6))?;
+    let _ = wait_with_output_timeout(server, Duration::from_secs(6))?;
+
+    assert_eq!(output.status.code(), Some(42));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("original-output"),
+        "first attach should replay original output; stdout was {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("replacement-output"),
+        "first attach should not create a replacement session; stdout was {stdout:?}"
+    );
 
     Ok(())
 }

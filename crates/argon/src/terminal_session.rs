@@ -30,6 +30,7 @@ const OUTPUT_REPLAY_LIMIT: usize = 512 * 1024;
 const OUTPUT_BUFFER_LIMIT: usize = 4 * 1024 * 1024;
 const NO_REPLAY_DRAIN_QUIET_MS: u64 = 50;
 const NO_REPLAY_DRAIN_MAX_MS: u64 = 200;
+const INITIAL_ATTACH_AFTER_EXIT_GRACE: Duration = Duration::from_secs(5);
 
 #[derive(Subcommand, Debug)]
 pub enum TerminalCommands {
@@ -81,6 +82,8 @@ pub struct TerminalServerArgs {
     session_id: String,
     #[arg(long)]
     storage_dir: Option<PathBuf>,
+    #[arg(long, hide = true)]
+    initial_client_pid: Option<libc::pid_t>,
     #[arg(long)]
     cwd: Option<PathBuf>,
     /// Command to run inside the owned PTY.
@@ -297,7 +300,12 @@ fn run_server(args: TerminalServerArgs) -> Result<()> {
         &args.session_id,
         format!("server-child-spawned child_pid={}", child.pid),
     );
-    let result = run_server_loop(&args.session_id, &listener, &mut child);
+    let result = run_server_loop(
+        &args.session_id,
+        &listener,
+        &mut child,
+        args.initial_client_pid,
+    );
     let _ = fs::remove_file(&paths.socket_path);
     let _ = fs::remove_file(&paths.pid_path);
     terminal_debug_log(
@@ -321,6 +329,8 @@ fn start_server(args: &TerminalAttachArgs, paths: &SessionPaths) -> Result<()> {
         .arg(&args.session_id)
         .arg("--storage-dir")
         .arg(&paths.storage_dir)
+        .arg("--initial-client-pid")
+        .arg(std::process::id().to_string())
         .arg("--cwd")
         .arg(cwd)
         .arg("--")
@@ -522,19 +532,48 @@ fn drain_stale_child_output_for_no_replay(
     }
 }
 
-fn run_server_loop(session_id: &str, listener: &UnixListener, child: &mut PtyChild) -> Result<()> {
+fn run_server_loop(
+    session_id: &str,
+    listener: &UnixListener,
+    child: &mut PtyChild,
+    initial_client_pid: Option<libc::pid_t>,
+) -> Result<()> {
     let listener_fd = listener.as_raw_fd();
     let mut clients: Vec<ServerClient> = Vec::new();
     let mut output_buffer = OutputBuffer::new(OUTPUT_BUFFER_LIMIT);
+    let mut child_exit_code: Option<i32> = None;
+    let mut exit_without_clients_deadline: Option<Instant> = None;
+    let mut has_accepted_client = false;
 
     loop {
+        if let Some(deadline) = exit_without_clients_deadline
+            && Instant::now() >= deadline
+        {
+            terminal_debug_log(
+                session_id,
+                "server-child-exited-before-initial-client-timeout",
+            );
+            return Ok(());
+        }
+        if exit_without_clients_deadline.is_some()
+            && initial_client_pid.is_some_and(|pid| !process_exists(pid))
+        {
+            terminal_debug_log(session_id, "server-child-exited-initial-client-gone");
+            return Ok(());
+        }
+
         let mut poll_fds = Vec::new();
-        let master_index = poll_fds.len();
-        poll_fds.push(libc::pollfd {
-            fd: child.master_fd,
-            events: libc::POLLIN,
-            revents: 0,
-        });
+        let master_index = if child_exit_code.is_none() {
+            let index = poll_fds.len();
+            poll_fds.push(libc::pollfd {
+                fd: child.master_fd,
+                events: libc::POLLIN,
+                revents: 0,
+            });
+            Some(index)
+        } else {
+            None
+        };
         let listener_index = poll_fds.len();
         poll_fds.push(libc::pollfd {
             fd: listener_fd,
@@ -555,7 +594,11 @@ fn run_server_loop(session_id: &str, listener: &UnixListener, child: &mut PtyChi
             })
             .collect::<Vec<_>>();
 
-        let poll_result = unsafe { libc::poll(poll_fds.as_mut_ptr(), poll_fds.len() as _, 250) };
+        let poll_timeout = exit_without_clients_deadline
+            .map(poll_timeout_until)
+            .unwrap_or(250);
+        let poll_result =
+            unsafe { libc::poll(poll_fds.as_mut_ptr(), poll_fds.len() as _, poll_timeout) };
         if poll_result == -1 {
             let error = io::Error::last_os_error();
             if error.kind() == io::ErrorKind::Interrupted {
@@ -564,7 +607,9 @@ fn run_server_loop(session_id: &str, listener: &UnixListener, child: &mut PtyChi
             return Err(error).context("terminal session poll failed");
         }
 
-        if poll_fds[master_index].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
+        if let Some(master_index) = master_index
+            && poll_fds[master_index].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0
+        {
             read_and_broadcast_child_output(session_id, child, &mut output_buffer, &mut clients);
         }
 
@@ -598,6 +643,7 @@ fn run_server_loop(session_id: &str, listener: &UnixListener, child: &mut PtyChi
 
         if poll_fds[listener_index].revents & libc::POLLIN != 0 {
             while let Some(mut accepted) = accept_client(listener)? {
+                has_accepted_client = true;
                 let _ = accepted
                     .stream
                     .set_write_timeout(Some(Duration::from_secs(10)));
@@ -610,7 +656,8 @@ fn run_server_loop(session_id: &str, listener: &UnixListener, child: &mut PtyChi
                         clients.len()
                     ),
                 );
-                if !attach_options.replay_output && clients.is_empty() {
+                if child_exit_code.is_none() && !attach_options.replay_output && clients.is_empty()
+                {
                     drain_stale_child_output_for_no_replay(session_id, child, &mut output_buffer)?;
                 }
                 if attach_options.replay_output
@@ -621,6 +668,12 @@ fn run_server_loop(session_id: &str, listener: &UnixListener, child: &mut PtyChi
                     .is_err()
                 {
                     continue;
+                }
+                if let Some(exit_code) = child_exit_code {
+                    terminal_debug_log(session_id, "server-client-accepted-after-child-exit");
+                    let payload = exit_code.to_be_bytes();
+                    let _ = write_frame(&mut accepted.stream, FRAME_EXIT, &payload);
+                    return Ok(());
                 }
                 if matches!(
                     process_client_frames(&mut accepted, child)?,
@@ -634,11 +687,24 @@ fn run_server_loop(session_id: &str, listener: &UnixListener, child: &mut PtyChi
             }
         }
 
-        if let Some(exit_code) = child.try_wait()? {
+        if child_exit_code.is_none()
+            && let Some(exit_code) = child.try_wait()?
+        {
             terminal_debug_log(
                 session_id,
                 format!("server-child-exited exit_code={exit_code}"),
             );
+            drain_available_child_output(session_id, child, &mut output_buffer)?;
+            if clients.is_empty()
+                && !has_accepted_client
+                && initial_client_pid.is_some_and(process_exists)
+            {
+                terminal_debug_log(session_id, "server-child-exited-before-initial-client");
+                child_exit_code = Some(exit_code);
+                exit_without_clients_deadline =
+                    Some(Instant::now() + INITIAL_ATTACH_AFTER_EXIT_GRACE);
+                continue;
+            }
             for client in &mut clients {
                 let payload = exit_code.to_be_bytes();
                 let _ = write_frame(&mut client.stream, FRAME_EXIT, &payload);
@@ -646,6 +712,18 @@ fn run_server_loop(session_id: &str, listener: &UnixListener, child: &mut PtyChi
             return Ok(());
         }
     }
+}
+
+fn poll_timeout_until(deadline: Instant) -> libc::c_int {
+    let now = Instant::now();
+    if now >= deadline {
+        return 0;
+    }
+    duration_to_poll_timeout(
+        deadline
+            .saturating_duration_since(now)
+            .min(Duration::from_millis(250)),
+    )
 }
 
 fn poll_child_output(child: &PtyChild, timeout: Duration) -> Result<bool> {
