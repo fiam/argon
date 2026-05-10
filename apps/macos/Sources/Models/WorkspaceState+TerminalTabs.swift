@@ -414,6 +414,7 @@ extension WorkspaceState {
         return
       }
       tab.agentActivityState = .idle
+      self.notifyRestorableStateChanged()
     }
   }
 

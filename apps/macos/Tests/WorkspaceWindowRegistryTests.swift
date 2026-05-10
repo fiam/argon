@@ -82,6 +82,26 @@ struct WorkspaceWindowRegistryTests {
     #expect(state.launchWarningMessage == nil)
   }
 
+  @Test("opening the repo root preserves the current selected linked worktree")
+  @MainActor
+  func openingRepoRootPreservesCurrentSelectedLinkedWorktree() {
+    let registry = WorkspaceWindowRegistry()
+    let target = makeTarget(selectedWorktreePath: "/tmp/repo")
+    let state = WorkspaceState(target: target)
+    state.selectedWorktreePath = "/tmp/repo-worktrees/feature-b"
+    state.isLoading = true
+    let window = NSWindow()
+    var openCount = 0
+
+    registry.register(window: window, workspaceState: state, repoRoot: target.repoRoot)
+    registry.open(target: target) { _ in
+      openCount += 1
+    }
+
+    #expect(openCount == 0)
+    #expect(state.selectedWorktreePath == "/tmp/repo-worktrees/feature-b")
+  }
+
   @Test("reopening a closed workspace window reuses the retained workspace state")
   @MainActor
   func reopeningClosedWorkspaceWindowReusesRetainedWorkspaceState() {

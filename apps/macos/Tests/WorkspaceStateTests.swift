@@ -186,6 +186,61 @@ struct WorkspaceStateTests {
     #expect(tab.agentActivityState == .idle)
   }
 
+  @Test("restored thinking agent tabs idle after restore timeout")
+  @MainActor
+  func restoredThinkingAgentTabsIdleAfterRestoreTimeout() async throws {
+    let previousTimeout = WorkspaceState.agentThinkingIdleTimeout
+    WorkspaceState.agentThinkingIdleTimeout = .milliseconds(40)
+    defer {
+      WorkspaceState.agentThinkingIdleTimeout = previousTimeout
+    }
+
+    let state = makeState()
+    let worktreePath = "/tmp/repo/feature"
+    let tabID = UUID(uuidString: "56565656-5656-5656-5656-565656565656")!
+    let persistedTab = PersistedWorkspaceTerminalTab(
+      id: tabID,
+      worktreePath: worktreePath,
+      worktreeLabel: "feature/window",
+      title: "Codex",
+      commandDescription: "codex --yolo",
+      kind: .agent(profileName: "Codex", icon: "codex"),
+      agentFamilyID: .codex,
+      createdAt: Date(timeIntervalSince1970: 12),
+      isSandboxed: false,
+      writableRoots: [],
+      agentActivityState: .thinking
+    )
+
+    state.selectedWorktreePath = worktreePath
+    state.applyRestoredPersistedTabs(
+      RestoredPersistedTabs(persistedTabs: [persistedTab], missingAgentCount: 0),
+      for: worktreePath,
+      removeRestoredTabsFromPending: false
+    )
+
+    let tab = try #require(state.selectedTerminalTabs.first { $0.id == tabID })
+    #expect(tab.agentActivityState == .thinking)
+    #expect(
+      state.agentActivitySummary(for: worktreePath)
+        == WorktreeAgentActivitySummary(
+          waitingForHumanCount: 0,
+          thinkingCount: 1,
+          runningAgentCount: 1
+        )
+    )
+
+    #expect(await waitUntil { tab.agentActivityState == .idle })
+    #expect(
+      state.agentActivitySummary(for: worktreePath)
+        == WorktreeAgentActivitySummary(
+          waitingForHumanCount: 0,
+          thinkingCount: 0,
+          runningAgentCount: 1
+        )
+    )
+  }
+
   @Test("desktop notifications mark agent tabs waiting for human")
   @MainActor
   func desktopNotificationsMarkAgentTabsWaitingForHuman() throws {
@@ -725,6 +780,54 @@ struct WorkspaceStateTests {
     #expect(state.pendingFinalizeAgentTabID == liveTabID)
     #expect(state.isPresentingFinalizeAgentPicker == false)
     #expect(state.isPresentingAgentLaunchSheet == false)
+  }
+
+  @Test("split restored tabs keep their original tab order")
+  @MainActor
+  func splitRestoredTabsKeepOriginalTabOrder() {
+    let state = makeState()
+    let worktreePath = "/tmp/repo/feature"
+    let agentTab = PersistedWorkspaceTerminalTab(
+      id: UUID(uuidString: "23232323-2323-2323-2323-232323232323")!,
+      worktreePath: worktreePath,
+      worktreeLabel: "feature/window",
+      title: "Codex",
+      commandDescription: "codex --yolo",
+      kind: .agent(profileName: "Codex", icon: "codex"),
+      agentFamilyID: .codex,
+      createdAt: Date(timeIntervalSince1970: 1),
+      isSandboxed: false,
+      writableRoots: []
+    )
+    let shellTab = PersistedWorkspaceTerminalTab(
+      id: UUID(uuidString: "34343434-3434-3434-3434-343434343434")!,
+      worktreePath: worktreePath,
+      worktreeLabel: "feature/window",
+      title: "Privileged Shell 1",
+      commandDescription: "/bin/zsh",
+      kind: .shell,
+      createdAt: Date(timeIntervalSince1970: 2),
+      isSandboxed: false,
+      writableRoots: []
+    )
+
+    state.selectedWorktreePath = worktreePath
+
+    state.applyRestoredPersistedTabs(
+      RestoredPersistedTabs(persistedTabs: [agentTab], missingAgentCount: 0),
+      for: worktreePath,
+      removeRestoredTabsFromPending: false
+    )
+
+    #expect(state.selectedTerminalTabs.map(\.title) == ["Codex"])
+
+    state.applyRestoredPersistedTabs(
+      RestoredPersistedTabs(persistedTabs: [shellTab], missingAgentCount: 0),
+      for: worktreePath,
+      removeRestoredTabsFromPending: false
+    )
+
+    #expect(state.selectedTerminalTabs.map(\.title) == ["Codex", "Privileged Shell 1"])
   }
 
   @Test("finalize flow can use sandboxed agents with linked-worktree write access")

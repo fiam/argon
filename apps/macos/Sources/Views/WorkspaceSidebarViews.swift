@@ -121,6 +121,7 @@ struct WorkspaceSidebarRow: View {
       }
       .buttonStyle(.plain)
       .accessibilityIdentifier(workspaceSidebarAccessibilityIdentifier(for: worktree.path))
+      .accessibilityValue(isSelected ? "selected" : "not selected")
 
       WorkspaceSidebarHoverActions(
         worktree: worktree,

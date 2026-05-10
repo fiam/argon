@@ -204,7 +204,7 @@ final class WorkspaceWindowRegistry {
     {
       let workspaceState = registration.workspaceState
       pendingTargetsByRepoRoot.removeValue(forKey: repoRoot)
-      workspaceState.applyLaunchTarget(target)
+      applyLaunchTargetIfNeeded(target, to: workspaceState)
       bringToFront(window)
       persistOpenWorkspaces()
       return
@@ -261,7 +261,7 @@ final class WorkspaceWindowRegistry {
     openingRepoRoots.remove(normalizedRepoRoot)
 
     if let pendingTarget = pendingTargetsByRepoRoot[normalizedRepoRoot] {
-      workspaceState.applyLaunchTarget(pendingTarget)
+      applyLaunchTargetIfNeeded(pendingTarget, to: workspaceState)
       pendingTargetsByRepoRoot.removeValue(forKey: normalizedRepoRoot)
     }
 
@@ -371,6 +371,31 @@ final class WorkspaceWindowRegistry {
       self.persistOpenWorkspaces()
     }
     workspaceStatesByRepoRoot[repoRoot] = workspaceState
+  }
+
+  private func applyLaunchTargetIfNeeded(
+    _ target: WorkspaceTarget,
+    to workspaceState: WorkspaceState
+  ) {
+    guard shouldApplyLaunchTarget(target, to: workspaceState) else { return }
+    workspaceState.applyLaunchTarget(target)
+  }
+
+  private func shouldApplyLaunchTarget(
+    _ target: WorkspaceTarget,
+    to workspaceState: WorkspaceState
+  ) -> Bool {
+    let requestedSelection = normalizedPath(target.selectedWorktreePath ?? target.repoRoot)
+    let repoRoot = normalizedPath(target.repoRoot)
+
+    guard requestedSelection == repoRoot,
+      let restoredSelection = workspaceState.selectedWorktreePath,
+      normalizedPath(restoredSelection) != repoRoot
+    else {
+      return true
+    }
+
+    return false
   }
 
   private func persistOpenWorkspaces() {

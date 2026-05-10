@@ -1216,6 +1216,7 @@ extension WorkspaceState {
     removeRestoredTabsFromPending: Bool,
     attemptedTabIDs: Set<UUID> = []
   ) {
+    let restoredTabIDs = Set(restored.persistedTabs.map(\.id))
     let restoredTabs = restored.persistedTabs.map(Self.restoredTerminalTab(from:))
     let currentTabs = terminalTabsByWorktreePath[normalizedPath] ?? []
     let currentTabsByID = Dictionary(uniqueKeysWithValues: currentTabs.map { ($0.id, $0) })
@@ -1232,9 +1233,21 @@ extension WorkspaceState {
       mergedTabs.append(currentTab)
     }
 
+    let mergeOrderByTabID = Dictionary(
+      uniqueKeysWithValues: mergedTabs.enumerated().map { offset, tab in
+        (tab.id, offset)
+      })
+    mergedTabs.sort { lhs, rhs in
+      if lhs.createdAt == rhs.createdAt {
+        return (mergeOrderByTabID[lhs.id] ?? Int.max)
+          < (mergeOrderByTabID[rhs.id] ?? Int.max)
+      }
+      return lhs.createdAt < rhs.createdAt
+    }
+
     terminalTabsByWorktreePath[normalizedPath] = mergedTabs
+    scheduleRestoredAgentActivityIdleIfNeeded(for: restoredTabIDs)
     if removeRestoredTabsFromPending {
-      let restoredTabIDs = Set(restored.persistedTabs.map(\.id))
       let removableTabIDs = attemptedTabIDs.isEmpty ? restoredTabIDs : attemptedTabIDs
       var pendingTabs = pendingRestorableTabsByWorktreePath[normalizedPath] ?? []
       pendingTabs.removeAll { removableTabIDs.contains($0.id) }
@@ -1279,6 +1292,21 @@ extension WorkspaceState {
       pendingRestorableTabsByWorktreePath[normalizedPath]?.isEmpty == false
     {
       startPendingTabRestoreIfNeeded(for: normalizedPath)
+    }
+  }
+
+  func scheduleRestoredAgentActivityIdleIfNeeded(for tabIDs: Set<UUID>) {
+    for tabID in tabIDs {
+      guard agentActivityIdleTasksByTabID[tabID] == nil,
+        let tab = terminalTab(for: tabID),
+        tab.isRunning,
+        tab.agentActivityState == .thinking
+      else {
+        continue
+      }
+      guard case .agent = tab.kind else { continue }
+
+      scheduleAgentActivityIdle(tabID)
     }
   }
 

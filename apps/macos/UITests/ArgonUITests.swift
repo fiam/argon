@@ -374,6 +374,46 @@ final class ArgonUITests: XCTestCase {
   }
 
   @MainActor
+  func testWorkspaceLaunchRestoresSelectedWorktreeWhenOpeningRepoRoot() throws {
+    let target = try Self.createPersistedSelectedWorktreeWorkspace()
+    let app = XCUIApplication()
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(atPath: target.fixtureRoot)
+    }
+
+    app.launchArguments = [
+      Self.disableStateRestorationArguments[0],
+      Self.disableStateRestorationArguments[1],
+      "--workspace-repo-root", target.repoRoot,
+      "--workspace-common-dir", target.repoCommonDir,
+      "--selected-worktree-path", target.repoRoot,
+    ]
+    app.launchEnvironment["ARGON_HOME"] = target.argonHome
+    app.launchEnvironment[Self.workspaceSnapshotEnvironmentKey] = target.snapshotFile
+    app.launchEnvironment[Self.disableCLIInstallPromptEnvironmentKey] = "1"
+    app.launch()
+
+    XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+    XCTAssertTrue(
+      waitForSidebarSelection(
+        in: app,
+        worktreePath: target.featureWorktreePath,
+        selected: true,
+        timeout: 15
+      )
+    )
+    XCTAssertTrue(
+      waitForSidebarSelection(
+        in: app,
+        worktreePath: target.repoRoot,
+        selected: false,
+        timeout: 5
+      )
+    )
+  }
+
+  @MainActor
   func testLinkedWorktreeShowsFinalizeActions() throws {
     let target = try Self.createLinkedWorkspace()
     let app = XCUIApplication()
@@ -987,6 +1027,8 @@ final class ArgonUITests: XCTestCase {
 
   private struct RestoredWorkspaceLaunchTarget {
     let fixtureRoot: String
+    let repoRoot: String
+    let repoCommonDir: String
     let featureWorktreePath: String
     let argonHome: String
     let snapshotFile: String
@@ -1673,6 +1715,73 @@ final class ArgonUITests: XCTestCase {
 
     return RestoredWorkspaceLaunchTarget(
       fixtureRoot: fixtureRoot.path,
+      repoRoot: repoRoot.path,
+      repoCommonDir: repoRoot.appendingPathComponent(".git", isDirectory: true).path,
+      featureWorktreePath: worktreeRoot.path,
+      argonHome: argonHome.path,
+      snapshotFile: snapshotFile.path,
+      signalFile: signalFile.path
+    )
+  }
+
+  private static func createPersistedSelectedWorktreeWorkspace() throws
+    -> RestoredWorkspaceLaunchTarget
+  {
+    let fixtureRoot = FileManager.default.temporaryDirectory
+      .appendingPathComponent("argon-ui-tests", isDirectory: true)
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let repoRoot = fixtureRoot.appendingPathComponent("repo", isDirectory: true)
+    let worktreeRoot =
+      fixtureRoot
+      .appendingPathComponent("worktrees", isDirectory: true)
+      .appendingPathComponent("mcp-client", isDirectory: true)
+    let argonHome = fixtureRoot.appendingPathComponent("argon-home", isDirectory: true)
+    let signalFile = fixtureRoot.appendingPathComponent("signal.txt")
+    let snapshotFile = fixtureRoot.appendingPathComponent("workspace-snapshots.json")
+
+    try FileManager.default.createDirectory(at: repoRoot, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+      at: worktreeRoot.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(at: argonHome, withIntermediateDirectories: true)
+
+    try git(repoRoot, ["init"])
+    try git(repoRoot, ["config", "user.name", "Argon UI Test"])
+    try git(repoRoot, ["config", "user.email", "argon-ui-test@example.com"])
+
+    try "initial\n".write(
+      to: repoRoot.appendingPathComponent("README.md"),
+      atomically: true,
+      encoding: .utf8
+    )
+    try git(repoRoot, ["add", "README.md"])
+    try git(repoRoot, ["commit", "-m", "Initial commit"])
+    try git(repoRoot, ["branch", "-M", "main"])
+    try git(repoRoot, ["worktree", "add", "-b", "mcp-client", worktreeRoot.path, "HEAD"])
+
+    let snapshotPayload: [[String: Any]] = [
+      [
+        "target": [
+          "repoRoot": repoRoot.path,
+          "repoCommonDir": repoRoot.appendingPathComponent(".git", isDirectory: true).path,
+          "selectedWorktreePath": worktreeRoot.path,
+        ],
+        "terminalTabsByWorktreePath": [String: Any](),
+        "selectedTerminalTabIDsByWorktreePath": [String: Any](),
+      ]
+    ]
+
+    let snapshotData = try JSONSerialization.data(
+      withJSONObject: snapshotPayload,
+      options: [.prettyPrinted]
+    )
+    try snapshotData.write(to: snapshotFile, options: .atomic)
+
+    return RestoredWorkspaceLaunchTarget(
+      fixtureRoot: fixtureRoot.path,
+      repoRoot: repoRoot.path,
+      repoCommonDir: repoRoot.appendingPathComponent(".git", isDirectory: true).path,
       featureWorktreePath: worktreeRoot.path,
       argonHome: argonHome.path,
       snapshotFile: snapshotFile.path,
@@ -2885,6 +2994,27 @@ final class ArgonUITests: XCTestCase {
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
       if row.exists, token.exists == expected {
+        return true
+      }
+      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    return false
+  }
+
+  @MainActor
+  private func waitForSidebarSelection(
+    in app: XCUIApplication,
+    worktreePath: String,
+    selected: Bool,
+    timeout: TimeInterval
+  ) -> Bool {
+    let row = app.descendants(matching: .any)[
+      Self.workspaceSidebarAccessibilityIdentifier(for: worktreePath)
+    ]
+    let expectedValue = selected ? "selected" : "not selected"
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+      if row.exists, (row.value as? String) == expectedValue {
         return true
       }
       RunLoop.current.run(until: Date().addingTimeInterval(0.1))
