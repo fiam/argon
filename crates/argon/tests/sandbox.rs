@@ -774,6 +774,69 @@ ENV UNSET PATH
 }
 
 #[test]
+fn sandbox_explain_agent_resolves_shell_startup_path() -> Result<()> {
+    let temp = tempdir()?;
+    let repo_root = temp.path().join("repo");
+    let home = temp.path().join("home");
+    let bin = home.join("bin");
+    std::fs::create_dir_all(&repo_root)?;
+    std::fs::create_dir_all(&bin)?;
+    std::fs::write(
+        repo_root.join("Sandboxfile"),
+        r#"
+VERSION 1
+ENV DEFAULT INHERIT
+"#,
+    )?;
+
+    let shell_path = temp.path().join("fake-shell.sh");
+    let resolved_path = format!("{}:/usr/bin:/bin", bin.display());
+    std::fs::write(
+        &shell_path,
+        format!(
+            "#!/bin/sh\nfor last do :; done\nPATH='{}'\neval \"$last\"\n",
+            resolved_path.replace('\'', "'\\''")
+        ),
+    )?;
+    let mut permissions = std::fs::metadata(&shell_path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&shell_path, permissions)?;
+
+    for launch in ["agent", "reviewer"] {
+        let output = run_argon(
+            Command::new(env!("CARGO_BIN_EXE_argon"))
+                .env_clear()
+                .env("HOME", &home)
+                .env("PATH", "/usr/bin:/bin")
+                .env("SHELL", &shell_path)
+                .current_dir(&repo_root)
+                .arg("sandbox")
+                .arg("explain")
+                .arg("--launch")
+                .arg(launch)
+                .arg("--json"),
+        )?;
+
+        if !output.status.success() {
+            bail!(
+                "sandbox explain {launch} PATH test failed (exit {:?}):\nstdout: {}\nstderr: {}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+
+        let explain: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(explain["context"]["PATH"], resolved_path);
+        assert_eq!(
+            explain["context"][argon_lib::SHELL_STARTUP_PATH_RESOLVED_ENV],
+            "1"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn sandbox_exec_blocks_reads_outside_repo_and_os_roots() -> Result<()> {
     let temp = tempdir()?;
     let root = temp.path().canonicalize()?;

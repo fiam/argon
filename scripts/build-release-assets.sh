@@ -24,6 +24,8 @@ GHOSTTY_UNIVERSAL_STATIC_LIB="$GHOSTTY_NATIVE_ROOT/macos/GhosttyKit.xcframework/
 GHOSTTY_NATIVE_BACKUP="$DERIVED_DATA_PATH/ghostty-native-backup"
 UNIVERSAL_CLI_DIR="$DERIVED_DATA_PATH/universal-cli"
 UNIVERSAL_CLI_PATH="$UNIVERSAL_CLI_DIR/argon"
+UNIVERSAL_ARGON_LIB_DIR="$DERIVED_DATA_PATH/universal-argon-lib"
+UNIVERSAL_ARGON_LIB_PATH="$UNIVERSAL_ARGON_LIB_DIR/libargon_lib.a"
 APP_PATH=""
 RELEASE_BUNDLE_IDENTIFIER=""
 APPCAST_DIR="$DIST_DIR/appcast"
@@ -167,6 +169,7 @@ fi
 
 rm -rf "$DERIVED_DATA_PATH" "$DIST_DIR"
 mkdir -p "$DIST_DIR" "$PACKAGE_CACHE_PATH" "$CLONED_SOURCE_PACKAGES_PATH" "$UNIVERSAL_CLI_DIR"
+mkdir -p "$UNIVERSAL_ARGON_LIB_DIR"
 trap restore_native_ghostty_layout EXIT
 
 pushd "$ROOT_DIR" >/dev/null
@@ -179,6 +182,8 @@ export RUSTFLAGS="${RUSTFLAGS:--Dwarnings}"
 
 cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --bin argon --release --target aarch64-apple-darwin
 cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --bin argon --release --target x86_64-apple-darwin
+cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --package argon-lib --release --target aarch64-apple-darwin
+cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --package argon-lib --release --target x86_64-apple-darwin
 
 lipo -create \
   -output "$UNIVERSAL_CLI_PATH" \
@@ -187,6 +192,13 @@ lipo -create \
 
 chmod +x "$UNIVERSAL_CLI_PATH"
 require_arches "$UNIVERSAL_CLI_PATH"
+
+lipo -create \
+  -output "$UNIVERSAL_ARGON_LIB_PATH" \
+  "$ROOT_DIR/target/aarch64-apple-darwin/release/libargon_lib.a" \
+  "$ROOT_DIR/target/x86_64-apple-darwin/release/libargon_lib.a"
+
+require_arches "$UNIVERSAL_ARGON_LIB_PATH"
 
 bash "$ROOT_DIR/scripts/build-libghostty.sh" --target universal --release
 
@@ -204,6 +216,7 @@ fi
 (cd "$ROOT_DIR/apps/macos" && xcodegen generate)
 
 export ARGON_SKIP_BUNDLED_CLI_BUILD=1
+export ARGON_USE_PREBUILT_ARGON_LIB=1
 export ARGON_BUNDLED_CLI_PATH="$UNIVERSAL_CLI_PATH"
 
 if [[ "$SPARKLE_APPCAST" != "true" ]]; then
@@ -227,6 +240,7 @@ xcodebuild_args=(
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
   ENABLE_HARDENED_RUNTIME=YES
   ARGON_GHOSTTY_STATIC_LIB="$GHOSTTY_UNIVERSAL_STATIC_LIB"
+  ARGON_LIB_STATIC_LIB="$UNIVERSAL_ARGON_LIB_PATH"
   ARGON_APPCAST_FEED_URL="${ARGON_APPCAST_FEED_URL:-}"
   SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
 )

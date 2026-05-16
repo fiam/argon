@@ -2722,7 +2722,23 @@ fn sandbox_context_from_args(
     command: &[String],
 ) -> Result<SandboxContext> {
     let current_dir = std::env::current_dir().context("failed to determine current directory")?;
+    let launch = args.launch.map(Into::into).unwrap_or_else(|| {
+        if args.interactive {
+            LaunchKind::Shell
+        } else {
+            LaunchKind::Command
+        }
+    });
     let env = std::env::vars().collect::<BTreeMap<_, _>>();
+    let env = if args.interactive
+        || matches!(
+            launch,
+            LaunchKind::Shell | LaunchKind::Agent | LaunchKind::Reviewer
+        ) {
+        argon_lib::environment_with_interactive_path(&env)
+    } else {
+        env
+    };
     let shell_path = env
         .get("SHELL")
         .filter(|value| !value.is_empty())
@@ -2731,13 +2747,6 @@ fn sandbox_context_from_args(
         .as_ref()
         .and_then(|path| path.file_name().and_then(OsStr::to_str))
         .map(str::to_owned);
-    let launch = args.launch.map(Into::into).unwrap_or_else(|| {
-        if args.interactive {
-            LaunchKind::Shell
-        } else {
-            LaunchKind::Command
-        }
-    });
 
     Ok(SandboxContext {
         repo_root: Some(

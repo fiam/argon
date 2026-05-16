@@ -42,6 +42,40 @@ targets:
     # the Rust CLI via run-script phases, and enabling the sandbox currently
     # creates a build-graph cycle around the generated CLI artifact.
     preBuildScripts:
+      - name: Build argon-lib
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - "$(SRCROOT)/../../target/release/libargon_lib.a"
+        script: |
+          set -euo pipefail
+          REPO_ROOT="$(cd "$SRCROOT/../.." && pwd)"
+          if [ "${ARGON_USE_PREBUILT_ARGON_LIB:-0}" = "1" ]; then
+            if [ -n "${ARGON_LIB_STATIC_LIB:-}" ] && [ -f "$ARGON_LIB_STATIC_LIB" ]; then
+              exit 0
+            fi
+            echo "error: ARGON_USE_PREBUILT_ARGON_LIB is set but ARGON_LIB_STATIC_LIB is missing" >&2
+            exit 1
+          fi
+          if [ -n "${CARGO:-}" ] && [ -x "${CARGO}" ]; then
+            CARGO_BIN="${CARGO}"
+          elif [ -x "$HOME/.cargo/bin/cargo" ]; then
+            CARGO_BIN="$HOME/.cargo/bin/cargo"
+          elif [ -x "/opt/homebrew/bin/cargo" ]; then
+            CARGO_BIN="/opt/homebrew/bin/cargo"
+          elif [ -x "/usr/local/bin/cargo" ]; then
+            CARGO_BIN="/usr/local/bin/cargo"
+          elif command -v cargo >/dev/null 2>&1; then
+            CARGO_BIN="$(command -v cargo)"
+          else
+            echo "error: cargo not found. Install Rust or set CARGO to an absolute cargo path." >&2
+            exit 1
+          fi
+          export RUSTFLAGS="${RUSTFLAGS:--Dwarnings}"
+          "$CARGO_BIN" build --manifest-path "$REPO_ROOT/Cargo.toml" --package argon-lib --release
+          if [ ! -f "$REPO_ROOT/target/release/libargon_lib.a" ]; then
+            echo "error: argon-lib static library not found at $REPO_ROOT/target/release/libargon_lib.a" >&2
+            exit 1
+          fi
       - name: Build vendored libghostty
         basedOnDependencyAnalysis: false
         script: |
@@ -143,6 +177,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.argonapp.macos
         INFOPLIST_FILE: Resources/Info.plist
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/ArgonLibFFI.h
         CODE_SIGN_ENTITLEMENTS: Resources/Argon.entitlements
         PRODUCT_NAME: Argon
         MARKETING_VERSION: "0.3.0" # x-release-please-version
@@ -152,9 +187,10 @@ targets:
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: true
-        "OTHER_LDFLAGS[arch=*]": "-lstdc++ -force_load $(ARGON_GHOSTTY_STATIC_LIB)"
+        "OTHER_LDFLAGS[arch=*]": "-lstdc++ -force_load $(ARGON_GHOSTTY_STATIC_LIB) -force_load $(ARGON_LIB_STATIC_LIB)"
         # Embedded Ghostty runtime paths used by the terminal renderer.
         ARGON_GHOSTTY_STATIC_LIB: "$(TARGET_BUILD_DIR)/libghostty-fat.a"
+        ARGON_LIB_STATIC_LIB: "$(SRCROOT)/../../target/release/libargon_lib.a"
         ARGON_GHOSTTYKIT_PATH: "$(SRCROOT)/../../target/libghostty/native/macos/GhosttyKit.xcframework"
         ARGON_GHOSTTY_RESOURCES_PATH: "$(SRCROOT)/../../target/libghostty/native/share/ghostty"
         ARGON_APPCAST_FEED_URL: ""

@@ -190,6 +190,7 @@ struct ReviewerTerminalTests {
     )
 
     #expect(launch.environment["PATH"] == "/custom/bin:/usr/bin:/bin")
+    #expect(launch.environment[ArgonLib.shellStartupPathResolvedEnvironmentKey] == "1")
     #expect(launch.processSpec.args.contains(shellPath.path))
     #expect(launch.processSpec.args.last == "codex --yolo")
   }

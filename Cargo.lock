@@ -79,6 +79,7 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "argon-core",
+ "argon-lib",
  "chrono",
  "clap",
  "libc",
@@ -103,6 +104,15 @@ dependencies = [
  "thiserror",
  "two-face",
  "uuid",
+]
+
+[[package]]
+name = "argon-lib"
+version = "0.3.0"
+dependencies = [
+ "libc",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

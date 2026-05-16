@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/argon-lib",
     "crates/argon-core",
     "crates/sandbox",
     "crates/argon",

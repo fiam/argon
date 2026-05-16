@@ -152,6 +152,7 @@ struct UserShellTests {
     ])
 
     #expect(environment["PATH"] == "/custom/bin:/usr/bin:/bin")
+    #expect(environment[ArgonLib.shellStartupPathResolvedEnvironmentKey] == "1")
 
     let loggedArgs = try String(contentsOf: logPath, encoding: .utf8)
       .split(separator: "\n")
