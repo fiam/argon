@@ -22,17 +22,21 @@ struct TerminalLaunchConfiguration: Sendable {
     _ agent: ReviewerAgentInstance,
     environment: [String: String] = ProcessInfo.processInfo.environment
   ) -> Self {
+    let baseEnvironment =
+      agent.sandboxEnabled
+      ? UserShell.environmentResolvingInteractivePath(environment)
+      : environment
     let processSpec: SandboxedProcessSpec
     if agent.sandboxEnabled {
-      processSpec = ArgonSandbox.reviewerLaunchSpec(agent: agent)
+      processSpec = ArgonSandbox.reviewerLaunchSpec(agent: agent, environment: baseEnvironment)
     } else {
-      processSpec = UserShell.launchSpec(command: agent.fullCommand, environment: environment)
+      processSpec = UserShell.launchSpec(command: agent.fullCommand, environment: baseEnvironment)
     }
 
     return Self(
       processSpec: processSpec,
       environment: terminalEnvironment(
-        base: environment,
+        base: baseEnvironment,
         extraEnvironment: [
           "ARGON_SESSION_ID": agent.sessionId,
           "ARGON_REPO_ROOT": agent.repoRoot,
@@ -63,8 +67,9 @@ struct TerminalLaunchConfiguration: Sendable {
     tabID: UUID? = nil,
     environment: [String: String] = ProcessInfo.processInfo.environment
   ) -> Self {
+    let sandboxEnvironment = UserShell.environmentResolvingInteractivePath(environment)
     let cli = ArgonCLI.cliPath()
-    let launch = UserShell.interactiveLaunchSpec(environment: environment)
+    let launch = UserShell.interactiveLaunchSpec(environment: sandboxEnvironment)
     let args =
       ["sandbox", "exec"]
       + ["--launch", "shell", "--interactive"]
@@ -75,7 +80,7 @@ struct TerminalLaunchConfiguration: Sendable {
     return Self(
       processSpec: SandboxedProcessSpec(executable: cli, args: args),
       environment: terminalEnvironment(
-        base: environment,
+        base: sandboxEnvironment,
         extraEnvironment: terminalTabEnvironment(tabID: tabID)
       ),
       currentDirectory: currentDirectory
@@ -108,8 +113,9 @@ struct TerminalLaunchConfiguration: Sendable {
     tabID: UUID? = nil,
     environment: [String: String] = ProcessInfo.processInfo.environment
   ) -> Self {
+    let sandboxEnvironment = UserShell.environmentResolvingInteractivePath(environment)
     let cli = ArgonCLI.cliPath()
-    let launch = UserShell.launchSpec(command: command, environment: environment)
+    let launch = UserShell.launchSpec(command: command, environment: sandboxEnvironment)
     var args =
       ["sandbox", "exec", "--launch", launchKind]
       + writableRoots.flatMap { ["--write-root", $0] }
@@ -127,7 +133,7 @@ struct TerminalLaunchConfiguration: Sendable {
     return Self(
       processSpec: SandboxedProcessSpec(executable: cli, args: args),
       environment: terminalEnvironment(
-        base: environment,
+        base: sandboxEnvironment,
         extraEnvironment: terminalTabEnvironment(tabID: tabID)
       ),
       currentDirectory: currentDirectory

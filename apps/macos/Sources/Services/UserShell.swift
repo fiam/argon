@@ -13,6 +13,18 @@ struct UserShellCommandDetails: Sendable {
 }
 
 enum UserShell {
+  private struct InteractivePathCacheKey: Hashable {
+    let shell: String
+    let home: String?
+    let path: String?
+    let zdotdir: String?
+  }
+
+  private static let interactivePathCacheLock = NSLock()
+  nonisolated(unsafe) private static var interactivePathCache: [InteractivePathCacheKey: String] =
+    [:]
+  private static let interactivePathProbeTimeout: TimeInterval = 2
+
   static func resolvedPath(
     environment: [String: String] = ProcessInfo.processInfo.environment
   ) -> String {
@@ -56,6 +68,18 @@ enum UserShell {
       executable: resolvedPath(environment: environment),
       args: ["-i", "-l"]
     )
+  }
+
+  static func environmentResolvingInteractivePath(
+    _ environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> [String: String] {
+    guard let path = interactivePath(environment: environment) else {
+      return environment
+    }
+
+    var resolvedEnvironment = environment
+    resolvedEnvironment["PATH"] = path
+    return resolvedEnvironment
   }
 
   static func commandExists(
@@ -223,6 +247,88 @@ enum UserShell {
           ($0, UserShellCommandDetails(exists: false, resolvedPath: nil, version: nil))
         })
     }
+  }
+
+  private static func interactivePath(
+    environment: [String: String]
+  ) -> String? {
+    let shell = resolvedPath(environment: environment)
+    let cacheKey = InteractivePathCacheKey(
+      shell: shell,
+      home: environment["HOME"],
+      path: environment["PATH"],
+      zdotdir: environment["ZDOTDIR"]
+    )
+
+    interactivePathCacheLock.lock()
+    let cachedPath = interactivePathCache[cacheKey]
+    interactivePathCacheLock.unlock()
+    if let cachedPath {
+      return cachedPath
+    }
+
+    let marker = "__ARGON_SHELL_PATH_\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))__"
+    let script = """
+      printf '%s\\n' '\(marker)'
+      printf '%s\\n' "$PATH"
+      printf '%s\\n' '\(marker)'
+      """
+
+    let process = Process()
+    let processLaunch = launchSpec(command: script, environment: environment)
+    process.executableURL = URL(fileURLWithPath: processLaunch.executable)
+    process.arguments = processLaunch.args
+    process.environment = environment
+    let stdout = Pipe()
+    process.standardOutput = stdout
+    process.standardError = Pipe()
+    let semaphore = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in
+      semaphore.signal()
+    }
+
+    do {
+      try process.run()
+    } catch {
+      return nil
+    }
+
+    guard semaphore.wait(timeout: .now() + interactivePathProbeTimeout) == .success else {
+      process.terminationHandler = nil
+      process.terminate()
+      return nil
+    }
+    process.terminationHandler = nil
+    guard process.terminationStatus == 0 else {
+      return nil
+    }
+
+    let outputData = stdout.fileHandleForReading.readDataToEndOfFile()
+    let output = String(data: outputData, encoding: .utf8) ?? ""
+    guard let path = parseInteractivePathProbeOutput(output, marker: marker) else {
+      return nil
+    }
+
+    interactivePathCacheLock.lock()
+    interactivePathCache[cacheKey] = path
+    interactivePathCacheLock.unlock()
+    return path
+  }
+
+  private static func parseInteractivePathProbeOutput(
+    _ output: String,
+    marker: String
+  ) -> String? {
+    let lines = output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    guard let start = lines.firstIndex(of: marker) else { return nil }
+
+    for index in lines.indices where index > start && lines[index] == marker {
+      guard index == start + 2 else { return nil }
+      let path = lines[start + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+      return path.isEmpty ? nil : path
+    }
+
+    return nil
   }
 
   private static func shellQuote(_ value: String) -> String {

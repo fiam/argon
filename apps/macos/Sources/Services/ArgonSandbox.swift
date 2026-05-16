@@ -2,10 +2,13 @@ import Foundation
 
 @MainActor
 enum ArgonSandbox {
-  static func reviewerLaunchSpec(agent: ReviewerAgentInstance) -> SandboxedProcessSpec {
+  static func reviewerLaunchSpec(
+    agent: ReviewerAgentInstance,
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> SandboxedProcessSpec {
     let cli = ArgonCLI.cliPath()
     let sessionDir = SessionLoader.sessionsDirectory(repoRoot: agent.repoRoot)
-    let launch = UserShell.launchSpec(command: agent.fullCommand)
+    let launch = UserShell.launchSpec(command: agent.fullCommand, environment: environment)
 
     return SandboxedProcessSpec(
       executable: cli,

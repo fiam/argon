@@ -155,4 +155,42 @@ struct ReviewerTerminalTests {
 
     #expect(environment["TERM_PROGRAM"] == "ghostty")
   }
+
+  @Test("sandboxed command launch passes shell startup PATH to sandbox exec")
+  func sandboxedCommandLaunchPassesShellStartupPathToSandboxExec() throws {
+    let tempDir = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+
+    let shellPath = tempDir.appendingPathComponent("fake-shell.sh")
+    let script = """
+      #!/bin/sh
+      for last do :; done
+      PATH="/custom/bin:/usr/bin:/bin"
+      eval "$last"
+      exit 0
+      """
+    try script.write(to: shellPath, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o755],
+      ofItemAtPath: shellPath.path
+    )
+
+    let launch = ReviewerTerminalLaunch.sandboxedCommand(
+      "codex --yolo",
+      currentDirectory: "/tmp/repo",
+      writableRoots: ["/tmp/repo"],
+      launchKind: "agent",
+      agentFamily: "codex",
+      environment: [
+        "PATH": "/usr/bin:/bin",
+        "SHELL": shellPath.path,
+      ]
+    )
+
+    #expect(launch.environment["PATH"] == "/custom/bin:/usr/bin:/bin")
+    #expect(launch.processSpec.args.contains(shellPath.path))
+    #expect(launch.processSpec.args.last == "codex --yolo")
+  }
 }
