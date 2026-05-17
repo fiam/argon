@@ -9,8 +9,8 @@ chrono.workspace = true
 libc = "0.2"
 serde.workspace = true
 serde_json.workspace = true
-syntect = { version = "5", default-features = false, features = ["plist-load", "regex-onig"] }
-two-face = "0.5"
+syntect = { version = "5", default-features = false, features = ["plist-load", "regex-fancy"] }
+two-face = { version = "0.5", default-features = false, features = ["syntect-fancy"] }
 thiserror.workspace = true
 uuid.workspace = true
 

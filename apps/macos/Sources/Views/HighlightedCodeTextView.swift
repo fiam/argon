@@ -147,7 +147,7 @@ struct HighlightedCodeTextView: NSViewRepresentable {
         guard !Task.isCancelled else { return }
 
         let highlighted = try? await Task.detached(priority: .userInitiated) {
-          try ArgonCLI.highlightedText(text: text, path: path, theme: theme)
+          try ArgonLib.highlightedText(text: text, path: path, theme: theme)
         }.value
 
         await MainActor.run {
@@ -156,7 +156,7 @@ struct HighlightedCodeTextView: NSViewRepresentable {
           guard textView.string == text else { return }
           guard let highlighted else { return }
           self.applyHighlightedText(
-            highlighted.lines, to: textView, originalText: text, fontSize: fontSize)
+            highlighted, to: textView, originalText: text, fontSize: fontSize)
           self.lastHighlightedText = text
           self.lastHighlightedTheme = theme
           self.lastHighlightedPath = path

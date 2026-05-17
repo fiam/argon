@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, IsTerminal, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -18,8 +18,8 @@ use argon_core::{
     AgentControlResponse, AgentControlStatus, AgentEvent, AgentEventKind, CliCommand, CliResponse,
     CommentAnchor, CommentAuthor, CommentKind, FinalizeAction, PendingFeedback,
     ResolvedReviewTarget, ReviewComment, ReviewMode, ReviewOutcome, ReviewSession,
-    ReviewSummaryDraft, SCHEMA_VERSION, SessionPayload, SessionStatus, SessionStore, StyledSpan,
-    ThreadState, auto_detect_review_target, inspect_worktree_mergeability, resolve_branch_target,
+    ReviewSummaryDraft, SCHEMA_VERSION, SessionPayload, SessionStatus, SessionStore, ThreadState,
+    auto_detect_review_target, inspect_worktree_mergeability, resolve_branch_target,
     resolve_uncommitted_target,
 };
 use chrono::{DateTime, Utc};
@@ -76,9 +76,8 @@ enum Commands {
     Reviewer(ReviewerCommands),
     #[command(subcommand)]
     Workspace(WorkspaceCommands),
-    Diff(DiffArgs),
     #[command(hide = true)]
-    Highlight(HighlightArgs),
+    Diff(DiffArgs),
     #[command(subcommand)]
     Draft(DraftCommands),
     #[command(subcommand)]
@@ -93,21 +92,6 @@ struct DiffArgs {
     theme: String,
     #[arg(long)]
     json: bool,
-}
-
-#[derive(clap::Args, Debug)]
-struct HighlightArgs {
-    #[arg(long)]
-    path: String,
-    #[arg(long, default_value = "base16-ocean.dark")]
-    theme: String,
-    #[arg(long)]
-    json: bool,
-}
-
-#[derive(serde::Serialize)]
-struct HighlightResponse {
-    lines: Vec<Vec<StyledSpan>>,
 }
 
 #[derive(serde::Serialize)]
@@ -838,7 +822,6 @@ fn run() -> Result<()> {
         Commands::Reviewer(command) => run_reviewer(command, &runtime),
         Commands::Workspace(command) => run_workspace(command, &runtime),
         Commands::Diff(args) => run_diff(args, &runtime),
-        Commands::Highlight(args) => run_highlight(args),
         Commands::Draft(command) => run_draft(command, &runtime),
         Commands::Skill(command) => run_skill(command),
     }
@@ -1075,27 +1058,6 @@ fn run_diff(args: DiffArgs, runtime: &RuntimeOptions) -> Result<()> {
                     println!("{marker}{text}");
                 }
             }
-        }
-    }
-    Ok(())
-}
-
-fn run_highlight(args: HighlightArgs) -> Result<()> {
-    let mut input = String::new();
-    io::stdin()
-        .read_to_string(&mut input)
-        .context("failed to read highlight input from stdin")?;
-
-    let lines = argon_core::highlight_text(&input, &args.path, &args.theme);
-    if args.json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&HighlightResponse { lines })?
-        );
-    } else {
-        for line in lines {
-            let text = line.into_iter().map(|span| span.text).collect::<String>();
-            println!("{text}");
         }
     }
     Ok(())

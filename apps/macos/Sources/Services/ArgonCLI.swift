@@ -20,10 +20,6 @@ enum ArgonCLI {
     let created: Bool
   }
 
-  struct HighlightedTextResponse: Decodable, Sendable {
-    let lines: [[StyledSpan]]
-  }
-
   struct WorkspaceMergeabilityResponse: Decodable, Sendable {
     let schemaVersion: String
     let mergeability: WorkspaceMergeability
@@ -168,40 +164,6 @@ enum ArgonCLI {
     }
 
     return ReviewTarget(sessionId: sessionId, repoRoot: repoRoot)
-  }
-
-  // MARK: - Highlighted Diff
-
-  /// Runs `argon diff --session <id> --theme <theme> --json` and returns the raw JSON string.
-  static func highlightedDiff(
-    sessionId: String, repoRoot: String, theme: String
-  ) throws -> String {
-    try run(
-      repoRoot: repoRoot,
-      args: [
-        "diff",
-        "--session", sessionId,
-        "--theme", theme,
-        "--json",
-      ])
-  }
-
-  static func highlightedText(
-    text: String,
-    path: String,
-    theme: String
-  ) throws -> HighlightedTextResponse {
-    let output = try run(
-      repoRoot: nil,
-      args: [
-        "highlight",
-        "--path", path,
-        "--theme", theme,
-        "--json",
-      ],
-      stdin: text
-    )
-    return try decode(HighlightedTextResponse.self, from: output)
   }
 
   static func workspaceMergeability(

@@ -280,20 +280,19 @@ final class AppState {
     let updatedSession: ReviewSession?
   }
 
-  /// Try to load highlighted diff from the CLI; fall back to raw git diff if unavailable.
+  /// Try to load highlighted diff from argon-lib; fall back to raw git diff if unavailable.
   nonisolated private static func loadFiles(
     sessionId: String?, repoRoot: String, mode: ReviewMode,
     baseRef: String, headRef: String, mergeBaseSha: String,
     theme: String
   ) -> [FileDiff] {
     if let sessionId {
-      if let json = try? ArgonCLI.highlightedDiff(
+      if let files = try? ArgonLib.highlightedDiff(
         sessionId: sessionId, repoRoot: repoRoot, theme: theme
-      ) {
-        let files = DiffParser.parseHighlighted(json)
-        if !files.isEmpty {
-          return files
-        }
+      ),
+        !files.isEmpty
+      {
+        return files
       }
     }
     // Fallback to raw git diff

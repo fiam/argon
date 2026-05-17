@@ -8,6 +8,8 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod highlight_ffi;
+
 pub const SHELL_STARTUP_PATH_RESOLVED_ENV: &str = "ARGON_SHELL_STARTUP_PATH_RESOLVED";
 
 const DEFAULT_INTERACTIVE_PATH_TIMEOUT: Duration = Duration::from_secs(2);
@@ -22,6 +24,12 @@ struct InteractivePathCacheKey {
 
 static INTERACTIVE_PATH_CACHE: OnceLock<Mutex<HashMap<InteractivePathCacheKey, String>>> =
     OnceLock::new();
+
+#[repr(C)]
+pub struct ArgonEnvironmentEntry {
+    pub key: *const c_char,
+    pub value: *const c_char,
+}
 
 pub fn resolve_shell_path(environment: &BTreeMap<String, String>) -> PathBuf {
     if let Some(shell) = environment.get("SHELL").filter(|value| !value.is_empty()) {
@@ -192,19 +200,17 @@ fn login_shell_from_passwd() -> Option<PathBuf> {
 ///
 /// # Safety
 ///
-/// `environment_json` must be null or point to a valid NUL-terminated C string
-/// containing a JSON object with string keys and string values. The returned
-/// pointer must be released exactly once with `argonlib_string_free`.
+/// `entries` must be null only when `entry_count` is zero. Otherwise it must
+/// point to `entry_count` valid environment entries with NUL-terminated key and
+/// value strings. The returned pointer must be released exactly once with
+/// `argonlib_string_free`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn argonlib_resolve_interactive_path_json(
-    environment_json: *const c_char,
+pub unsafe extern "C" fn argonlib_resolve_interactive_path(
+    entries: *const ArgonEnvironmentEntry,
+    entry_count: usize,
     timeout_ms: u64,
 ) -> *mut c_char {
-    let Some(environment_json) = string_from_c_pointer(environment_json) else {
-        return std::ptr::null_mut();
-    };
-    let Ok(environment) = serde_json::from_str::<BTreeMap<String, String>>(&environment_json)
-    else {
+    let Some(environment) = (unsafe { environment_from_entries(entries, entry_count) }) else {
         return std::ptr::null_mut();
     };
     let Some(path) =
@@ -213,9 +219,7 @@ pub unsafe extern "C" fn argonlib_resolve_interactive_path_json(
         return std::ptr::null_mut();
     };
 
-    CString::new(path)
-        .map(CString::into_raw)
-        .unwrap_or(std::ptr::null_mut())
+    owned_c_string(path)
 }
 
 /// Free a string returned by an `argon-lib` C ABI function.
@@ -233,7 +237,7 @@ pub unsafe extern "C" fn argonlib_string_free(value: *mut c_char) {
     let _ = unsafe { CString::from_raw(value) };
 }
 
-fn string_from_c_pointer(value: *const c_char) -> Option<String> {
+pub(crate) fn string_from_c_pointer(value: *const c_char) -> Option<String> {
     if value.is_null() {
         return None;
     }
@@ -242,6 +246,52 @@ fn string_from_c_pointer(value: *const c_char) -> Option<String> {
             .to_string_lossy()
             .into_owned(),
     )
+}
+
+unsafe fn environment_from_entries(
+    entries: *const ArgonEnvironmentEntry,
+    entry_count: usize,
+) -> Option<BTreeMap<String, String>> {
+    if entry_count == 0 {
+        return Some(BTreeMap::new());
+    }
+    if entries.is_null() {
+        return None;
+    }
+
+    let entries = unsafe { std::slice::from_raw_parts(entries, entry_count) };
+    let mut environment = BTreeMap::new();
+    for entry in entries {
+        let key = string_from_c_pointer(entry.key)?;
+        let value = string_from_c_pointer(entry.value)?;
+        environment.insert(key, value);
+    }
+    Some(environment)
+}
+
+pub(crate) fn owned_c_string(mut value: String) -> *mut c_char {
+    value.retain(|character| character != '\0');
+    CString::new(value)
+        .map(CString::into_raw)
+        .unwrap_or(std::ptr::null_mut())
+}
+
+pub(crate) unsafe fn set_error(error_out: *mut *mut c_char, message: impl Into<String>) {
+    if error_out.is_null() {
+        return;
+    }
+    unsafe {
+        *error_out = owned_c_string(message.into());
+    }
+}
+
+pub(crate) unsafe fn clear_error(error_out: *mut *mut c_char) {
+    if error_out.is_null() {
+        return;
+    }
+    unsafe {
+        *error_out = std::ptr::null_mut();
+    }
 }
 
 #[cfg(test)]
@@ -292,9 +342,52 @@ mod tests {
     }
 
     #[test]
-    fn ffi_returns_null_for_invalid_json() {
-        let input = CString::new("not-json").expect("cstring");
-        let result = unsafe { argonlib_resolve_interactive_path_json(input.as_ptr(), 100) };
+    fn ffi_resolve_interactive_path_reads_environment_entries() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let shell_path = temp_dir.path().join("fake-shell.sh");
+        fs::write(
+            &shell_path,
+            "#!/bin/sh\nfor last do :; done\nPATH='/custom/bin:/usr/bin:/bin'\neval \"$last\"\n",
+        )
+        .expect("write shell");
+        set_executable(&shell_path);
+
+        let path_key = CString::new("PATH").expect("path key");
+        let path_value = CString::new("/usr/bin:/bin").expect("path value");
+        let shell_key = CString::new("SHELL").expect("shell key");
+        let shell_value = CString::new(shell_path.display().to_string()).expect("shell value");
+        let entries = [
+            ArgonEnvironmentEntry {
+                key: path_key.as_ptr(),
+                value: path_value.as_ptr(),
+            },
+            ArgonEnvironmentEntry {
+                key: shell_key.as_ptr(),
+                value: shell_value.as_ptr(),
+            },
+        ];
+
+        let result =
+            unsafe { argonlib_resolve_interactive_path(entries.as_ptr(), entries.len(), 1_000) };
+
+        assert!(!result.is_null());
+        assert_eq!(
+            unsafe { CStr::from_ptr(result) }.to_str(),
+            Ok("/custom/bin:/usr/bin:/bin")
+        );
+        unsafe {
+            argonlib_string_free(result);
+        }
+    }
+
+    #[test]
+    fn ffi_returns_null_for_invalid_environment_entry() {
+        let entries = [ArgonEnvironmentEntry {
+            key: std::ptr::null(),
+            value: std::ptr::null(),
+        }];
+        let result =
+            unsafe { argonlib_resolve_interactive_path(entries.as_ptr(), entries.len(), 100) };
         assert!(result.is_null());
     }
 
