@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod diff_ffi;
 mod highlight_ffi;
+mod workspace_ffi;
 
 pub const SHELL_STARTUP_PATH_RESOLVED_ENV: &str = "ARGON_SHELL_STARTUP_PATH_RESOLVED";
 

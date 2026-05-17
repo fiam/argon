@@ -531,12 +531,12 @@ enum GitService {
 
   static func hasConflicts(repoRoot: String, predictsMergeConflicts: Bool = true) -> Bool {
     if predictsMergeConflicts,
-      let mergeability = try? ArgonCLI.workspaceMergeability(repoRoot: repoRoot)
+      let mergeability = try? ArgonLib.workspaceMergeability(repoRoot: repoRoot)
     {
       return mergeability.status == .conflicted
     }
 
-    // Fallback for development/test environments where the bundled CLI is not
+    // Fallback for development/test environments where argon-lib is not
     // available yet. Production conflict prediction comes from argon-core.
     return hasUnmergedFiles(repoRoot: repoRoot)
   }

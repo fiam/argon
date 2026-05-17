@@ -8,6 +8,9 @@
 #define ARGON_DIFF_LINE_CONTEXT 0
 #define ARGON_DIFF_LINE_ADDED 1
 #define ARGON_DIFF_LINE_REMOVED 2
+#define ARGON_MERGEABILITY_STATUS_UNKNOWN 0
+#define ARGON_MERGEABILITY_STATUS_CLEAN 1
+#define ARGON_MERGEABILITY_STATUS_CONFLICTED 2
 
 typedef struct ArgonStyledSpan {
   char *text;
@@ -106,6 +109,21 @@ typedef struct ArgonDiff {
   size_t file_count;
 } ArgonDiff;
 
+typedef struct ArgonWorkspaceBranchTopology {
+  uint32_t ahead_count;
+  uint32_t behind_count;
+} ArgonWorkspaceBranchTopology;
+
+typedef struct ArgonWorkspaceMergeability {
+  uint32_t status;
+  char *base_ref;
+  char *head_ref;
+  char *merge_base_sha;
+  bool topology_present;
+  ArgonWorkspaceBranchTopology topology;
+  char *detail;
+} ArgonWorkspaceMergeability;
+
 char *argonlib_resolve_interactive_path(
   const ArgonEnvironmentEntry *entries,
   size_t entry_count,
@@ -158,6 +176,15 @@ char *argonlib_diff_fingerprint(
   const char *merge_base_sha,
   char **error_out
 );
+
+ArgonWorkspaceMergeability *argonlib_workspace_mergeability(
+  const char *repo_root,
+  const char *base_ref,
+  const char *head_ref,
+  char **error_out
+);
+
+void argonlib_workspace_mergeability_free(ArgonWorkspaceMergeability *value);
 
 void argonlib_string_free(char *value);
 

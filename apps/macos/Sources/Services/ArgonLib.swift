@@ -4,6 +4,26 @@ import Foundation
 enum ArgonLib {
   static let shellStartupPathResolvedEnvironmentKey = "ARGON_SHELL_STARTUP_PATH_RESOLVED"
 
+  struct WorkspaceMergeability: Sendable {
+    let status: WorkspaceMergeabilityStatus
+    let baseRef: String?
+    let headRef: String?
+    let mergeBaseSha: String?
+    let topology: WorkspaceBranchTopology?
+    let detail: String?
+  }
+
+  enum WorkspaceMergeabilityStatus: Sendable {
+    case unknown
+    case clean
+    case conflicted
+  }
+
+  struct WorkspaceBranchTopology: Equatable, Sendable {
+    let aheadCount: Int
+    let behindCount: Int
+  }
+
   enum ArgonLibError: LocalizedError {
     case operationFailed(String)
 
@@ -225,6 +245,63 @@ enum ArgonLib {
     return String(cString: response)
   }
 
+  static func workspaceMergeability(
+    repoRoot: String,
+    baseRef: String? = nil,
+    headRef: String? = nil
+  ) throws -> WorkspaceMergeability {
+    var errorPointer: UnsafeMutablePointer<CChar>?
+    let response = repoRoot.withCString { repoRootPointer in
+      withOptionalCString(baseRef) { baseRefPointer in
+        withOptionalCString(headRef) { headRefPointer in
+          argonlib_workspace_mergeability(
+            repoRootPointer,
+            baseRefPointer,
+            headRefPointer,
+            &errorPointer
+          )
+        }
+      }
+    }
+
+    guard let response else {
+      throw makeError(errorPointer, fallback: "Failed to inspect workspace mergeability")
+    }
+    defer { argonlib_workspace_mergeability_free(response) }
+
+    return makeWorkspaceMergeability(response.pointee)
+  }
+
+  private static func makeWorkspaceMergeability(
+    _ mergeability: ArgonWorkspaceMergeability
+  ) -> WorkspaceMergeability {
+    WorkspaceMergeability(
+      status: makeWorkspaceMergeabilityStatus(mergeability.status),
+      baseRef: optionalString(from: mergeability.base_ref),
+      headRef: optionalString(from: mergeability.head_ref),
+      mergeBaseSha: optionalString(from: mergeability.merge_base_sha),
+      topology: mergeability.topology_present
+        ? WorkspaceBranchTopology(
+          aheadCount: Int(mergeability.topology.ahead_count),
+          behindCount: Int(mergeability.topology.behind_count)
+        ) : nil,
+      detail: optionalString(from: mergeability.detail)
+    )
+  }
+
+  private static func makeWorkspaceMergeabilityStatus(
+    _ status: UInt32
+  ) -> WorkspaceMergeabilityStatus {
+    switch status {
+    case UInt32(ARGON_MERGEABILITY_STATUS_CLEAN):
+      .clean
+    case UInt32(ARGON_MERGEABILITY_STATUS_CONFLICTED):
+      .conflicted
+    default:
+      .unknown
+    }
+  }
+
   private static func makeFile(_ file: ArgonHighlightedFile) -> FileDiff {
     let hunks = makeArray(file.unified_hunks, count: file.unified_hunk_count) { hunk in
       DiffHunk(
@@ -347,6 +424,16 @@ enum ArgonLib {
   private static func optionalString(from pointer: UnsafeMutablePointer<CChar>?) -> String? {
     guard let pointer else { return nil }
     return String(cString: pointer)
+  }
+
+  private static func withOptionalCString<Result>(
+    _ value: String?,
+    _ body: (UnsafePointer<CChar>?) -> Result
+  ) -> Result {
+    guard let value else {
+      return body(nil)
+    }
+    return value.withCString(body)
   }
 
   private static func makeError(
