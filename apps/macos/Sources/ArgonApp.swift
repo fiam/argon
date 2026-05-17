@@ -52,9 +52,6 @@ struct ArgonApp: App {
           .task {
             terminalAttentionNotifier.bind(workspaceWindowRegistry: workspaceWindowRegistry)
           }
-          .task {
-            WindowCloseShortcutRetargeter.install()
-          }
       }
     }
     .defaultSize(
@@ -92,6 +89,7 @@ struct ArgonApp: App {
         commandContext: commandContext,
         workspaceWindowRegistry: workspaceWindowRegistry
       )
+      WorkspaceCloseWindowCommands()
       WorkspaceWindowCommands()
       WorkspaceWorktreeCommands(
         commandContext: commandContext,
@@ -197,9 +195,6 @@ struct ArgonApp: App {
     .task {
       terminalAttentionNotifier.bind(workspaceWindowRegistry: workspaceWindowRegistry)
     }
-    .task {
-      WindowCloseShortcutRetargeter.install()
-    }
   }
 
   @ViewBuilder
@@ -217,9 +212,6 @@ struct ArgonApp: App {
       )
       .task(id: savedAgents.profiles) {
         agentAvailability.refresh(for: savedAgents.profiles)
-      }
-      .task {
-        WindowCloseShortcutRetargeter.install()
       }
   }
 }
@@ -251,6 +243,18 @@ private struct AppUpdateCommands: Commands {
         appUpdateController.checkForUpdates()
       }
       .disabled(!appUpdateController.canCheckForUpdates)
+    }
+  }
+}
+
+private struct WorkspaceCloseWindowCommands: Commands {
+  var body: some Commands {
+    CommandGroup(replacing: .saveItem) {
+      Button("Close Window") {
+        (NSApp.keyWindow ?? NSApp.mainWindow)?.performClose(nil)
+      }
+      .keyboardShortcut("w", modifiers: [.command, .shift])
+      .disabled(NSApp.keyWindow == nil && NSApp.mainWindow == nil)
     }
   }
 }
