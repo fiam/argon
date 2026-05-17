@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import Argon
@@ -29,5 +30,28 @@ struct ArgonLibTests {
     } catch {
       #expect(String(describing: error).contains("invalid session id"))
     }
+  }
+
+  @Test("diff APIs return empty values for a missing repo root")
+  func diffAPIsReturnEmptyValuesForMissingRepoRoot() throws {
+    let missingRepo = FileManager.default.temporaryDirectory
+      .appendingPathComponent("argon-missing-\(UUID().uuidString)")
+
+    let files = try ArgonLib.diff(
+      repoRoot: missingRepo.path,
+      mode: .uncommitted,
+      baseRef: "HEAD",
+      headRef: "WORKTREE",
+      mergeBaseSha: "HEAD"
+    )
+    let fingerprint = try ArgonLib.diffFingerprint(
+      repoRoot: missingRepo.path,
+      mode: .uncommitted,
+      headRef: "WORKTREE",
+      mergeBaseSha: "HEAD"
+    )
+
+    #expect(files.isEmpty)
+    #expect(fingerprint.isEmpty)
   }
 }

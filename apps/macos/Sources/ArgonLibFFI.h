@@ -70,6 +70,42 @@ typedef struct ArgonEnvironmentEntry {
   const char *value;
 } ArgonEnvironmentEntry;
 
+typedef struct ArgonDiffLine {
+  uint32_t kind;
+  bool old_line_present;
+  uint32_t old_line;
+  bool new_line_present;
+  uint32_t new_line;
+  char *content;
+} ArgonDiffLine;
+
+typedef struct ArgonDiffHunk {
+  char *header;
+  uint32_t old_start;
+  uint32_t old_line_count;
+  uint32_t new_start;
+  uint32_t new_line_count;
+  ArgonDiffLine *lines;
+  size_t line_count;
+} ArgonDiffHunk;
+
+typedef struct ArgonDiffFile {
+  char *old_path;
+  char *new_path;
+  ArgonDiffHunk *hunks;
+  size_t hunk_count;
+  size_t added_count;
+  size_t removed_count;
+} ArgonDiffFile;
+
+typedef struct ArgonDiff {
+  char *base_ref;
+  char *head_ref;
+  char *merge_base_sha;
+  ArgonDiffFile *files;
+  size_t file_count;
+} ArgonDiff;
+
 char *argonlib_resolve_interactive_path(
   const ArgonEnvironmentEntry *entries,
   size_t entry_count,
@@ -92,7 +128,36 @@ ArgonHighlightedDiff *argonlib_highlight_diff_for_session(
   char **error_out
 );
 
+ArgonHighlightedDiff *argonlib_highlight_diff_for_target(
+  const char *repo_root,
+  const char *mode,
+  const char *base_ref,
+  const char *head_ref,
+  const char *merge_base_sha,
+  const char *theme,
+  char **error_out
+);
+
 void argonlib_highlighted_diff_free(ArgonHighlightedDiff *value);
+
+ArgonDiff *argonlib_build_diff(
+  const char *repo_root,
+  const char *mode,
+  const char *base_ref,
+  const char *head_ref,
+  const char *merge_base_sha,
+  char **error_out
+);
+
+void argonlib_diff_free(ArgonDiff *value);
+
+char *argonlib_diff_fingerprint(
+  const char *repo_root,
+  const char *mode,
+  const char *head_ref,
+  const char *merge_base_sha,
+  char **error_out
+);
 
 void argonlib_string_free(char *value);
 

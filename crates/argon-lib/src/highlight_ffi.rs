@@ -177,6 +177,47 @@ pub unsafe extern "C" fn argonlib_highlight_diff_for_session(
     }
 }
 
+/// Build and highlight a review diff for an explicit target.
+///
+/// # Safety
+///
+/// `repo_root`, `mode`, `base_ref`, `head_ref`, `merge_base_sha`, and `theme`
+/// must be null or point to valid NUL-terminated C strings. The returned
+/// pointer must be released with `argonlib_highlighted_diff_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn argonlib_highlight_diff_for_target(
+    repo_root: *const c_char,
+    mode: *const c_char,
+    base_ref: *const c_char,
+    head_ref: *const c_char,
+    merge_base_sha: *const c_char,
+    theme: *const c_char,
+    error_out: *mut *mut c_char,
+) -> *mut ArgonHighlightedDiff {
+    unsafe {
+        clear_error(error_out);
+    }
+
+    let theme = string_from_c_pointer(theme)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_THEME.to_string());
+
+    match crate::diff_ffi::build_diff(repo_root, mode, base_ref, head_ref, merge_base_sha).map(
+        |diff| {
+            let highlighted = highlight_diff(&diff, &theme);
+            ArgonHighlightedDiff::from_core(&diff, &highlighted)
+        },
+    ) {
+        Ok(diff) => Box::into_raw(Box::new(diff)),
+        Err(error) => {
+            unsafe {
+                set_error(error_out, error);
+            }
+            std::ptr::null_mut()
+        }
+    }
+}
+
 /// Free a highlighted diff response returned by `argonlib_highlight_diff_for_session`.
 ///
 /// # Safety

@@ -113,6 +113,67 @@ pub fn build_review_diff(
     })
 }
 
+pub fn diff_fingerprint(
+    repo_root: &Path,
+    mode: ReviewMode,
+    head_ref: &str,
+    merge_base_sha: &str,
+) -> Result<String, DiffError> {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(repo_root);
+    command.args(["diff", "--stat", "--no-color"]);
+    let include_untracked = match mode {
+        ReviewMode::Branch => {
+            command.arg(merge_base_sha);
+            let head_is_checked_out = head_ref_points_to_current_head(repo_root, head_ref)?;
+            if !head_is_checked_out {
+                command.arg(head_ref);
+            }
+            head_is_checked_out
+        }
+        ReviewMode::Uncommitted => {
+            command.arg("HEAD");
+            true
+        }
+    };
+
+    let output = command.output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(DiffError::Git(stderr));
+    }
+
+    let mut fingerprint = String::from_utf8(output.stdout)?;
+    if include_untracked {
+        append_untracked_fingerprint(repo_root, &mut fingerprint)?;
+    }
+    Ok(fingerprint)
+}
+
+fn append_untracked_fingerprint(
+    repo_root: &Path,
+    fingerprint: &mut String,
+) -> Result<(), DiffError> {
+    let files = git_capture(repo_root, &["ls-files", "--others", "--exclude-standard"])?;
+    let mut wrote_header = false;
+    for file in files.lines().filter(|line| !line.trim().is_empty()) {
+        if !wrote_header {
+            fingerprint.push_str("\n__untracked__");
+            wrote_header = true;
+        }
+        let size = repo_root
+            .join(file)
+            .metadata()
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        fingerprint.push('\n');
+        fingerprint.push_str(file);
+        fingerprint.push(':');
+        fingerprint.push_str(&size.to_string());
+    }
+    Ok(())
+}
+
 fn untracked_diff_payload(repo_root: &Path) -> Result<String, DiffError> {
     let files = git_capture(repo_root, &["ls-files", "--others", "--exclude-standard"])?;
     let mut payload = String::new();

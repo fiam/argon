@@ -280,28 +280,19 @@ final class AppState {
     let updatedSession: ReviewSession?
   }
 
-  /// Try to load highlighted diff from argon-lib; fall back to raw git diff if unavailable.
   nonisolated private static func loadFiles(
-    sessionId: String?, repoRoot: String, mode: ReviewMode,
+    repoRoot: String, mode: ReviewMode,
     baseRef: String, headRef: String, mergeBaseSha: String,
     theme: String
-  ) -> [FileDiff] {
-    if let sessionId {
-      if let files = try? ArgonLib.highlightedDiff(
-        sessionId: sessionId, repoRoot: repoRoot, theme: theme
-      ),
-        !files.isEmpty
-      {
-        return files
-      }
-    }
-    // Fallback to raw git diff
-    let rawDiff = GitService.diff(
-      repoRoot: repoRoot, mode: mode,
-      baseRef: baseRef, headRef: headRef,
-      mergeBaseSha: mergeBaseSha
+  ) throws -> [FileDiff] {
+    try ArgonLib.highlightedDiff(
+      repoRoot: repoRoot,
+      mode: mode,
+      baseRef: baseRef,
+      headRef: headRef,
+      mergeBaseSha: mergeBaseSha,
+      theme: theme
     )
-    return DiffParser.parse(rawDiff)
   }
 
   nonisolated private static func loadContextSources(
@@ -310,7 +301,8 @@ final class AppState {
     mode: ReviewMode,
     baseRef: String,
     headRef: String,
-    mergeBaseSha: String
+    mergeBaseSha: String,
+    theme: String
   ) -> [String: DiffContextSource] {
     GitService.contextSources(
       for: files,
@@ -318,7 +310,8 @@ final class AppState {
       mode: mode,
       baseRef: baseRef,
       headRef: headRef,
-      mergeBaseSha: mergeBaseSha
+      mergeBaseSha: mergeBaseSha,
+      theme: theme
     )
   }
 
@@ -327,8 +320,8 @@ final class AppState {
   ) -> Result<LoadData, Error> {
     do {
       let session = try SessionLoader.loadSession(sessionId: sessionId, repoRoot: repoRoot)
-      let files = loadFiles(
-        sessionId: sessionId, repoRoot: repoRoot,
+      let files = try loadFiles(
+        repoRoot: repoRoot,
         mode: session.mode, baseRef: session.baseRef,
         headRef: session.headRef, mergeBaseSha: session.mergeBaseSha,
         theme: theme
@@ -339,7 +332,8 @@ final class AppState {
         mode: session.mode,
         baseRef: session.baseRef,
         headRef: session.headRef,
-        mergeBaseSha: session.mergeBaseSha
+        mergeBaseSha: session.mergeBaseSha,
+        theme: theme
       )
       let detectedTarget = GitService.resolveWorkspaceTarget(
         repoRoot: repoRoot,
@@ -386,19 +380,25 @@ final class AppState {
       return .failure(.failed("Could not resolve \(mode.rawValue) target"))
     }
 
-    let files = loadFiles(
-      sessionId: sessionId, repoRoot: repoRoot,
-      mode: target.mode, baseRef: target.baseRef,
-      headRef: target.headRef, mergeBaseSha: target.mergeBaseSha,
-      theme: theme
-    )
+    let files: [FileDiff]
+    do {
+      files = try loadFiles(
+        repoRoot: repoRoot,
+        mode: target.mode, baseRef: target.baseRef,
+        headRef: target.headRef, mergeBaseSha: target.mergeBaseSha,
+        theme: theme
+      )
+    } catch {
+      return .failure(.failed(error.localizedDescription))
+    }
     let contextSources = loadContextSources(
       files: files,
       repoRoot: repoRoot,
       mode: target.mode,
       baseRef: target.baseRef,
       headRef: target.headRef,
-      mergeBaseSha: target.mergeBaseSha
+      mergeBaseSha: target.mergeBaseSha,
+      theme: theme
     )
 
     var updatedSession: ReviewSession?
@@ -600,7 +600,6 @@ final class AppState {
     let base = activeBaseRef
     let head = activeHeadRef
     let mergeBase = activeMergeBaseSha
-    let sid = sessionId
     let theme = highlightTheme
 
     let fingerprint = await Task.detached {
@@ -612,14 +611,15 @@ final class AppState {
 
     if fingerprint != lastDiffFingerprint && !lastDiffFingerprint.isEmpty {
       // Diff changed -- refresh in background
-      let newFiles = await Task.detached {
-        Self.loadFiles(
-          sessionId: sid, repoRoot: repoRoot,
+      let refreshedFiles = await Task.detached {
+        try? Self.loadFiles(
+          repoRoot: repoRoot,
           mode: mode, baseRef: base,
           headRef: head, mergeBaseSha: mergeBase,
           theme: theme
         )
       }.value
+      guard let newFiles = refreshedFiles else { return }
       let newContextSources = await Task.detached {
         Self.loadContextSources(
           files: newFiles,
@@ -627,7 +627,8 @@ final class AppState {
           mode: mode,
           baseRef: base,
           headRef: head,
-          mergeBaseSha: mergeBase
+          mergeBaseSha: mergeBase,
+          theme: theme
         )
       }.value
       diffContextSources = newContextSources

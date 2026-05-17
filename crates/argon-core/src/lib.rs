@@ -13,7 +13,7 @@ pub use agent_control::{
 };
 pub use diff::{
     DiffError, DiffHunk, DiffLine, DiffLineKind, FileDiff, ReviewDiff, anchor_at,
-    anchor_for_diff_line, build_review_diff, parse_unified_diff,
+    anchor_for_diff_line, build_review_diff, diff_fingerprint, parse_unified_diff,
 };
 pub use highlight::{
     HighlightedDiff, HighlightedFileDiff, HighlightedHunk, HighlightedLine, SideBySidePair,

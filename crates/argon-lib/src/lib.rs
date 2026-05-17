@@ -8,6 +8,7 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod diff_ffi;
 mod highlight_ffi;
 
 pub const SHELL_STARTUP_PATH_RESOLVED_ENV: &str = "ARGON_SHELL_STARTUP_PATH_RESOLVED";
@@ -246,6 +247,17 @@ pub(crate) fn string_from_c_pointer(value: *const c_char) -> Option<String> {
             .to_string_lossy()
             .into_owned(),
     )
+}
+
+pub(crate) fn review_mode_from_c_pointer(
+    mode: *const c_char,
+) -> Result<argon_core::ReviewMode, String> {
+    match string_from_c_pointer(mode).as_deref() {
+        Some("branch") => Ok(argon_core::ReviewMode::Branch),
+        Some("uncommitted") => Ok(argon_core::ReviewMode::Uncommitted),
+        Some(value) => Err(format!("invalid review mode: {value}")),
+        None => Err("review mode is required".to_string()),
+    }
 }
 
 unsafe fn environment_from_entries(

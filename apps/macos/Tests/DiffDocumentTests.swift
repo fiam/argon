@@ -163,6 +163,10 @@ struct DiffDocumentTests {
     return FileDiff(oldPath: path, newPath: path, hunks: [hunk])
   }
 
+  private func contextLines(_ lines: [String]) -> [[StyledSpan]] {
+    lines.map { [StyledSpan(text: $0)] }
+  }
+
   @Test("builder inserts omitted context rows for hidden unchanged lines")
   func insertsOmittedContextRows() {
     let line = DiffLine(kind: .added, content: "changed", oldLine: nil, newLine: 5)
@@ -177,7 +181,7 @@ struct DiffDocumentTests {
     let file = FileDiff(oldPath: "Sources/Foo.swift", newPath: "Sources/Foo.swift", hunks: [hunk])
     let contextSource = DiffContextSource(
       side: .new,
-      lines: ["1", "2", "3", "4", "changed", "6", "7"]
+      lines: contextLines(["1", "2", "3", "4", "changed", "6", "7"])
     )
 
     let document = DiffDocumentBuilder.build(
@@ -226,7 +230,7 @@ struct DiffDocumentTests {
     let file = FileDiff(oldPath: "Sources/Foo.swift", newPath: "Sources/Foo.swift", hunks: [hunk])
     let contextSource = DiffContextSource(
       side: .new,
-      lines: ["1", "2", "3", "4", "changed", "6", "7"]
+      lines: contextLines(["1", "2", "3", "4", "changed", "6", "7"])
     )
     let topGapAnchor = DiffAnchor.omittedContext(fileID: file.id, ordinal: 0)
 

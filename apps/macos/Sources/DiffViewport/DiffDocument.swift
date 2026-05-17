@@ -763,7 +763,7 @@ enum DiffDocumentBuilder {
 
     let endIndex = min(sourceIndex + count, contextSource.lines.count)
 
-    return contextSource.lines[sourceIndex..<endIndex].enumerated().map { offset, content in
+    return contextSource.lines[sourceIndex..<endIndex].enumerated().map { offset, spans in
       let oldLine = UInt32(startOldLine + offset)
       let newLine = UInt32(startNewLine + offset)
       return DiffLine(
@@ -774,7 +774,7 @@ enum DiffDocumentBuilder {
           newLine: newLine
         ),
         kind: .context,
-        content: content,
+        spans: spans,
         oldLine: oldLine,
         newLine: newLine
       )

@@ -120,6 +120,111 @@ enum ArgonLib {
     return makeArray(response.pointee.files, count: response.pointee.file_count, makeFile)
   }
 
+  static func highlightedDiff(
+    repoRoot: String,
+    mode: ReviewMode,
+    baseRef: String,
+    headRef: String,
+    mergeBaseSha: String,
+    theme: String
+  ) throws -> [FileDiff] {
+    var errorPointer: UnsafeMutablePointer<CChar>?
+    let response = repoRoot.withCString { repoRootPointer in
+      mode.rawValue.withCString { modePointer in
+        baseRef.withCString { baseRefPointer in
+          headRef.withCString { headRefPointer in
+            mergeBaseSha.withCString { mergeBaseShaPointer in
+              theme.withCString { themePointer in
+                argonlib_highlight_diff_for_target(
+                  repoRootPointer,
+                  modePointer,
+                  baseRefPointer,
+                  headRefPointer,
+                  mergeBaseShaPointer,
+                  themePointer,
+                  &errorPointer
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+
+    guard let response else {
+      throw makeError(errorPointer, fallback: "Failed to highlight diff")
+    }
+    defer { argonlib_highlighted_diff_free(response) }
+
+    return makeArray(response.pointee.files, count: response.pointee.file_count, makeFile)
+  }
+
+  static func diff(
+    repoRoot: String,
+    mode: ReviewMode,
+    baseRef: String,
+    headRef: String,
+    mergeBaseSha: String
+  ) throws -> [FileDiff] {
+    var errorPointer: UnsafeMutablePointer<CChar>?
+    let response = repoRoot.withCString { repoRootPointer in
+      mode.rawValue.withCString { modePointer in
+        baseRef.withCString { baseRefPointer in
+          headRef.withCString { headRefPointer in
+            mergeBaseSha.withCString { mergeBaseShaPointer in
+              argonlib_build_diff(
+                repoRootPointer,
+                modePointer,
+                baseRefPointer,
+                headRefPointer,
+                mergeBaseShaPointer,
+                &errorPointer
+              )
+            }
+          }
+        }
+      }
+    }
+
+    guard let response else {
+      throw makeError(errorPointer, fallback: "Failed to build diff")
+    }
+    defer { argonlib_diff_free(response) }
+
+    return makeArray(response.pointee.files, count: response.pointee.file_count, makeFile)
+  }
+
+  static func diffFingerprint(
+    repoRoot: String,
+    mode: ReviewMode,
+    headRef: String,
+    mergeBaseSha: String
+  ) throws -> String {
+    var errorPointer: UnsafeMutablePointer<CChar>?
+    let response = repoRoot.withCString { repoRootPointer in
+      mode.rawValue.withCString { modePointer in
+        headRef.withCString { headRefPointer in
+          mergeBaseSha.withCString { mergeBaseShaPointer in
+            argonlib_diff_fingerprint(
+              repoRootPointer,
+              modePointer,
+              headRefPointer,
+              mergeBaseShaPointer,
+              &errorPointer
+            )
+          }
+        }
+      }
+    }
+
+    guard let response else {
+      throw makeError(errorPointer, fallback: "Failed to build diff fingerprint")
+    }
+    defer { argonlib_string_free(response) }
+
+    return String(cString: response)
+  }
+
   private static func makeFile(_ file: ArgonHighlightedFile) -> FileDiff {
     let hunks = makeArray(file.unified_hunks, count: file.unified_hunk_count) { hunk in
       DiffHunk(
@@ -145,6 +250,34 @@ enum ArgonLib {
       sideBySide: sideBySide,
       addedCount: Int(file.added_count),
       removedCount: Int(file.removed_count)
+    )
+  }
+
+  private static func makeFile(_ file: ArgonDiffFile) -> FileDiff {
+    FileDiff(
+      oldPath: string(from: file.old_path),
+      newPath: string(from: file.new_path),
+      hunks: makeArray(file.hunks, count: file.hunk_count) { hunk in
+        DiffHunk(
+          header: string(from: hunk.header),
+          oldStart: hunk.old_start,
+          oldLineCount: hunk.old_line_count,
+          newStart: hunk.new_start,
+          newLineCount: hunk.new_line_count,
+          lines: makeArray(hunk.lines, count: hunk.line_count, makeLine)
+        )
+      },
+      addedCount: Int(file.added_count),
+      removedCount: Int(file.removed_count)
+    )
+  }
+
+  private static func makeLine(_ line: ArgonDiffLine) -> DiffLine {
+    DiffLine(
+      kind: makeLineKind(line.kind),
+      content: string(from: line.content),
+      oldLine: line.old_line_present ? line.old_line : nil,
+      newLine: line.new_line_present ? line.new_line : nil
     )
   }
 

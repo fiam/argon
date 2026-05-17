@@ -74,7 +74,7 @@ struct GitServiceTests {
     try "hidden\n".write(
       to: repo.appendingPathComponent("ignored.txt"), atomically: true, encoding: .utf8)
 
-    let diff = GitService.diff(
+    let files = try ArgonLib.diff(
       repoRoot: repo.path,
       mode: .uncommitted,
       baseRef: "HEAD",
@@ -82,9 +82,9 @@ struct GitServiceTests {
       mergeBaseSha: try git(repo, ["rev-parse", "HEAD"])
     )
 
-    #expect(diff.contains("new.txt"))
-    #expect(diff.contains("visible"))
-    #expect(!diff.contains("ignored.txt"))
+    #expect(files.contains { $0.displayPath == "new.txt" })
+    #expect(files.flatMap(\.hunks).flatMap(\.lines).contains { $0.content == "visible" })
+    #expect(!files.contains { $0.displayPath == "ignored.txt" })
   }
 
   @Test("context sources use working tree for uncommitted diffs")
@@ -110,11 +110,12 @@ struct GitServiceTests {
       mode: .uncommitted,
       baseRef: "HEAD",
       headRef: "WORKTREE",
-      mergeBaseSha: "HEAD"
+      mergeBaseSha: "HEAD",
+      theme: "base16-ocean.dark"
     )
 
     #expect(sources[file.id]?.side == .new)
-    #expect(sources[file.id]?.lines == ["one", "working"])
+    #expect(sources[file.id]?.lines.map { $0.map(\.text).joined() } == ["one", "working"])
   }
 
   @Test("resolveWorkspaceTarget uses shared git common dir and selected worktree")

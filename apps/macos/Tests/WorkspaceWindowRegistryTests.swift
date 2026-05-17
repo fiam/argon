@@ -542,7 +542,19 @@ struct WorkspaceWindowRegistryTests {
 
     registry.register(window: window, workspaceState: state, repoRoot: target.repoRoot)
     registry.unregister(window: window, repoRoot: target.repoRoot)
-    try? await Task.sleep(for: .milliseconds(30))
+    #expect(
+      await waitUntil {
+        guard let data = defaults.data(forKey: suiteName),
+          let snapshots = try? JSONDecoder().decode(
+            [PersistedWorkspaceWindowSnapshot].self,
+            from: data
+          )
+        else {
+          return false
+        }
+        return snapshots.isEmpty
+      }
+    )
 
     let restoredRegistry = WorkspaceWindowRegistry(userDefaults: defaults, storageKey: suiteName)
     var openedTargets: [WorkspaceTarget] = []

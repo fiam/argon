@@ -519,14 +519,14 @@ enum GitService {
       return []
     }
 
-    let diffOutput = diff(
-      repoRoot: repoRoot,
-      mode: target.mode,
-      baseRef: target.baseRef,
-      headRef: target.headRef,
-      mergeBaseSha: target.mergeBaseSha
-    )
-    return DiffParser.parse(diffOutput)
+    return
+      (try? ArgonLib.diff(
+        repoRoot: repoRoot,
+        mode: target.mode,
+        baseRef: target.baseRef,
+        headRef: target.headRef,
+        mergeBaseSha: target.mergeBaseSha
+      )) ?? []
   }
 
   static func hasConflicts(repoRoot: String, predictsMergeConflicts: Bool = true) -> Bool {
@@ -621,91 +621,12 @@ enum GitService {
   static func diffFingerprint(
     repoRoot: String, mode: ReviewMode, baseRef: String, headRef: String, mergeBaseSha: String
   ) -> String {
-    // Tracked changes stat
-    var args = ["-C", repoRoot, "diff", "--stat", "--no-color"]
-    var includeUntracked = true
-    switch mode {
-    case .branch:
-      args.append(mergeBaseSha)
-      if let currentHead = resolveRef(repoRoot: repoRoot, ref: "HEAD"),
-        let targetHead = resolveRef(repoRoot: repoRoot, ref: headRef),
-        currentHead != targetHead
-      {
-        args.append(headRef)
-        includeUntracked = false
-      }
-    case .uncommitted:
-      args.append("HEAD")
-    }
-    var result = runGit(args)
-
-    // Untracked files with sizes (so content changes are detected)
-    let untrackedList = includeUntracked ? untrackedFiles(repoRoot: repoRoot) : []
-    if !untrackedList.isEmpty {
-      result += "\n__untracked__"
-      let fm = FileManager.default
-      for file in untrackedList {
-        let fullPath = (repoRoot as NSString).appendingPathComponent(file)
-        let size = (try? fm.attributesOfItem(atPath: fullPath)[.size] as? Int) ?? 0
-        result += "\n\(file):\(size)"
-      }
-    }
-
-    return result
-  }
-
-  // MARK: - Diff
-
-  static func diff(
-    repoRoot: String, mode: ReviewMode, baseRef: String, headRef: String, mergeBaseSha: String
-  ) -> String {
-    var args = ["-C", repoRoot, "diff", "--no-color", "--unified=3", "--no-ext-diff"]
-    var includeUntracked = true
-
-    switch mode {
-    case .branch:
-      args.append(mergeBaseSha)
-      if let currentHead = resolveRef(repoRoot: repoRoot, ref: "HEAD"),
-        let targetHead = resolveRef(repoRoot: repoRoot, ref: headRef),
-        currentHead != targetHead
-      {
-        args.append(headRef)
-        includeUntracked = false
-      }
-    case .uncommitted:
-      args.append("HEAD")
-    }
-
-    var result = runGit(args)
-
-    // Append untracked (non-ignored) files as diffs against /dev/null
-    let untrackedFiles = includeUntracked ? untrackedFiles(repoRoot: repoRoot) : []
-    for file in untrackedFiles {
-      let fileDiff = runGit([
-        "-C", repoRoot, "diff", "--no-color", "--unified=3", "--no-ext-diff",
-        "--no-index", "/dev/null", file,
-      ])
-      if !fileDiff.isEmpty {
-        if !result.isEmpty && !result.hasSuffix("\n") {
-          result += "\n"
-        }
-        result += fileDiff
-      }
-    }
-
-    return result
-  }
-
-  /// Returns untracked, non-ignored files relative to the repo root.
-  private static func untrackedFiles(repoRoot: String) -> [String] {
-    let output = runGit([
-      "-C", repoRoot, "ls-files", "--others", "--exclude-standard",
-    ])
-    return
-      output
-      .split(separator: "\n")
-      .map(String.init)
-      .filter { !$0.isEmpty }
+    (try? ArgonLib.diffFingerprint(
+      repoRoot: repoRoot,
+      mode: mode,
+      headRef: headRef,
+      mergeBaseSha: mergeBaseSha
+    )) ?? ""
   }
 
   private static func diffStatGraph(added: Int, removed: Int) -> String {
@@ -802,20 +723,14 @@ enum GitService {
     return url
   }
 
-  static func diff(session: ReviewSession) -> String {
-    diff(
-      repoRoot: session.repoRoot, mode: session.mode,
-      baseRef: session.baseRef, headRef: session.headRef,
-      mergeBaseSha: session.mergeBaseSha)
-  }
-
   static func contextSources(
     for files: [FileDiff],
     repoRoot: String,
     mode: ReviewMode,
     baseRef: String,
     headRef: String,
-    mergeBaseSha: String
+    mergeBaseSha: String,
+    theme: String
   ) -> [String: DiffContextSource] {
     var result: [String: DiffContextSource] = [:]
     let isHeadCheckedOut: Bool =
@@ -835,7 +750,8 @@ enum GitService {
         mode: mode,
         headRef: headRef,
         mergeBaseSha: mergeBaseSha,
-        isHeadCheckedOut: isHeadCheckedOut
+        isHeadCheckedOut: isHeadCheckedOut,
+        theme: theme
       ) {
         result[file.id] = source
       }
@@ -1241,7 +1157,8 @@ enum GitService {
     mode: ReviewMode,
     headRef: String,
     mergeBaseSha: String,
-    isHeadCheckedOut: Bool
+    isHeadCheckedOut: Bool,
+    theme: String
   ) -> DiffContextSource? {
     if file.newPath != "/dev/null",
       let lines = newSideContextLines(
@@ -1249,7 +1166,8 @@ enum GitService {
         filePath: file.newPath,
         mode: mode,
         headRef: headRef,
-        isHeadCheckedOut: isHeadCheckedOut
+        isHeadCheckedOut: isHeadCheckedOut,
+        theme: theme
       )
     {
       return DiffContextSource(side: .new, lines: lines)
@@ -1260,7 +1178,8 @@ enum GitService {
         repoRoot: repoRoot,
         filePath: file.oldPath,
         mode: mode,
-        mergeBaseSha: mergeBaseSha
+        mergeBaseSha: mergeBaseSha,
+        theme: theme
       )
     {
       return DiffContextSource(side: .old, lines: lines)
@@ -1274,16 +1193,17 @@ enum GitService {
     filePath: String,
     mode: ReviewMode,
     headRef: String,
-    isHeadCheckedOut: Bool
-  ) -> [String]? {
+    isHeadCheckedOut: Bool,
+    theme: String
+  ) -> [[StyledSpan]]? {
     switch mode {
     case .uncommitted:
-      workingTreeLines(repoRoot: repoRoot, filePath: filePath)
+      workingTreeHighlightedLines(repoRoot: repoRoot, filePath: filePath, theme: theme)
     case .branch:
       if isHeadCheckedOut {
-        workingTreeLines(repoRoot: repoRoot, filePath: filePath)
+        workingTreeHighlightedLines(repoRoot: repoRoot, filePath: filePath, theme: theme)
       } else {
-        blobLines(repoRoot: repoRoot, ref: headRef, filePath: filePath)
+        blobHighlightedLines(repoRoot: repoRoot, ref: headRef, filePath: filePath, theme: theme)
       }
     }
   }
@@ -1292,8 +1212,9 @@ enum GitService {
     repoRoot: String,
     filePath: String,
     mode: ReviewMode,
-    mergeBaseSha: String
-  ) -> [String]? {
+    mergeBaseSha: String,
+    theme: String
+  ) -> [[StyledSpan]]? {
     let ref: String =
       switch mode {
       case .branch:
@@ -1302,27 +1223,40 @@ enum GitService {
         "HEAD"
       }
 
-    return blobLines(repoRoot: repoRoot, ref: ref, filePath: filePath)
+    return blobHighlightedLines(repoRoot: repoRoot, ref: ref, filePath: filePath, theme: theme)
   }
 
-  private static func workingTreeLines(repoRoot: String, filePath: String) -> [String]? {
+  private static func workingTreeHighlightedLines(
+    repoRoot: String,
+    filePath: String,
+    theme: String
+  ) -> [[StyledSpan]]? {
     let url = URL(fileURLWithPath: repoRoot).appendingPathComponent(filePath)
     guard let data = try? Data(contentsOf: url),
       let contents = String(data: data, encoding: .utf8)
     else {
       return nil
     }
-    return splitLines(contents)
+    return highlightedLines(contents, path: filePath, theme: theme)
   }
 
-  private static func blobLines(repoRoot: String, ref: String, filePath: String) -> [String]? {
+  private static func blobHighlightedLines(
+    repoRoot: String,
+    ref: String,
+    filePath: String,
+    theme: String
+  ) -> [[StyledSpan]]? {
     let contents = runGit(["-C", repoRoot, "show", "\(ref):\(filePath)"])
     guard !contents.isEmpty else { return nil }
-    return splitLines(contents)
+    return highlightedLines(contents, path: filePath, theme: theme)
   }
 
-  private static func splitLines(_ text: String) -> [String] {
-    var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+  private static func highlightedLines(_ text: String, path: String, theme: String)
+    -> [[StyledSpan]]?
+  {
+    guard var lines = try? ArgonLib.highlightedText(text: text, path: path, theme: theme) else {
+      return nil
+    }
     if text.hasSuffix("\n"), !lines.isEmpty {
       lines.removeLast()
     }

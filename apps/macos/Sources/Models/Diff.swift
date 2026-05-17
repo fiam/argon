@@ -267,7 +267,7 @@ enum DiffContextSourceSide: String, Sendable {
 
 struct DiffContextSource: Sendable {
   let side: DiffContextSourceSide
-  let lines: [String]
+  let lines: [[StyledSpan]]
 }
 
 struct DiffContextExpansion: Equatable, Sendable {
