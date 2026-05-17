@@ -145,7 +145,7 @@ struct WorkspaceTerminalDeck: View {
         return true
       } catch {
         try? await Task.detached {
-          try ArgonCLI.closeSession(sessionId: target.sessionId, repoRoot: target.repoRoot)
+          try ArgonLib.closeSession(sessionId: target.sessionId, repoRoot: target.repoRoot)
         }.value
         workspaceState.refreshReviewSnapshot(for: target.repoRoot)
         workspaceState.errorMessage =

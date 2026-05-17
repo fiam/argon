@@ -462,7 +462,6 @@ struct ReviewerDecideArgs {
 enum DevCommands {
     Comment(DevCommentArgs),
     Decide(DevDecideArgs),
-    UpdateTarget(DevUpdateTargetArgs),
     ResolveThread(DevResolveThreadArgs),
     #[command(hide = true)]
     FakeControlAgent(FakeControlAgentArgs),
@@ -522,22 +521,6 @@ struct DevResolveThreadArgs {
     session: Uuid,
     #[arg(long)]
     thread: Uuid,
-    #[arg(long)]
-    json: bool,
-}
-
-#[derive(clap::Args, Debug)]
-struct DevUpdateTargetArgs {
-    #[arg(long)]
-    session: Uuid,
-    #[arg(long)]
-    mode: ReviewModeArg,
-    #[arg(long)]
-    base_ref: String,
-    #[arg(long)]
-    head_ref: String,
-    #[arg(long)]
-    merge_base_sha: String,
     #[arg(long)]
     json: bool,
 }
@@ -3155,17 +3138,6 @@ fn run_dev(command: DevCommands, runtime: &RuntimeOptions) -> Result<()> {
                 }
             }
             Ok(())
-        }
-        DevCommands::UpdateTarget(args) => {
-            let store = open_store_for_current_repo(runtime)?;
-            let session = store.update_session_target(
-                args.session,
-                args.mode.into(),
-                args.base_ref,
-                args.head_ref,
-                args.merge_base_sha,
-            )?;
-            print_session(CliCommand::Review, &session, args.json)
         }
         DevCommands::ResolveThread(args) => {
             let store = open_store_for_current_repo(runtime)?;

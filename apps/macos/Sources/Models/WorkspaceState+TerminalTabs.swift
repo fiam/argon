@@ -75,7 +75,7 @@ extension WorkspaceState {
       pendingReviewPreparationAfterAgentLaunch = nil
     } catch {
       try? await Task.detached {
-        try ArgonCLI.closeSession(sessionId: target.sessionId, repoRoot: target.repoRoot)
+        try ArgonLib.closeSession(sessionId: target.sessionId, repoRoot: target.repoRoot)
       }.value
       refreshReviewSnapshot(for: target.repoRoot)
       pendingReviewPreparationAfterAgentLaunch = nil

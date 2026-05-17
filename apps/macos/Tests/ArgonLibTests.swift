@@ -55,6 +55,117 @@ struct ArgonLibTests {
     #expect(fingerprint.isEmpty)
   }
 
+  @Test("review session mutations use FFI")
+  func reviewSessionMutationsUseFFI() throws {
+    let fixture = FileManager.default.temporaryDirectory
+      .appendingPathComponent("argon-review-session-\(UUID().uuidString)")
+    let repo = fixture.appendingPathComponent("repo")
+    try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+    let sessionsDirectory = SessionLoader.sessionsDirectory(repoRoot: repo.path)
+    defer {
+      try? FileManager.default.removeItem(atPath: sessionsDirectory)
+      try? FileManager.default.removeItem(at: fixture)
+    }
+
+    let target = ResolvedTarget(
+      mode: .branch,
+      baseRef: "main",
+      headRef: "feature/topic",
+      mergeBaseSha: "abc123"
+    )
+    let reviewTarget = try ArgonLib.createSession(
+      repoRoot: repo.path,
+      target: target,
+      changeSummary: "Session summary"
+    )
+    var session = try SessionLoader.loadSession(
+      sessionId: reviewTarget.sessionId,
+      repoRoot: reviewTarget.repoRoot
+    )
+    #expect(session.mode == .branch)
+    #expect(session.changeSummary == "Session summary")
+
+    try ArgonLib.addDraftComment(
+      sessionId: reviewTarget.sessionId,
+      repoRoot: reviewTarget.repoRoot,
+      message: "Fix this",
+      filePath: "README.md",
+      lineNew: 1
+    )
+    var drafts = try SessionLoader.loadDraftReview(
+      sessionId: reviewTarget.sessionId,
+      repoRoot: reviewTarget.repoRoot
+    )
+    #expect(drafts.count == 1)
+    let draftId = try #require(drafts.first?.id.uuidString)
+
+    try ArgonLib.deleteDraftComment(
+      sessionId: reviewTarget.sessionId,
+      repoRoot: reviewTarget.repoRoot,
+      draftId: draftId
+    )
+    drafts = try SessionLoader.loadDraftReview(
+      sessionId: reviewTarget.sessionId,
+      repoRoot: reviewTarget.repoRoot
+    )
+    #expect(drafts.isEmpty)
+
+    try ArgonLib.addDraftComment(
+      sessionId: reviewTarget.sessionId,
+      repoRoot: reviewTarget.repoRoot,
+      message: "Needs changes"
+    )
+    try ArgonLib.submitReview(
+      sessionId: reviewTarget.sessionId,
+      repoRoot: reviewTarget.repoRoot,
+      outcome: ReviewOutcome.changesRequested.rawValue,
+      summary: "Please revise"
+    )
+    session = try SessionLoader.loadSession(
+      sessionId: reviewTarget.sessionId,
+      repoRoot: reviewTarget.repoRoot
+    )
+    #expect(session.threads.count == 1)
+    #expect(session.decision?.outcome == .changesRequested)
+
+    let threadId = try #require(session.threads.first?.id.uuidString)
+    try ArgonLib.resolveThread(
+      sessionId: reviewTarget.sessionId,
+      repoRoot: reviewTarget.repoRoot,
+      threadId: threadId
+    )
+    session = try SessionLoader.loadSession(
+      sessionId: reviewTarget.sessionId,
+      repoRoot: reviewTarget.repoRoot
+    )
+    #expect(session.threads.first?.state == .resolved)
+
+    try ArgonLib.updateSessionTarget(
+      sessionId: reviewTarget.sessionId,
+      repoRoot: reviewTarget.repoRoot,
+      mode: ReviewMode.uncommitted.rawValue,
+      baseRef: "HEAD",
+      headRef: "WORKTREE",
+      mergeBaseSha: "def456"
+    )
+    session = try SessionLoader.loadSession(
+      sessionId: reviewTarget.sessionId,
+      repoRoot: reviewTarget.repoRoot
+    )
+    #expect(session.mode == .uncommitted)
+    #expect(session.baseRef == "HEAD")
+    #expect(session.headRef == "WORKTREE")
+    #expect(session.mergeBaseSha == "def456")
+    #expect(session.threads.isEmpty)
+
+    try ArgonLib.closeSession(sessionId: reviewTarget.sessionId, repoRoot: reviewTarget.repoRoot)
+    session = try SessionLoader.loadSession(
+      sessionId: reviewTarget.sessionId,
+      repoRoot: reviewTarget.repoRoot
+    )
+    #expect(session.status == .closed)
+  }
+
   @Test("workspaceMergeability returns branch topology")
   func workspaceMergeabilityReturnsBranchTopology() throws {
     let fixture = FileManager.default.temporaryDirectory

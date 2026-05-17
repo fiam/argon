@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 
@@ -80,13 +81,28 @@ struct SessionLoaderTests {
 
   // Mirror the SessionLoader's private methods for testing
   private func testRepoStorageKey(_ repoRoot: String) -> String {
-    let url = URL(fileURLWithPath: repoRoot)
-    let resolved = url.standardizedFileURL.path
+    let resolved = canonicalStoragePath(repoRoot)
     let name = URL(fileURLWithPath: resolved).lastPathComponent
     let sanitized = sanitizeRepoName(name)
     let repoName = sanitized.isEmpty ? "repo" : sanitized
     let hash = fnv1a64(Array(resolved.utf8))
     return "\(repoName)-\(String(format: "%016llx", hash))"
+  }
+
+  private func canonicalStoragePath(_ path: String) -> String {
+    let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
+    guard FileManager.default.fileExists(atPath: standardized) else {
+      return standardized
+    }
+    var resolved = [CChar](repeating: 0, count: Int(PATH_MAX))
+    guard realpath(standardized, &resolved) != nil else {
+      return standardized
+    }
+    let end = resolved.firstIndex(of: 0) ?? resolved.count
+    return String(
+      decoding: resolved[..<end].map { UInt8(bitPattern: $0) },
+      as: UTF8.self
+    )
   }
 
   private func sanitizeRepoName(_ name: String) -> String {

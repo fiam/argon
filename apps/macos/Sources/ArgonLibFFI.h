@@ -124,6 +124,11 @@ typedef struct ArgonWorkspaceMergeability {
   char *detail;
 } ArgonWorkspaceMergeability;
 
+typedef struct ArgonReviewTarget {
+  char *session_id;
+  char *repo_root;
+} ArgonReviewTarget;
+
 char *argonlib_resolve_interactive_path(
   const ArgonEnvironmentEntry *entries,
   size_t entry_count,
@@ -185,6 +190,82 @@ ArgonWorkspaceMergeability *argonlib_workspace_mergeability(
 );
 
 void argonlib_workspace_mergeability_free(ArgonWorkspaceMergeability *value);
+
+ArgonReviewTarget *argonlib_review_create_session(
+  const char *repo_root,
+  const char *mode,
+  const char *base_ref,
+  const char *head_ref,
+  const char *merge_base_sha,
+  const char *change_summary,
+  char **error_out
+);
+
+void argonlib_review_target_free(ArgonReviewTarget *value);
+
+bool argonlib_review_update_session_target(
+  const char *repo_root,
+  const char *session_id,
+  const char *mode,
+  const char *base_ref,
+  const char *head_ref,
+  const char *merge_base_sha,
+  char **error_out
+);
+
+bool argonlib_review_close_session(
+  const char *repo_root,
+  const char *session_id,
+  char **error_out
+);
+
+bool argonlib_review_add_draft_comment(
+  const char *repo_root,
+  const char *session_id,
+  const char *message,
+  const char *file_path,
+  bool line_new_present,
+  uint32_t line_new,
+  bool line_old_present,
+  uint32_t line_old,
+  const char *thread_id,
+  char **error_out
+);
+
+bool argonlib_review_delete_draft_comment(
+  const char *repo_root,
+  const char *session_id,
+  const char *draft_id,
+  char **error_out
+);
+
+bool argonlib_review_submit_draft_review(
+  const char *repo_root,
+  const char *session_id,
+  const char *outcome,
+  const char *summary,
+  char **error_out
+);
+
+bool argonlib_review_add_comment(
+  const char *repo_root,
+  const char *session_id,
+  const char *message,
+  const char *file_path,
+  bool line_new_present,
+  uint32_t line_new,
+  bool line_old_present,
+  uint32_t line_old,
+  const char *thread_id,
+  char **error_out
+);
+
+bool argonlib_review_resolve_thread(
+  const char *repo_root,
+  const char *session_id,
+  const char *thread_id,
+  char **error_out
+);
 
 void argonlib_string_free(char *value);
 

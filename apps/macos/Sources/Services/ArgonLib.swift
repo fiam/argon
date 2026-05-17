@@ -272,6 +272,226 @@ enum ArgonLib {
     return makeWorkspaceMergeability(response.pointee)
   }
 
+  static func createSession(
+    repoRoot: String,
+    target: ResolvedTarget? = nil,
+    changeSummary: String? = nil
+  ) throws -> ReviewTarget {
+    var errorPointer: UnsafeMutablePointer<CChar>?
+    let response = repoRoot.withCString { repoRootPointer in
+      withOptionalCString(target?.mode.rawValue) { modePointer in
+        withOptionalCString(target?.baseRef) { baseRefPointer in
+          withOptionalCString(target?.headRef) { headRefPointer in
+            withOptionalCString(target?.mergeBaseSha) { mergeBaseShaPointer in
+              withOptionalCString(changeSummary) { changeSummaryPointer in
+                argonlib_review_create_session(
+                  repoRootPointer,
+                  modePointer,
+                  baseRefPointer,
+                  headRefPointer,
+                  mergeBaseShaPointer,
+                  changeSummaryPointer,
+                  &errorPointer
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+
+    guard let response else {
+      throw makeError(errorPointer, fallback: "Failed to create review session")
+    }
+    defer { argonlib_review_target_free(response) }
+
+    return ReviewTarget(
+      sessionId: string(from: response.pointee.session_id),
+      repoRoot: string(from: response.pointee.repo_root)
+    )
+  }
+
+  static func updateSessionTarget(
+    sessionId: String,
+    repoRoot: String,
+    mode: String,
+    baseRef: String,
+    headRef: String,
+    mergeBaseSha: String
+  ) throws {
+    var errorPointer: UnsafeMutablePointer<CChar>?
+    let success = repoRoot.withCString { repoRootPointer in
+      sessionId.withCString { sessionIdPointer in
+        mode.withCString { modePointer in
+          baseRef.withCString { baseRefPointer in
+            headRef.withCString { headRefPointer in
+              mergeBaseSha.withCString { mergeBaseShaPointer in
+                argonlib_review_update_session_target(
+                  repoRootPointer,
+                  sessionIdPointer,
+                  modePointer,
+                  baseRefPointer,
+                  headRefPointer,
+                  mergeBaseShaPointer,
+                  &errorPointer
+                )
+              }
+            }
+          }
+        }
+      }
+    }
+    guard success else {
+      throw makeError(errorPointer, fallback: "Failed to update session target")
+    }
+  }
+
+  static func closeSession(sessionId: String, repoRoot: String) throws {
+    var errorPointer: UnsafeMutablePointer<CChar>?
+    let success = repoRoot.withCString { repoRootPointer in
+      sessionId.withCString { sessionIdPointer in
+        argonlib_review_close_session(
+          repoRootPointer,
+          sessionIdPointer,
+          &errorPointer
+        )
+      }
+    }
+    guard success else {
+      throw makeError(errorPointer, fallback: "Failed to close review session")
+    }
+  }
+
+  static func addDraftComment(
+    sessionId: String, repoRoot: String, message: String,
+    filePath: String? = nil, lineNew: UInt32? = nil, lineOld: UInt32? = nil,
+    threadId: String? = nil
+  ) throws {
+    var errorPointer: UnsafeMutablePointer<CChar>?
+    let success = repoRoot.withCString { repoRootPointer in
+      sessionId.withCString { sessionIdPointer in
+        message.withCString { messagePointer in
+          withOptionalCString(filePath) { filePathPointer in
+            withOptionalCString(threadId) { threadIdPointer in
+              argonlib_review_add_draft_comment(
+                repoRootPointer,
+                sessionIdPointer,
+                messagePointer,
+                filePathPointer,
+                lineNew != nil,
+                lineNew ?? 0,
+                lineOld != nil,
+                lineOld ?? 0,
+                threadIdPointer,
+                &errorPointer
+              )
+            }
+          }
+        }
+      }
+    }
+    guard success else {
+      throw makeError(errorPointer, fallback: "Failed to add draft comment")
+    }
+  }
+
+  static func deleteDraftComment(
+    sessionId: String, repoRoot: String, draftId: String
+  ) throws {
+    var errorPointer: UnsafeMutablePointer<CChar>?
+    let success = repoRoot.withCString { repoRootPointer in
+      sessionId.withCString { sessionIdPointer in
+        draftId.withCString { draftIdPointer in
+          argonlib_review_delete_draft_comment(
+            repoRootPointer,
+            sessionIdPointer,
+            draftIdPointer,
+            &errorPointer
+          )
+        }
+      }
+    }
+    guard success else {
+      throw makeError(errorPointer, fallback: "Failed to delete draft comment")
+    }
+  }
+
+  static func submitReview(
+    sessionId: String, repoRoot: String, outcome: String?, summary: String?
+  ) throws {
+    var errorPointer: UnsafeMutablePointer<CChar>?
+    let success = repoRoot.withCString { repoRootPointer in
+      sessionId.withCString { sessionIdPointer in
+        withOptionalCString(outcome) { outcomePointer in
+          withOptionalCString(summary) { summaryPointer in
+            argonlib_review_submit_draft_review(
+              repoRootPointer,
+              sessionIdPointer,
+              outcomePointer,
+              summaryPointer,
+              &errorPointer
+            )
+          }
+        }
+      }
+    }
+    guard success else {
+      throw makeError(errorPointer, fallback: "Failed to submit review")
+    }
+  }
+
+  static func addComment(
+    sessionId: String, repoRoot: String, message: String,
+    filePath: String? = nil, lineNew: UInt32? = nil, lineOld: UInt32? = nil,
+    threadId: String? = nil
+  ) throws {
+    var errorPointer: UnsafeMutablePointer<CChar>?
+    let success = repoRoot.withCString { repoRootPointer in
+      sessionId.withCString { sessionIdPointer in
+        message.withCString { messagePointer in
+          withOptionalCString(filePath) { filePathPointer in
+            withOptionalCString(threadId) { threadIdPointer in
+              argonlib_review_add_comment(
+                repoRootPointer,
+                sessionIdPointer,
+                messagePointer,
+                filePathPointer,
+                lineNew != nil,
+                lineNew ?? 0,
+                lineOld != nil,
+                lineOld ?? 0,
+                threadIdPointer,
+                &errorPointer
+              )
+            }
+          }
+        }
+      }
+    }
+    guard success else {
+      throw makeError(errorPointer, fallback: "Failed to add review comment")
+    }
+  }
+
+  static func resolveThread(sessionId: String, repoRoot: String, threadId: String) throws {
+    var errorPointer: UnsafeMutablePointer<CChar>?
+    let success = repoRoot.withCString { repoRootPointer in
+      sessionId.withCString { sessionIdPointer in
+        threadId.withCString { threadIdPointer in
+          argonlib_review_resolve_thread(
+            repoRootPointer,
+            sessionIdPointer,
+            threadIdPointer,
+            &errorPointer
+          )
+        }
+      }
+    }
+    guard success else {
+      throw makeError(errorPointer, fallback: "Failed to resolve review thread")
+    }
+  }
+
   private static func makeWorkspaceMergeability(
     _ mergeability: ArgonWorkspaceMergeability
   ) -> WorkspaceMergeability {

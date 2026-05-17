@@ -152,7 +152,7 @@ extension WorkspaceState {
       }.value
     }
     var reviewTarget = try await Task.detached {
-      try ArgonCLI.createSession(
+      try ArgonLib.createSession(
         repoRoot: selectedWorktree.path,
         target: sessionTarget,
         changeSummary: changeSummary

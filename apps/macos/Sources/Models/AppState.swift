@@ -403,7 +403,7 @@ final class AppState {
 
     var updatedSession: ReviewSession?
     if let sessionId {
-      try? ArgonCLI.updateSessionTarget(
+      try? ArgonLib.updateSessionTarget(
         sessionId: sessionId, repoRoot: repoRoot,
         mode: target.mode.rawValue, baseRef: target.baseRef,
         headRef: target.headRef, mergeBaseSha: target.mergeBaseSha
@@ -640,7 +640,7 @@ final class AppState {
   func closeSession() {
     guard let sessionId, let repoRoot else { return }
     do {
-      try ArgonCLI.closeSession(sessionId: sessionId, repoRoot: repoRoot)
+      try ArgonLib.closeSession(sessionId: sessionId, repoRoot: repoRoot)
       ReviewSessionLifecycle.postSessionClosed(repoRoot: repoRoot)
       refreshSession()
     } catch {}
@@ -655,7 +655,7 @@ final class AppState {
   ) {
     guard let sessionId, let repoRoot else { return }
     do {
-      try ArgonCLI.addDraftComment(
+      try ArgonLib.addDraftComment(
         sessionId: sessionId, repoRoot: repoRoot,
         message: message, filePath: filePath,
         lineNew: lineNew, lineOld: lineOld, threadId: threadId
@@ -669,7 +669,7 @@ final class AppState {
   func resolveThread(_ threadId: String) {
     guard let sessionId, let repoRoot else { return }
     do {
-      try ArgonCLI.resolveThread(sessionId: sessionId, repoRoot: repoRoot, threadId: threadId)
+      try ArgonLib.resolveThread(sessionId: sessionId, repoRoot: repoRoot, threadId: threadId)
       refreshSession()
     } catch {
       errorMessage = error.localizedDescription
@@ -679,7 +679,7 @@ final class AppState {
   func replyToThread(_ threadId: String, message: String) {
     guard let sessionId, let repoRoot else { return }
     do {
-      try ArgonCLI.addComment(
+      try ArgonLib.addComment(
         sessionId: sessionId, repoRoot: repoRoot,
         message: message, threadId: threadId
       )
@@ -692,7 +692,7 @@ final class AppState {
   func deleteDraft(_ draftId: String) {
     guard let sessionId, let repoRoot else { return }
     do {
-      try ArgonCLI.deleteDraftComment(sessionId: sessionId, repoRoot: repoRoot, draftId: draftId)
+      try ArgonLib.deleteDraftComment(sessionId: sessionId, repoRoot: repoRoot, draftId: draftId)
       reloadDrafts()
     } catch {
       errorMessage = error.localizedDescription
@@ -702,7 +702,7 @@ final class AppState {
   func submitReview(outcome: String?, summary: String? = nil) {
     guard let sessionId, let repoRoot else { return }
     do {
-      try ArgonCLI.submitReview(
+      try ArgonLib.submitReview(
         sessionId: sessionId, repoRoot: repoRoot,
         outcome: outcome, summary: summary
       )

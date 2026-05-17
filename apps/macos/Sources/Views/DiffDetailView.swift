@@ -1160,7 +1160,7 @@ struct InlineCommentEditor: View {
     guard !isEmpty else { return }
     guard let sessionId = appState.sessionId, let repoRoot = appState.repoRoot else { return }
     do {
-      try ArgonCLI.addComment(
+      try ArgonLib.addComment(
         sessionId: sessionId, repoRoot: repoRoot,
         message: appState.activeCommentText,
         filePath: filePath,
