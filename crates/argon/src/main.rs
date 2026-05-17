@@ -76,22 +76,10 @@ enum Commands {
     Reviewer(ReviewerCommands),
     #[command(subcommand)]
     Workspace(WorkspaceCommands),
-    #[command(hide = true)]
-    Diff(DiffArgs),
     #[command(subcommand)]
     Draft(DraftCommands),
     #[command(subcommand)]
     Skill(SkillCommands),
-}
-
-#[derive(clap::Args, Debug)]
-struct DiffArgs {
-    #[arg(long)]
-    session: Uuid,
-    #[arg(long, default_value = "base16-ocean.dark")]
-    theme: String,
-    #[arg(long)]
-    json: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -821,7 +809,6 @@ fn run() -> Result<()> {
         Commands::Terminal(command) => terminal_session::run_terminal(command),
         Commands::Reviewer(command) => run_reviewer(command, &runtime),
         Commands::Workspace(command) => run_workspace(command, &runtime),
-        Commands::Diff(args) => run_diff(args, &runtime),
         Commands::Draft(command) => run_draft(command, &runtime),
         Commands::Skill(command) => run_skill(command),
     }
@@ -1020,45 +1007,6 @@ fn run_workspace_mergeability(
     }
     if let Some(detail) = mergeability.detail.as_deref() {
         println!("detail: {detail}");
-    }
-    Ok(())
-}
-
-fn run_diff(args: DiffArgs, runtime: &RuntimeOptions) -> Result<()> {
-    let store = open_store_for_current_repo(runtime)?;
-    let session = store.load(args.session)?;
-
-    let diff = argon_core::build_review_diff(
-        Path::new(&session.repo_root),
-        session.mode,
-        &session.base_ref,
-        &session.head_ref,
-        &session.merge_base_sha,
-    )?;
-
-    let highlighted = argon_core::highlight_diff(&diff, &args.theme);
-
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&highlighted)?);
-    } else {
-        for file in &highlighted.files {
-            println!(
-                "--- {} (+{} -{})",
-                file.new_path, file.added_count, file.removed_count
-            );
-            for hunk in &file.unified_hunks {
-                println!("{}", hunk.header);
-                for line in &hunk.lines {
-                    let marker = match line.kind {
-                        argon_core::DiffLineKind::Context => " ",
-                        argon_core::DiffLineKind::Added => "+",
-                        argon_core::DiffLineKind::Removed => "-",
-                    };
-                    let text: String = line.spans.iter().map(|s| s.text.as_str()).collect();
-                    println!("{marker}{text}");
-                }
-            }
-        }
     }
     Ok(())
 }
