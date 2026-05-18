@@ -28,7 +28,10 @@ use sandbox::{LaunchKind, SandboxContext};
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]
-#[command(name = "argon", about = "Local PR review loop CLI for agents")]
+#[command(
+    name = "argon",
+    about = "Open Argon workspaces and drive agent review sessions"
+)]
 struct Cli {
     #[arg(long, global = true)]
     desktop_launch: Option<PathBuf>,
@@ -838,16 +841,7 @@ fn maybe_direct_path_invocation(raw_args: &[String]) -> Option<(PathBuf, LaunchO
 fn is_command_token(token: &str) -> bool {
     matches!(
         token,
-        "review"
-            | "agent"
-            | "sandbox"
-            | "terminal"
-            | "reviewer"
-            | "workspace"
-            | "diff"
-            | "draft"
-            | "skill"
-            | "help"
+        "review" | "agent" | "sandbox" | "terminal" | "reviewer" | "draft" | "skill" | "help"
     )
 }
 
@@ -1143,7 +1137,9 @@ fn run_start(args: StartArgs, runtime: &RuntimeOptions) -> Result<()> {
         change_summary,
     )?;
     let session = store.mark_agent_seen(created.id)?;
-    launch_desktop_app_for_session(&repo_root, session.id, &runtime.launch);
+    if !args.json {
+        launch_desktop_app_for_session(&repo_root, session.id, &runtime.launch);
+    }
     maybe_launch_agent_for_session(
         &session,
         runtime.launch.agent_command.as_deref(),
@@ -1176,7 +1172,9 @@ fn run_review(args: ReviewArgs, runtime: &RuntimeOptions) -> Result<()> {
         target.merge_base_sha,
         change_summary,
     )?;
-    launch_desktop_app_for_session(&repo_root, session.id, &runtime.launch);
+    if !args.json {
+        launch_desktop_app_for_session(&repo_root, session.id, &runtime.launch);
+    }
     maybe_launch_agent_for_session(
         &session,
         runtime.launch.agent_command.as_deref(),
@@ -2502,6 +2500,16 @@ mod tests {
     }
 
     #[test]
+    fn direct_path_invocation_accepts_non_command_directory_names() {
+        for directory in ["diff", "workspace"] {
+            let raw_args = vec!["argon".to_string(), directory.to_string()];
+            let (path, _launch) =
+                maybe_direct_path_invocation(&raw_args).expect("expected direct path invocation");
+            assert_eq!(path, PathBuf::from(directory));
+        }
+    }
+
+    #[test]
     fn review_command_accepts_positional_directory() {
         let cli = Cli::try_parse_from(["argon", "review", "/tmp/repo"]).expect("parse review");
         match cli.command {
@@ -2541,6 +2549,32 @@ mod tests {
             containing_macos_app_bundle(Path::new("/usr/local/bin/argon")),
             None
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn dev_macos_app_bundle_finds_repo_local_debug_app() -> Result<()> {
+        let fixture = tempdir()?;
+        let app_executable = fixture
+            .path()
+            .join("target/xcode-derived-data/Build/Products/Debug/Argon.app/Contents/MacOS");
+        fs::create_dir_all(&app_executable)?;
+        fs::write(app_executable.join("Argon"), "")?;
+
+        let cli_executable = fixture
+            .path()
+            .join("target/aarch64-apple-darwin/release/argon");
+
+        assert_eq!(
+            dev_macos_app_bundle_near(&cli_executable),
+            Some(
+                fixture
+                    .path()
+                    .join("target/xcode-derived-data/Build/Products/Debug/Argon.app")
+            )
+        );
+
+        Ok(())
     }
 
     #[test]
@@ -3304,10 +3338,18 @@ fn try_launch_desktop_app_for_session(
             return Ok("bundled-app");
         }
 
+        if let Some(app) = dev_macos_app_bundle()
+            && spawn_desktop_command(open_macos_app_command(&app, &launch_args), repo_root, &envs)
+                .is_ok()
+        {
+            return Ok("dev-app");
+        }
+
         // Try launching Argon.app via macOS `open` (installed in /Applications or Spotlight-indexed)
         if spawn_desktop_command(
             {
                 let mut command = Command::new("open");
+                command.arg("-n");
                 command.args(["-a", "Argon"]);
                 command.arg("--args");
                 command.args(&launch_args);
@@ -3392,9 +3434,21 @@ fn try_launch_desktop_app_for_workspace(
             return Ok("bundled-app");
         }
 
+        if let Some(app) = dev_macos_app_bundle()
+            && spawn_desktop_command(
+                open_macos_app_command(&app, &launch_args),
+                &target.selected_worktree_root,
+                &envs,
+            )
+            .is_ok()
+        {
+            return Ok("dev-app");
+        }
+
         if spawn_desktop_command(
             {
                 let mut command = Command::new("open");
+                command.arg("-n");
                 command.args(["-a", "Argon"]);
                 command.arg("--args");
                 command.args(&launch_args);
@@ -3417,6 +3471,7 @@ fn try_launch_desktop_app_for_workspace(
 #[cfg(target_os = "macos")]
 fn open_macos_app_command(app: &Path, launch_args: &[String]) -> Command {
     let mut command = Command::new("open");
+    command.arg("-n");
     command.arg("-a");
     command.arg(app);
     command.arg("--args");
@@ -3429,6 +3484,33 @@ fn current_macos_app_bundle() -> Option<PathBuf> {
     let executable = std::env::current_exe().ok()?;
     let executable = executable.canonicalize().unwrap_or(executable);
     containing_macos_app_bundle(&executable)
+}
+
+#[cfg(target_os = "macos")]
+fn dev_macos_app_bundle() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    let executable = executable.canonicalize().unwrap_or(executable);
+    dev_macos_app_bundle_near(&executable)
+}
+
+#[cfg(target_os = "macos")]
+fn dev_macos_app_bundle_near(executable: &Path) -> Option<PathBuf> {
+    let candidate_suffixes = [
+        "target/xcode-derived-data/Build/Products/Debug/Argon.app",
+        "target/DerivedData/Build/Products/Debug/Argon.app",
+    ];
+
+    executable.ancestors().find_map(|ancestor| {
+        candidate_suffixes
+            .iter()
+            .map(|suffix| ancestor.join(suffix))
+            .find(|candidate| runnable_macos_app_bundle(candidate))
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn runnable_macos_app_bundle(app: &Path) -> bool {
+    app.join("Contents/MacOS/Argon").is_file()
 }
 
 #[cfg(target_os = "macos")]

@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 use anyhow::{Context, Result};
@@ -29,13 +31,17 @@ fn setup_git_repo() -> Result<TempDir> {
 }
 
 fn run_argon(repo: &TempDir, args: &[&str]) -> Result<String> {
+    run_argon_with_env(repo, args, &[])
+}
+
+fn run_argon_with_env(repo: &TempDir, args: &[&str], envs: &[(&str, &str)]) -> Result<String> {
     let bin = env!("CARGO_BIN_EXE_argon");
-    let output = Command::new(bin)
-        .arg("--repo")
-        .arg(repo.path())
-        .args(args)
-        .output()
-        .context("failed to run argon")?;
+    let mut command = Command::new(bin);
+    command.arg("--repo").arg(repo.path()).args(args);
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let output = command.output().context("failed to run argon")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -48,6 +54,28 @@ fn run_argon(repo: &TempDir, args: &[&str]) -> Result<String> {
         );
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[cfg(unix)]
+fn test_desktop_launcher(marker_path: &std::path::Path) -> Result<TempDir> {
+    let dir = TempDir::new()?;
+    let launcher = dir.path().join("launcher.sh");
+    std::fs::write(
+        &launcher,
+        format!(
+            "#!/bin/sh\nprintf launched > {}\n",
+            shell_quote(&marker_path.display().to_string())
+        ),
+    )?;
+    let mut permissions = std::fs::metadata(&launcher)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&launcher, permissions)?;
+    Ok(dir)
+}
+
+#[cfg(unix)]
+fn shell_quote(raw: &str) -> String {
+    format!("'{}'", raw.replace('\'', "'\\''"))
 }
 
 #[test]
@@ -64,6 +92,50 @@ fn review_uncommitted_mode_creates_session() -> Result<()> {
     assert!(
         !session["id"].as_str().unwrap().is_empty(),
         "session id should be present"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn review_json_does_not_launch_desktop_app() -> Result<()> {
+    let repo = setup_git_repo()?;
+    let marker_dir = TempDir::new()?;
+    let marker = marker_dir.path().join("launched");
+    let launcher_dir = test_desktop_launcher(&marker)?;
+    let launcher = launcher_dir.path().join("launcher.sh");
+
+    let _out = run_argon_with_env(
+        &repo,
+        &["review", "--mode", "uncommitted", "--json"],
+        &[("ARGON_DESKTOP_LAUNCH", &launcher.display().to_string())],
+    )?;
+
+    assert!(
+        !marker.exists(),
+        "review --json should not launch the desktop app"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_start_json_does_not_launch_desktop_app() -> Result<()> {
+    let repo = setup_git_repo()?;
+    let marker_dir = TempDir::new()?;
+    let marker = marker_dir.path().join("launched");
+    let launcher_dir = test_desktop_launcher(&marker)?;
+    let launcher = launcher_dir.path().join("launcher.sh");
+
+    let _out = run_argon_with_env(
+        &repo,
+        &["agent", "start", "--mode", "uncommitted", "--json"],
+        &[("ARGON_DESKTOP_LAUNCH", &launcher.display().to_string())],
+    )?;
+
+    assert!(
+        !marker.exists(),
+        "agent start --json should not launch the desktop app"
     );
     Ok(())
 }
