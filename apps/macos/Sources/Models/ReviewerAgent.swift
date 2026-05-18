@@ -150,6 +150,7 @@ final class ReviewerAgentInstance: Identifiable {
   let focusPrompt: String?
   let sessionId: String
   let repoRoot: String
+  private let launchCommand: String
   var isRunning = true
   var hasComments = false
   var lastDecision: String?  // "commented", "changes_requested", nil
@@ -157,7 +158,7 @@ final class ReviewerAgentInstance: Identifiable {
 
   init(
     nickname: String, profile: AgentProfile, sandboxEnabled: Bool, focusPrompt: String?,
-    sessionId: String, repoRoot: String
+    sessionId: String, repoRoot: String, launchCommand: String
   ) {
     self.nickname = nickname
     self.profile = profile
@@ -165,17 +166,12 @@ final class ReviewerAgentInstance: Identifiable {
     self.focusPrompt = focusPrompt
     self.sessionId = sessionId
     self.repoRoot = repoRoot
+    self.launchCommand = launchCommand
   }
 
   /// The full command with the reviewer prompt appended.
   var fullCommand: String {
-    let cli = ArgonCLI.cliPath()
-    let prompt = ArgonCLI.buildReviewerPrompt(
-      sessionId: sessionId, repoRoot: repoRoot,
-      nickname: nickname, focusPrompt: focusPrompt, cli: cli
-    )
-
-    return profile.fullCommand(prompt: prompt)
+    launchCommand
   }
 
   func stop() {

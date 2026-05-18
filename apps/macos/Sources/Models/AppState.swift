@@ -1072,19 +1072,44 @@ final class AppState {
 
   // MARK: - Reviewer Agents
 
-  func launchReviewerAgent(profile: AgentProfile, focusPrompt: String?, sandboxEnabled: Bool) {
-    guard let sessionId, let repoRoot else { return }
+  @discardableResult
+  func launchReviewerAgent(profile: AgentProfile, focusPrompt: String?, sandboxEnabled: Bool)
+    -> Bool
+  {
+    guard let sessionId, let repoRoot else { return false }
     let nickname = DetectiveNames.next()
+    let prompt: String
+    do {
+      let reviewerPrompt = try ArgonLib.reviewerPrompt(
+        sessionId: sessionId,
+        repoRoot: repoRoot,
+        reviewerName: nickname,
+        cliCommand: ArgonCLI.cliPath()
+      )
+      if let focus = focusPrompt, !focus.isEmpty {
+        prompt = "FOCUS: \(focus)\n\n\(reviewerPrompt)"
+      } else {
+        prompt = reviewerPrompt
+      }
+    } catch {
+      DetectiveNames.release(nickname)
+      errorMessage =
+        "Argon could not build the reviewer handoff prompt: \(error.localizedDescription)"
+      return false
+    }
+
     let agent = ReviewerAgentInstance(
       nickname: nickname,
       profile: profile,
       sandboxEnabled: sandboxEnabled,
       focusPrompt: focusPrompt,
       sessionId: sessionId,
-      repoRoot: repoRoot
+      repoRoot: repoRoot,
+      launchCommand: profile.fullCommand(prompt: prompt)
     )
     reviewerAgents.append(agent)
     showAgentTerminals = true
+    return true
   }
 
   func stopReviewerAgent(_ id: UUID) {

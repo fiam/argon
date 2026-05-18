@@ -85,6 +85,23 @@ struct ArgonLibTests {
     #expect(session.mode == .branch)
     #expect(session.changeSummary == "Session summary")
 
+    let agentPrompt = try ArgonLib.agentPrompt(
+      sessionId: reviewTarget.sessionId,
+      repoRoot: reviewTarget.repoRoot,
+      cliCommand: "argon-test"
+    )
+    #expect(agentPrompt.contains("Execution contract:"))
+    #expect(agentPrompt.contains("argon-test --repo"))
+
+    let reviewerPrompt = try ArgonLib.reviewerPrompt(
+      sessionId: reviewTarget.sessionId,
+      repoRoot: reviewTarget.repoRoot,
+      reviewerName: "Frost",
+      cliCommand: "argon-test"
+    )
+    #expect(reviewerPrompt.contains("You are reviewer Frost"))
+    #expect(reviewerPrompt.contains("reviewer decide"))
+
     try ArgonLib.addDraftComment(
       sessionId: reviewTarget.sessionId,
       repoRoot: reviewTarget.repoRoot,

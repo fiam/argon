@@ -318,13 +318,15 @@ struct AgentLaunchSheet: View {
   }
 
   private func performLaunch(profile: AgentProfile, focusPrompt: String?) {
-    appState.launchReviewerAgent(
+    let launched = appState.launchReviewerAgent(
       profile: profile,
       focusPrompt: focusPrompt,
       sandboxEnabled: sandboxEnabled
     )
     isLaunching = false
-    isPresented = false
+    if launched {
+      isPresented = false
+    }
   }
 
   private func presentSandboxHelp() {

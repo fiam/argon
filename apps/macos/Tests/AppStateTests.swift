@@ -279,7 +279,8 @@ struct AppStateTests {
       sandboxEnabled: false,
       focusPrompt: nil,
       sessionId: UUID().uuidString,
-      repoRoot: "/tmp/repo"
+      repoRoot: "/tmp/repo",
+      launchCommand: "codex"
     )
   }
 }

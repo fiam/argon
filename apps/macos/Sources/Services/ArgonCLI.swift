@@ -40,7 +40,7 @@ enum ArgonCLI {
     let target: String
   }
 
-  // MARK: - Session Creation
+  // MARK: - CLI Discovery
 
   static func cliPath() -> String {
     findCLI()
@@ -81,31 +81,6 @@ enum ArgonCLI {
     return nil
   }
 
-  static func agentPrompt(sessionId: String, repoRoot: String) throws -> String {
-    let output = try run(
-      repoRoot: repoRoot,
-      args: [
-        "agent", "prompt",
-        "--session", sessionId,
-      ]
-    )
-    return extractAgentPromptText(from: output)
-  }
-
-  /// Get the reviewer prompt from the CLI (includes full context: mode, refs, commands).
-  static func reviewerPrompt(
-    sessionId: String, repoRoot: String, nickname: String
-  ) -> String? {
-    let result = try? run(
-      repoRoot: repoRoot,
-      args: [
-        "reviewer", "prompt",
-        "--session", sessionId,
-        "--reviewer", nickname,
-      ])
-    return result?.trimmingCharacters(in: .whitespacesAndNewlines)
-  }
-
   static func sandboxConfigPaths(repoRoot: String?) throws -> SandboxConfigPaths {
     let output = try run(repoRoot: repoRoot, args: ["sandbox", "config", "paths", "--json"])
     return try decode(SandboxConfigPaths.self, from: output)
@@ -144,62 +119,6 @@ enum ArgonCLI {
         .prefix { $0 != "--" }
     )
     return ["sandbox", "explain", "--json"] + contextArguments
-  }
-
-  static func extractAgentPromptText(from output: String) -> String {
-    let normalized =
-      output
-      .replacingOccurrences(of: "\r\n", with: "\n")
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-
-    guard normalized.hasPrefix("session:"), let separator = normalized.range(of: "\n\n") else {
-      return normalized
-    }
-
-    return String(normalized[separator.upperBound...]).trimmingCharacters(
-      in: .whitespacesAndNewlines)
-  }
-
-  /// Build a reviewer prompt with optional focus instructions prepended.
-  static func buildReviewerPrompt(
-    sessionId: String, repoRoot: String, nickname: String,
-    focusPrompt: String?, cli: String
-  ) -> String {
-    // Try to get the full prompt from the CLI (includes mode, refs, commands)
-    if let cliPrompt = reviewerPrompt(
-      sessionId: sessionId, repoRoot: repoRoot, nickname: nickname)
-    {
-      if let focus = focusPrompt, !focus.isEmpty {
-        return "FOCUS: \(focus)\n\n\(cliPrompt)"
-      }
-      return cliPrompt
-    }
-
-    // Fallback if CLI unavailable
-    var lines: [String] = []
-    lines.append(
-      "You are reviewer \(nickname) for Argon session \(sessionId) in \(repoRoot)."
-    )
-    if let focus = focusPrompt, !focus.isEmpty {
-      lines.append("Focus your review on: \(focus)")
-    }
-    lines.append("Review the current changes and leave feedback using these commands:")
-    lines.append("Inspect changes: git -C \(repoRoot) status --short")
-    lines.append("Inspect diff: git -C \(repoRoot) diff --no-color HEAD")
-    lines.append(
-      "Comment: \(cli) --repo \(repoRoot) reviewer comment --session \(sessionId) --reviewer \"\(nickname)\" --message \"<comment>\" [--file <path> --line-new <n>]"
-    )
-    lines.append(
-      "Decision: \(cli) --repo \(repoRoot) reviewer decide --session \(sessionId) --reviewer \"\(nickname)\" --outcome <changes-requested|commented>"
-    )
-    lines.append(
-      "Wait for replies: \(cli) --repo \(repoRoot) reviewer wait --session \(sessionId) --reviewer \"\(nickname)\" --json"
-    )
-    lines.append(
-      "Review the change normally and submit your actual judgment with `commented` or `changes-requested`; only the human reviewer can approve or close the session."
-    )
-    lines.append("Do NOT edit files. You may inspect the repo and run tests.")
-    return lines.joined(separator: "\n")
   }
 
   @discardableResult

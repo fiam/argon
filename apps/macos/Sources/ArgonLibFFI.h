@@ -267,6 +267,21 @@ bool argonlib_review_resolve_thread(
   char **error_out
 );
 
+char *argonlib_agent_prompt(
+  const char *repo_root,
+  const char *session_id,
+  const char *cli_command,
+  char **error_out
+);
+
+char *argonlib_reviewer_prompt(
+  const char *repo_root,
+  const char *session_id,
+  const char *reviewer_name,
+  const char *cli_command,
+  char **error_out
+);
+
 void argonlib_string_free(char *value);
 
 #endif

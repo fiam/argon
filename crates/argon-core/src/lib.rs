@@ -2,6 +2,7 @@ pub mod agent_control;
 pub mod diff;
 pub mod highlight;
 pub mod model;
+pub mod prompt;
 pub mod protocol;
 pub mod store;
 pub mod target;
@@ -23,6 +24,11 @@ pub use model::{
     CommentAnchor, CommentAuthor, CommentKind, DraftReview, DraftReviewComment, ReviewComment,
     ReviewDecision, ReviewMode, ReviewOutcome, ReviewSession, ReviewThread, SessionStatus,
     ThreadState,
+};
+pub use prompt::{
+    AgentPrompt, ReviewerFeedback, ReviewerPrompt, build_agent_prompt, build_reviewer_prompt,
+    collect_pending_feedback, collect_pending_reviewer_feedback, latest_reviewer_feedback_seen_at,
+    normalize_reviewer_name, render_agent_prompt, render_reviewer_prompt,
 };
 pub use protocol::{
     AgentEvent, AgentEventKind, CliCommand, CliResponse, PendingFeedback, SCHEMA_VERSION,

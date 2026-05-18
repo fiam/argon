@@ -63,7 +63,11 @@ extension WorkspaceState {
 
     do {
       let prompt = try await Task.detached {
-        try ArgonCLI.agentPrompt(sessionId: target.sessionId, repoRoot: target.repoRoot)
+        try ArgonLib.agentPrompt(
+          sessionId: target.sessionId,
+          repoRoot: target.repoRoot,
+          cliCommand: ArgonCLI.cliPath()
+        )
       }.value
 
       guard let tab = openAgentTab(options.buildRequest(prompt: prompt)) else {

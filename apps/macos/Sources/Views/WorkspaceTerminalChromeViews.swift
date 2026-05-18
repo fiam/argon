@@ -136,7 +136,11 @@ struct WorkspaceTerminalDeck: View {
       )
       do {
         let prompt = try await Task.detached {
-          try ArgonCLI.agentPrompt(sessionId: target.sessionId, repoRoot: target.repoRoot)
+          try ArgonLib.agentPrompt(
+            sessionId: target.sessionId,
+            repoRoot: target.repoRoot,
+            cliCommand: ArgonCLI.cliPath()
+          )
         }.value
         copyToPasteboard(prompt)
         reviewWindowRegistry.open(target: target) { target in

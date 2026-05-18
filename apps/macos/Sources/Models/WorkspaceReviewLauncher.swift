@@ -56,7 +56,11 @@ enum WorkspaceReviewLauncher {
           )
           do {
             let prompt = try await Task.detached {
-              try ArgonCLI.agentPrompt(sessionId: target.sessionId, repoRoot: target.repoRoot)
+              try ArgonLib.agentPrompt(
+                sessionId: target.sessionId,
+                repoRoot: target.repoRoot,
+                cliCommand: ArgonCLI.cliPath()
+              )
             }.value
             let injected = await GhosttyTerminalView.injectPrompt(prompt, into: agentTabID)
             if !injected {
@@ -91,7 +95,11 @@ enum WorkspaceReviewLauncher {
         )
         do {
           let prompt = try await Task.detached {
-            try ArgonCLI.agentPrompt(sessionId: target.sessionId, repoRoot: target.repoRoot)
+            try ArgonLib.agentPrompt(
+              sessionId: target.sessionId,
+              repoRoot: target.repoRoot,
+              cliCommand: ArgonCLI.cliPath()
+            )
           }.value
           copyToPasteboard(prompt)
           reviewWindowRegistry.open(target: target) { target in

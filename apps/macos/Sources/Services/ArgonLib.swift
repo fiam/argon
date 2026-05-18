@@ -492,6 +492,61 @@ enum ArgonLib {
     }
   }
 
+  static func agentPrompt(sessionId: String, repoRoot: String, cliCommand: String) throws -> String
+  {
+    let promptCLICommand = shellQuoteCommand(cliCommand)
+    var errorPointer: UnsafeMutablePointer<CChar>?
+    let response = repoRoot.withCString { repoRootPointer in
+      sessionId.withCString { sessionIdPointer in
+        promptCLICommand.withCString { cliCommandPointer in
+          argonlib_agent_prompt(
+            repoRootPointer,
+            sessionIdPointer,
+            cliCommandPointer,
+            &errorPointer
+          )
+        }
+      }
+    }
+
+    guard let response else {
+      throw makeError(errorPointer, fallback: "Failed to build agent prompt")
+    }
+    defer { argonlib_string_free(response) }
+    return String(cString: response)
+  }
+
+  static func reviewerPrompt(
+    sessionId: String,
+    repoRoot: String,
+    reviewerName: String,
+    cliCommand: String
+  ) throws -> String {
+    let promptCLICommand = shellQuoteCommand(cliCommand)
+    var errorPointer: UnsafeMutablePointer<CChar>?
+    let response = repoRoot.withCString { repoRootPointer in
+      sessionId.withCString { sessionIdPointer in
+        reviewerName.withCString { reviewerNamePointer in
+          promptCLICommand.withCString { cliCommandPointer in
+            argonlib_reviewer_prompt(
+              repoRootPointer,
+              sessionIdPointer,
+              reviewerNamePointer,
+              cliCommandPointer,
+              &errorPointer
+            )
+          }
+        }
+      }
+    }
+
+    guard let response else {
+      throw makeError(errorPointer, fallback: "Failed to build reviewer prompt")
+    }
+    defer { argonlib_string_free(response) }
+    return String(cString: response)
+  }
+
   private static func makeWorkspaceMergeability(
     _ mergeability: ArgonWorkspaceMergeability
   ) -> WorkspaceMergeability {
@@ -567,6 +622,17 @@ enum ArgonLib {
       addedCount: Int(file.added_count),
       removedCount: Int(file.removed_count)
     )
+  }
+
+  private static func shellQuoteCommand(_ raw: String) -> String {
+    let safe = raw.unicodeScalars.allSatisfy { scalar in
+      scalar.isASCII && CharacterSet.alphanumerics.contains(scalar)
+        || "/._-:+".unicodeScalars.contains(scalar)
+    }
+    if safe && !raw.isEmpty {
+      return raw
+    }
+    return "'\(raw.replacingOccurrences(of: "'", with: "'\\''"))'"
   }
 
   private static func makeLine(_ line: ArgonDiffLine) -> DiffLine {
