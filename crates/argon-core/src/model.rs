@@ -52,6 +52,8 @@ pub enum ReviewOutcome {
 pub struct ReviewDecision {
     pub outcome: ReviewOutcome,
     pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_fingerprint: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 

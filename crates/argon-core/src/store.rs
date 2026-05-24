@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::diff::diff_fingerprint;
 use crate::model::{
     CommentAnchor, CommentAuthor, CommentKind, DraftReview, DraftReviewComment, ReviewComment,
     ReviewDecision, ReviewMode, ReviewOutcome, ReviewSession, ReviewThread, SessionStatus,
@@ -472,9 +473,18 @@ impl SessionStore {
         summary: Option<String>,
     ) -> Result<ReviewSession, StoreError> {
         self.with_session_locked(session_id, |session| {
+            let decision_diff_fingerprint = diff_fingerprint(
+                &self.repo_root,
+                session.mode,
+                &session.head_ref,
+                &session.merge_base_sha,
+            )
+            .ok()
+            .filter(|fingerprint| !fingerprint.is_empty());
             session.decision = Some(ReviewDecision {
                 outcome,
                 summary,
+                diff_fingerprint: decision_diff_fingerprint,
                 created_at: Utc::now(),
             });
             session.status = match outcome {
@@ -791,6 +801,8 @@ fn has_pending_reviewer_feedback(session: &ReviewSession) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
     use tempfile::TempDir;
     use uuid::Uuid;
 
@@ -798,6 +810,22 @@ mod tests {
 
     fn test_store(repo_root: &Path) -> SessionStore {
         SessionStore::for_repo_root_with_storage_root(repo_root, repo_root.join(".argon-test-home"))
+    }
+
+    fn run_git(repo_root: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo_root)
+            .args(args)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("git output utf8")
     }
 
     #[test]
@@ -1097,6 +1125,40 @@ mod tests {
         let closed = store.close_session(approved.id).expect("close session");
         assert_eq!(closed.status, SessionStatus::Approved);
         assert!(closed.decision.is_some());
+    }
+
+    #[test]
+    fn set_decision_records_current_diff_fingerprint() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let repo_root = temp_dir.path();
+        run_git(repo_root, &["init", "-q"]);
+        run_git(
+            repo_root,
+            &["config", "user.email", "argon-test@example.com"],
+        );
+        run_git(repo_root, &["config", "user.name", "Argon Test"]);
+        fs::write(repo_root.join("README.md"), "one\n").expect("write file");
+        run_git(repo_root, &["add", "README.md"]);
+        run_git(repo_root, &["commit", "-q", "-m", "initial"]);
+        let head = run_git(repo_root, &["rev-parse", "HEAD"])
+            .trim()
+            .to_string();
+        fs::write(repo_root.join("README.md"), "one\ntwo\n").expect("change file");
+
+        let store = test_store(repo_root);
+        let session = store
+            .create_session_with_mode(ReviewMode::Uncommitted, "HEAD", "WORKTREE", head)
+            .expect("session");
+        let approved = store
+            .set_decision(session.id, ReviewOutcome::Approved, None)
+            .expect("approve session");
+
+        let fingerprint = approved
+            .decision
+            .as_ref()
+            .and_then(|decision| decision.diff_fingerprint.as_deref())
+            .expect("decision diff fingerprint");
+        assert!(fingerprint.contains("README.md"));
     }
 
     #[test]

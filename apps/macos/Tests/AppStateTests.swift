@@ -146,6 +146,35 @@ struct AppStateTests {
     #expect(state.coderConnectionHelpText.contains("copied the session prompt"))
   }
 
+  @Test("approved decisions become stale when their diff fingerprint changes")
+  func approvedDecisionsBecomeStaleWhenFingerprintChanges() {
+    let state = AppState()
+    state.session = makeApprovedSession(decisionFingerprint: "before")
+
+    #expect(!state.updateDiffFingerprint("before"))
+    #expect(state.effectiveSessionStatus == .approved)
+    #expect(state.effectiveDecision != nil)
+    #expect(!state.approvedDecisionIsStale)
+
+    #expect(state.updateDiffFingerprint("after"))
+    #expect(state.approvedDecisionIsStale)
+    #expect(state.effectiveSessionStatus == .awaitingReviewer)
+    #expect(state.effectiveDecision == nil)
+  }
+
+  @Test("approved decisions without fingerprints use live change detection")
+  func approvedDecisionsWithoutFingerprintsUseLiveChangeDetection() {
+    let state = AppState()
+    state.session = makeApprovedSession(decisionFingerprint: nil)
+
+    #expect(!state.updateDiffFingerprint("before"))
+    #expect(!state.approvedDecisionIsStale)
+
+    #expect(state.updateDiffFingerprint("after"))
+    #expect(state.approvedDecisionIsStale)
+    #expect(state.effectiveSessionStatus == .awaitingReviewer)
+  }
+
   @Test("expanding omitted context reveals lines from the requested edge")
   func expandingOmittedContextTracksPerBlockState() {
     let state = AppState()
@@ -263,6 +292,30 @@ struct AppStateTests {
       agentLastSeenAt: nil,
       createdAt: Date(),
       updatedAt: Date()
+    )
+  }
+
+  private func makeApprovedSession(decisionFingerprint: String?) -> ReviewSession {
+    let now = Date()
+    return ReviewSession(
+      id: UUID(),
+      repoRoot: "/tmp/repo",
+      mode: .uncommitted,
+      baseRef: "HEAD",
+      headRef: "WORKTREE",
+      mergeBaseSha: "abc123",
+      changeSummary: nil,
+      status: .approved,
+      threads: [],
+      decision: ReviewDecision(
+        outcome: .approved,
+        summary: "Looks good",
+        diffFingerprint: decisionFingerprint,
+        createdAt: now
+      ),
+      agentLastSeenAt: nil,
+      createdAt: now,
+      updatedAt: now
     )
   }
 

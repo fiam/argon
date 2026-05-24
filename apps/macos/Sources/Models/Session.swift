@@ -82,10 +82,12 @@ struct ReviewThread: Codable, Identifiable, Sendable {
 struct ReviewDecision: Codable, Sendable {
   let outcome: ReviewOutcome
   let summary: String?
+  let diffFingerprint: String?
   let createdAt: Date
 
   enum CodingKeys: String, CodingKey {
     case outcome, summary
+    case diffFingerprint = "diff_fingerprint"
     case createdAt = "created_at"
   }
 }

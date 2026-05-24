@@ -79,6 +79,7 @@ final class AppState {
   private var sessionWatcher: FileWatcher?
   private var diffRefreshTask: Task<Void, Never>?
   private var lastDiffFingerprint: String = ""
+  private var reviewTargetChangedSinceLoad = false
   private let uiTestAutomationConfig: UITestAutomationConfig
   private var didRunUITestAutomation = false
 
@@ -147,6 +148,7 @@ final class AppState {
         detectedBaseRef = data.detectedBase
         detectedHeadRef = data.detectedHead
         lastDiffFingerprint = data.diffFingerprint
+        reviewTargetChangedSinceLoad = false
         diffContextSources = data.contextSources
         applyNewFiles(data.files)
         UITestAutomationSignal.write("session-loaded", to: uiTestAutomationConfig.signalFilePath)
@@ -175,6 +177,44 @@ final class AppState {
     let hasUnsavedInlineComment =
       !activeCommentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     return hasSessionThreads || hasDecision || !pendingDrafts.isEmpty || hasUnsavedInlineComment
+  }
+
+  var effectiveSessionStatus: SessionStatus? {
+    guard let session else { return nil }
+    if approvedDecisionIsStale {
+      return .awaitingReviewer
+    }
+    return session.status
+  }
+
+  var effectiveDecision: ReviewDecision? {
+    guard !approvedDecisionIsStale else { return nil }
+    return session?.decision
+  }
+
+  var approvedDecisionIsStale: Bool {
+    guard session?.status == .approved, session?.decision != nil else { return false }
+
+    if let decisionFingerprint = session?.decision?.diffFingerprint,
+      !decisionFingerprint.isEmpty,
+      !lastDiffFingerprint.isEmpty
+    {
+      return decisionFingerprint != lastDiffFingerprint
+    }
+
+    return reviewTargetChangedSinceLoad
+  }
+
+  @discardableResult
+  func updateDiffFingerprint(_ fingerprint: String) -> Bool {
+    guard !fingerprint.isEmpty else { return false }
+
+    let changed = fingerprint != lastDiffFingerprint && !lastDiffFingerprint.isEmpty
+    if changed {
+      reviewTargetChangedSinceLoad = true
+    }
+    lastDiffFingerprint = fingerprint
+    return changed
   }
 
   func requestModeSwitch(_ mode: ReviewMode) {
@@ -228,6 +268,8 @@ final class AppState {
         pendingDrafts = []
         activeCommentLineId = nil
         activeCommentText = ""
+        reviewTargetChangedSinceLoad = false
+        lastDiffFingerprint = data.diffFingerprint
         diffContextSources = data.contextSources
         applyNewFiles(data.files)
         if let s = data.updatedSession {
@@ -278,6 +320,7 @@ final class AppState {
     let files: [FileDiff]
     let contextSources: [String: DiffContextSource]
     let updatedSession: ReviewSession?
+    let diffFingerprint: String
   }
 
   nonisolated private static func loadFiles(
@@ -416,7 +459,14 @@ final class AppState {
         target: target,
         files: files,
         contextSources: contextSources,
-        updatedSession: updatedSession
+        updatedSession: updatedSession,
+        diffFingerprint: GitService.diffFingerprint(
+          repoRoot: repoRoot,
+          mode: target.mode,
+          baseRef: target.baseRef,
+          headRef: target.headRef,
+          mergeBaseSha: target.mergeBaseSha
+        )
       )
     )
   }
@@ -609,7 +659,8 @@ final class AppState {
       )
     }.value
 
-    if fingerprint != lastDiffFingerprint && !lastDiffFingerprint.isEmpty {
+    let diffChanged = updateDiffFingerprint(fingerprint)
+    if diffChanged {
       // Diff changed -- refresh in background
       let refreshedFiles = await Task.detached {
         try? Self.loadFiles(
@@ -634,7 +685,6 @@ final class AppState {
       diffContextSources = newContextSources
       applyNewFiles(newFiles)
     }
-    lastDiffFingerprint = fingerprint
   }
 
   func closeSession() {

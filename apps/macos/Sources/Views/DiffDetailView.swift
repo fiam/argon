@@ -700,8 +700,8 @@ struct InlineThreadView: View {
   }
 
   private var isSessionActive: Bool {
-    guard let session = appState.session else { return false }
-    return session.status != .approved && session.status != .closed
+    guard let status = appState.effectiveSessionStatus else { return false }
+    return status != .approved && status != .closed
   }
 
   private var bodyTextSize: CGFloat {

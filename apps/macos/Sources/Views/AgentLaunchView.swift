@@ -29,7 +29,9 @@ struct AgentLaunchButton: View {
     .accessibilityIdentifier("launch-reviewer-button")
     .accessibilityLabel("Launch Reviewer")
     .controlSize(.small)
-    .disabled(appState.session?.status == .approved || appState.session?.status == .closed)
+    .disabled(
+      appState.effectiveSessionStatus == .approved || appState.effectiveSessionStatus == .closed
+    )
     .sheet(isPresented: $showLaunchSheet) {
       AgentLaunchSheet(isPresented: $showLaunchSheet)
     }

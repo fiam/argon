@@ -154,6 +154,7 @@ mod tests {
             decision: Some(ReviewDecision {
                 outcome: ReviewOutcome::Approved,
                 summary: Some("Looks good".to_string()),
+                diff_fingerprint: None,
                 created_at: timestamp,
             }),
             agent_last_seen_at: None,

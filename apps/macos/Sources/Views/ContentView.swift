@@ -35,7 +35,8 @@ struct ContentView: View {
     .onDisappear {
       let isTerminal =
         appState.session.map {
-          $0.status == .approved || $0.status == .closed
+          let status = appState.effectiveSessionStatus ?? $0.status
+          return status == .approved || status == .closed
         } ?? true
       if !isTerminal {
         appState.closeSession()

@@ -708,6 +708,7 @@ struct WorkspaceStateTests {
       decision: ReviewDecision(
         outcome: .approved,
         summary: "Old decision",
+        diffFingerprint: nil,
         createdAt: updatedAt
       ),
       agentLastSeenAt: nil,

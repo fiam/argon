@@ -26,9 +26,12 @@ struct SessionHeader: View {
   @State private var availableWidth: CGFloat = 0
 
   var body: some View {
+    let displayedStatus = appState.effectiveSessionStatus ?? session.status
+    let displayedDecision = appState.effectiveDecision
+
     HStack(spacing: 10) {
       HStack(spacing: 8) {
-        StatusBadge(status: session.status, presentation: contentPresentation)
+        StatusBadge(status: displayedStatus, presentation: contentPresentation)
 
         ModePicker(presentation: contentPresentation)
 
@@ -45,7 +48,9 @@ struct SessionHeader: View {
       }
 
       // Reviewer agent decision banner
-      if let decision = session.decision {
+      if appState.approvedDecisionIsStale {
+        ReviewTargetChangedBadge(presentation: contentPresentation)
+      } else if let decision = displayedDecision {
         Divider().frame(height: 16)
         DecisionBanner(decision: decision, presentation: contentPresentation)
       }
@@ -54,7 +59,7 @@ struct SessionHeader: View {
 
       DiffModeToggle()
 
-      if session.status != .approved && session.status != .closed {
+      if displayedStatus != .approved && displayedStatus != .closed {
         AgentLaunchButton(presentation: actionPresentation)
         if appState.showsCoderSetupActions {
           HandoffButton(presentation: actionPresentation) {
@@ -64,7 +69,7 @@ struct SessionHeader: View {
         CoderConnectionBadge(presentation: actionPresentation)
         Divider().frame(height: 16)
         reviewActions(presentation: actionPresentation)
-      } else if session.status == .approved {
+      } else if displayedStatus == .approved {
         Label("Approved", systemImage: "checkmark.circle.fill")
           .font(.callout)
           .fontWeight(.medium)
@@ -184,7 +189,8 @@ struct SessionHeader: View {
   private var actionPresentation: ReviewHeaderActionPresentation {
     let measuredWidth = availableWidth > 0 ? availableWidth : 980
     let reservedSummaryWidth: CGFloat = session.changeSummary == nil ? 0 : 170
-    let reservedDecisionWidth: CGFloat = session.decision == nil ? 0 : 150
+    let reservedDecisionWidth: CGFloat =
+      appState.effectiveDecision == nil && !appState.approvedDecisionIsStale ? 0 : 150
     let effectiveWidth = measuredWidth - reservedSummaryWidth - reservedDecisionWidth
 
     if effectiveWidth < 540 {
@@ -213,7 +219,10 @@ struct SessionHeader: View {
     let diffModeWidth: CGFloat = 74
     let basePadding: CGFloat = 48
 
-    guard session.status != .approved && session.status != .closed else {
+    guard
+      (appState.effectiveSessionStatus ?? session.status) != .approved
+        && (appState.effectiveSessionStatus ?? session.status) != .closed
+    else {
       return diffModeWidth + basePadding + 96
     }
 
@@ -622,6 +631,29 @@ struct DecisionBanner: View {
       return "\(label): \(summary)"
     }
     return label
+  }
+}
+
+struct ReviewTargetChangedBadge: View {
+  let presentation: ReviewHeaderContentPresentation
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Image(systemName: "exclamationmark.triangle.fill")
+        .font(.caption)
+      if presentation != .minimal {
+        Text("Changed Since Review")
+          .font(.caption)
+          .fontWeight(.medium)
+          .lineLimit(1)
+      }
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 4)
+    .background(Color.orange.opacity(0.12))
+    .foregroundStyle(.orange)
+    .clipShape(Capsule())
+    .help("The reviewed diff changed after approval. Submit a new review for the current changes.")
   }
 }
 
