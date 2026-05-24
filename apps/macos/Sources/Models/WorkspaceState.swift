@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 @MainActor
@@ -49,6 +50,9 @@ final class WorkspaceState {
       request in
       try GitService.fastForwardMergeBack(request)
     }
+  static var pullRequestURLOpener: (URL) -> Bool = { url in
+    NSWorkspace.shared.open(url)
+  }
 
   var worktrees: [DiscoveredWorktree] = []
   var worktreeSummaries: [String: WorktreeDiffSummary] = [:]
@@ -265,6 +269,20 @@ final class WorkspaceState {
 
   var canOpenPullRequestForSelectedWorktree: Bool {
     canFinalizeSelectedWorktree && ((selectedBranchTopology?.aheadCount ?? 0) > 0)
+      && selectedPullRequestBrowserURL != nil
+  }
+
+  var selectedPullRequestBrowserURL: URL? {
+    guard
+      let value = selectedPullRequestURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !value.isEmpty,
+      let url = URL(string: value),
+      let scheme = url.scheme?.lowercased(),
+      scheme == "https" || scheme == "http"
+    else {
+      return nil
+    }
+    return url
   }
 
   var selectedTerminalTab: WorkspaceTerminalTab? {

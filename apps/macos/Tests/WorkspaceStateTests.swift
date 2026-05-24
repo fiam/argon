@@ -1078,6 +1078,57 @@ struct WorkspaceStateTests {
       ))
   }
 
+  @Test("open pull request requires a browser URL")
+  @MainActor
+  func openPullRequestRequiresBrowserURL() {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+
+    #expect(state.canOpenPullRequestForSelectedWorktree == false)
+
+    state.selectedPullRequestURL =
+      "https://github.com/example/repo/compare/main...feature/window?expand=1"
+    #expect(state.canOpenPullRequestForSelectedWorktree == true)
+
+    state.selectedPullRequestURL = "file:///tmp/repo"
+    #expect(state.canOpenPullRequestForSelectedWorktree == false)
+  }
+
+  @Test("open pull request flow opens the selected URL directly")
+  @MainActor
+  func openPullRequestFlowOpensSelectedURLDirectly() {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+    state.selectedPullRequestURL = " https://github.com/example/repo/pull/42 "
+    var openedURL: URL?
+    let restoreURLOpener = stubPullRequestURLOpener { url in
+      openedURL = url
+      return true
+    }
+    defer { restoreURLOpener() }
+
+    state.beginOpenPullRequestFlow()
+
+    #expect(openedURL?.absoluteString == "https://github.com/example/repo/pull/42")
+    #expect(state.activeFinalizeAction == nil)
+    #expect(state.isPresentingAgentLaunchSheet == false)
+    #expect(state.pendingFinalizeAgentTabID == nil)
+  }
+
+  @Test("open pull request flow reports browser open failures")
+  @MainActor
+  func openPullRequestFlowReportsBrowserOpenFailures() {
+    let state = makeState()
+    selectFeatureWorktree(in: state)
+    state.selectedPullRequestURL = "https://github.com/example/repo/pull/42"
+    let restoreURLOpener = stubPullRequestURLOpener { _ in false }
+    defer { restoreURLOpener() }
+
+    state.beginOpenPullRequestFlow()
+
+    #expect(state.errorMessage == "Could not open pull request URL.")
+  }
+
   @Test("typed finalize failure responses surface an error and clear pending state")
   @MainActor
   func typedFinalizeFailureResponsesSurfaceAnError() async throws {
@@ -4525,6 +4576,15 @@ struct WorkspaceStateTests {
     WorkspaceState.fastForwardMergeBackPerformer = performer
     return {
       WorkspaceState.fastForwardMergeBackPerformer = previousPerformer
+    }
+  }
+
+  @MainActor
+  private func stubPullRequestURLOpener(_ opener: @escaping (URL) -> Bool) -> () -> Void {
+    let previousOpener = WorkspaceState.pullRequestURLOpener
+    WorkspaceState.pullRequestURLOpener = opener
+    return {
+      WorkspaceState.pullRequestURLOpener = previousOpener
     }
   }
 

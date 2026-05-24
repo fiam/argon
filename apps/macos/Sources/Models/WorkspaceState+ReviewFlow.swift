@@ -116,8 +116,12 @@ extension WorkspaceState {
   }
 
   func beginOpenPullRequestFlow() {
-    guard canOpenPullRequestForSelectedWorktree else { return }
-    beginFinalizeFlow(.openPullRequest)
+    guard canOpenPullRequestForSelectedWorktree, let url = selectedPullRequestBrowserURL else {
+      return
+    }
+    if !Self.pullRequestURLOpener(url) {
+      errorMessage = "Could not open pull request URL."
+    }
   }
 
   func beginFinalizeFlow(_ action: WorktreeFinalizeAction) {

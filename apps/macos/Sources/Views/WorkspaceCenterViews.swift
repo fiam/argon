@@ -151,9 +151,10 @@ struct WorkspaceToolbarItems: ToolbarContent {
       return "The base worktree does not open pull requests against itself."
     }
     if !canOpenPR {
-      return "Open Pull Request is only available when this worktree has commits to propose."
+      return
+        "Open Pull Request is available for GitHub-backed branch worktrees with commits to propose."
     }
-    return finalizeHelpText("Open pull request")
+    return finalizeHelpText("Open pull request in GitHub")
   }
 
   private func finalizeHelpText(_ text: String) -> String {
