@@ -180,7 +180,7 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: Sources/ArgonLibFFI.h
         CODE_SIGN_ENTITLEMENTS: Resources/Argon.entitlements
         PRODUCT_NAME: Argon
-        MARKETING_VERSION: "0.3.0" # x-release-please-version
+        MARKETING_VERSION: "0.4.0" # x-release-please-version
         CURRENT_PROJECT_VERSION: "1"
         COMBINE_HIDPI_IMAGES: true
         ENABLE_HARDENED_RUNTIME: "YES"
