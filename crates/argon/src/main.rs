@@ -2587,6 +2587,18 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn review_launch_url_encodes_review_target() {
+        let session_id =
+            Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000").expect("valid session id");
+
+        assert_eq!(
+            review_launch_url(Path::new("/tmp/repo path"), session_id),
+            "argon://review?session-id=123e4567-e89b-12d3-a456-426614174000&repo-root=%2Ftmp%2Frepo%20path"
+        );
+    }
+
     #[test]
     fn agent_describe_accepts_description_as_subcommand_arg() {
         let session_id = Uuid::new_v4().to_string();
@@ -3301,18 +3313,13 @@ fn try_launch_desktop_app_for_session(
 ) -> Result<&'static str> {
     let session = session_id.to_string();
     let reviewed_repo = repo_root.to_string_lossy().to_string();
-    #[cfg(target_os = "macos")]
-    let launch_args = [
-        "--session-id".to_string(),
-        session.clone(),
-        "--repo-root".to_string(),
-        reviewed_repo.clone(),
-    ];
     let envs = vec![
         ("ARGON_SESSION_ID", session.clone()),
         ("ARGON_REPO_ROOT", reviewed_repo.clone()),
         ("ARGON_CLI_CMD", argon_cli_command().to_string()),
     ];
+    #[cfg(target_os = "macos")]
+    let launch_url = review_launch_url(repo_root, session_id);
 
     if let Some(launcher_path) = launch
         .desktop_launch
@@ -3330,8 +3337,8 @@ fn try_launch_desktop_app_for_session(
         if let Some(app_path) = std::env::var_os("ARGON_APP").filter(|v| !v.is_empty()) {
             let app = PathBuf::from(app_path);
             if app.exists()
-                && spawn_desktop_command(
-                    open_macos_app_command(&app, &launch_args),
+                && run_desktop_command(
+                    open_macos_app_url_command(&app, &launch_url),
                     repo_root,
                     &envs,
                 )
@@ -3342,35 +3349,49 @@ fn try_launch_desktop_app_for_session(
         }
 
         if let Some(app) = current_macos_app_bundle()
-            && spawn_desktop_command(open_macos_app_command(&app, &launch_args), repo_root, &envs)
-                .is_ok()
+            && run_desktop_command(
+                open_macos_app_url_command(&app, &launch_url),
+                repo_root,
+                &envs,
+            )
+            .is_ok()
         {
             return Ok("bundled-app");
         }
 
         if let Some(app) = dev_macos_app_bundle()
-            && spawn_desktop_command(open_macos_app_command(&app, &launch_args), repo_root, &envs)
-                .is_ok()
+            && run_desktop_command(
+                open_macos_app_url_command(&app, &launch_url),
+                repo_root,
+                &envs,
+            )
+            .is_ok()
         {
             return Ok("dev-app");
         }
 
-        // Try launching Argon.app via macOS `open` (installed in /Applications or Spotlight-indexed)
-        if spawn_desktop_command(
-            {
-                let mut command = Command::new("open");
-                command.arg("-n");
-                command.args(["-a", "Argon"]);
-                command.arg("--args");
-                command.args(&launch_args);
-                command
-            },
+        if run_desktop_command(
+            open_macos_bundle_url_command(ARGON_BUNDLE_IDENTIFIER, &launch_url),
             repo_root,
             &envs,
         )
         .is_ok()
         {
-            return Ok("macos-open");
+            return Ok("launch-services-bundle-id");
+        }
+
+        if run_desktop_command(
+            open_macos_named_app_url_command("Argon", &launch_url),
+            repo_root,
+            &envs,
+        )
+        .is_ok()
+        {
+            return Ok("launch-services-app-name");
+        }
+
+        if run_desktop_command(open_macos_url_command(&launch_url), repo_root, &envs).is_ok() {
+            return Ok("launch-services-url");
         }
     }
 
@@ -3482,17 +3503,6 @@ fn try_launch_desktop_app_for_workspace(
     bail!(
         "no compatible launch method found (use --desktop-launch, ARGON_APP, or install Argon.app)"
     )
-}
-
-#[cfg(target_os = "macos")]
-fn open_macos_app_command(app: &Path, launch_args: &[String]) -> Command {
-    let mut command = Command::new("open");
-    command.arg("-n");
-    command.arg("-a");
-    command.arg(app);
-    command.arg("--args");
-    command.args(launch_args);
-    command
 }
 
 #[cfg(target_os = "macos")]
@@ -3635,6 +3645,15 @@ fn workspace_launch_url(target: &WorkspaceLaunchTarget) -> String {
         url_query_encode(&target.repo_root.to_string_lossy()),
         url_query_encode(&target.repo_common_dir.to_string_lossy()),
         url_query_encode(&target.selected_worktree_root.to_string_lossy())
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn review_launch_url(repo_root: &Path, session_id: Uuid) -> String {
+    format!(
+        "argon://review?session-id={}&repo-root={}",
+        url_query_encode(&session_id.to_string()),
+        url_query_encode(&repo_root.to_string_lossy())
     )
 }
 
