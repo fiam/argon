@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.4.0](https://github.com/fiam/argon/compare/v0.3.0...v0.4.0) (2026-05-24)
+
+
+### Features
+
+* **agents:** autocomplete model choices ([dcf00f6](https://github.com/fiam/argon/commit/dcf00f63c98d4045e13dfd2749696825efa62e4e))
+* **agents:** replace Gemini with Antigravity ([99f5c80](https://github.com/fiam/argon/commit/99f5c808b4dca7fd9ad96df121edb0ef57e82548))
+
+
+### Removed
+
+* remove bundled skill entrypoints and `argon skill install` ([f524c4c](https://github.com/fiam/argon/commit/f524c4cb91a38d7728899fc56391f864c837181c))
+* remove hidden CLI diff command ([4150551](https://github.com/fiam/argon/commit/41505518b07516a601825fe079ab20fd624db6cf))
+
+
+### Bug Fixes
+
+* **cli:** open workspaces from path ([b3802d0](https://github.com/fiam/argon/commit/b3802d0dca27e31da03a4b6bde84190ff9730f72))
+* **cli:** open workspaces quietly ([d7fccd9](https://github.com/fiam/argon/commit/d7fccd91daf6232a25a8ce44cad12a5a4ee7cdcf))
+* **cli:** route review launches by URL ([9d15e96](https://github.com/fiam/argon/commit/9d15e960e8c3587b9b2b18ecbc6c431390cd14d1))
+* **macos:** avoid menu item retargeting ([21bfd0b](https://github.com/fiam/argon/commit/21bfd0bfa575cba59974dc4611dae4bc3a609406))
+* **macos:** key review windows by session ([44bbbf4](https://github.com/fiam/argon/commit/44bbbf4e5c67e8f466f6f3c14a397be58d39a648))
+* **macos:** resolve shell PATH for agents ([89ffc3b](https://github.com/fiam/argon/commit/89ffc3b991848c97c3a1c8de1bab353b9937e34b))
+* prefer real XDG Ghostty config ([364948e](https://github.com/fiam/argon/commit/364948ecbbfb7e8629a3808dd0ea34d8e3149b62))
+* **review:** mark stale approvals ([a7cfd01](https://github.com/fiam/argon/commit/a7cfd0155d2124899d859b18fe209f0bc4831476))
+* **workspace:** open pull request URLs ([ca280a8](https://github.com/fiam/argon/commit/ca280a88dc6378808ca43a679a68a1d9c6a4f7cb))
+
 ## [0.3.0](https://github.com/fiam/argon/compare/v0.2.0...v0.3.0) (2026-05-10)
 
 
