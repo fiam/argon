@@ -1,7 +1,7 @@
 # libghostty Integration
 
-Argon now embeds vendored Ghostty for reviewer tabs while keeping reviewer
-launch policy, sandboxing, and session lifecycle in Argon.
+Argon embeds vendored Ghostty for in-app terminal tabs while keeping launch
+policy, sandboxing, and tab/session lifecycle in Argon.
 
 This note records the current upstream boundary and the runtime/build
 constraints for the embedded terminal.
@@ -53,21 +53,20 @@ Important constraints from upstream:
 
 Argon should keep ownership of:
 
-- reviewer command construction
+- terminal command construction
 - sandbox and environment policy
 - repo/session working-directory rules
-- reviewer tab state and lifecycle
+- terminal tab state and lifecycle
 - app-specific notifications and review metadata
 
 Ghostty should only replace the in-app terminal renderer and the PTY-facing
 terminal surface.
 
-That means the current logic in `apps/macos/Sources/Views/TerminalTabView.swift`
-and the supporting launch helpers should stay the entry point. The initial
-Ghostty wrapper should accept the same launch inputs that Argon already
-uses today:
+That means the current terminal launch configuration and supporting launch
+helpers stay the entry point. The Ghostty wrapper accepts the same launch
+inputs that Argon owns:
 
-- executable/args or a shell command
+- executable/args represented as a shell command
 - environment variables
 - current directory
 - process exit callbacks
@@ -142,9 +141,10 @@ Expected outputs:
 
 ## Current State
 
-- Ghostty is the only in-app reviewer terminal renderer.
+- Ghostty is the in-app terminal renderer for shell, agent, and reviewer
+  tabs.
 - Argon still owns command construction, environment shaping, sandboxing,
-  and reviewer session lifecycle.
+  terminal tab lifecycle, and review metadata.
 - The embedded terminal intentionally strips inherited terminal identity
   from the parent app process before launch, then lets Ghostty populate its
   own runtime terminal variables for the child shell.
@@ -153,10 +153,7 @@ Expected outputs:
 
 ## Open Questions
 
-- Whether Argon should keep launching the child process itself or let the
-  initial Ghostty wrapper own command execution through `command` and
-  `working_directory`.
-- How much of Ghostty's resource directory needs to be bundled into Argon
-  for an embedded use case.
-- Whether the first integration should target only native-arm64 developer
-  builds or a universal macOS build from day one.
+- Whether the bundled Ghostty resource set can be reduced safely for Argon's
+  embedded use case.
+- Whether local developer builds should remain host-native while release
+  asset builds produce universal Ghostty artifacts.

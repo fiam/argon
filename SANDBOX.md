@@ -362,6 +362,18 @@ Rules:
   `Sandboxfile` evaluation
 - `ENV UNSET` removes a variable from the launched process environment and
   from later `Sandboxfile` evaluation
+- `ENV ALLOW` only preserves variables that already exist in the incoming
+  environment; it does not create missing variables
+- final launch environment resolution starts from `ENV DEFAULT`, applies
+  `ENV ALLOW` when the default is `NONE`, removes every `ENV UNSET` key, and
+  then applies `ENV SET` overrides
+
+With `ENV DEFAULT NONE`, `ENV UNSET SECRET` is redundant for the launched
+process unless `SECRET` is also allowed by an `ENV ALLOW` rule. It is still
+meaningful because it removes `$SECRET` from later `Sandboxfile` evaluation and
+prevents later `ENV ALLOW SECRET` from passing the inherited value through. A
+later `ENV SET SECRET value` intentionally re-adds the variable and cancels the
+unset for that key.
 
 Inspect the effective environment policy with:
 
@@ -459,6 +471,14 @@ agents can use ripgrep without broad package-manager directory access.
 For Codex, it also allows `codex`, preserves `OPENAI_*` and `CODEX_*`, and
 allows read, write, and exec access under `$HOME/.codex/` when it exists so
 Codex state and helper shims continue to work under `EXEC DEFAULT DENY`.
+
+For Claude Code, `USE agent` allows `claude`, preserves `ANTHROPIC_*`, and
+allows writable Claude state under `$HOME/.claude/`, `$HOME/.claude.json`, and
+`$HOME/.claude.json.lock` when they exist.
+
+For Antigravity, `USE agent` allows `agy`, preserves `AGY_*`,
+`ANTIGRAVITY_*`, and `GOOGLE_*`, and allows writable state under
+`$HOME/.gemini/antigravity-cli/` when it exists.
 
 Inspect builtins with:
 
@@ -656,7 +676,9 @@ Today the macOS implementation enforces:
 - read restrictions
 - write restrictions
 - executable allow/deny policy
+- direct network allow/deny policy
 - loaded Sandboxfile write protection
+- proxy helper access for `NET ALLOW PROXY` when proxy injection is active
 - intercept shims, helper executables, handler write protection, and
   broker-mediated execution
 

@@ -64,9 +64,11 @@ Typical macOS build flow:
 
 1. `cargo fmt` + `swift-format`
 2. `cargo fmt --check` + `cargo clippy` + `swift-format lint`
-3. `cargo deny check`
-4. `cargo test --workspace`
-5. `xcodebuild test`
+3. `scripts/check-release-metadata.sh`
+4. `cargo deny check`
+5. `cargo test --workspace`
+6. the Swift app build, including XcodeGen project generation
+7. `xcodebuild test`
 
 Run `make check` before every commit.
 
