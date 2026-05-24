@@ -1,4 +1,4 @@
-.PHONY: check fmt lint test test-rust test-swift test-ui build-swift build-release build-dmg build-libghostty build-libghostty-universal print-libghostty-path print-libghostty-resources-path deny
+.PHONY: check fmt lint test test-rust test-swift test-ui smoke-release-launch build-swift build-release build-dmg build-libghostty build-libghostty-universal print-libghostty-path print-libghostty-resources-path deny
 
 SWIFT_FORMAT ?= $(shell xcrun --find swift-format 2>/dev/null || command -v swift-format 2>/dev/null)
 SDKROOT ?= $(shell xcrun --sdk macosx --show-sdk-path 2>/dev/null)
@@ -53,6 +53,10 @@ test-ui: build-swift
 		-configuration Debug \
 		-destination "$(XCODE_DESTINATION)" \
 		-only-testing:ArgonUITests/ArgonUITests/testGhosttyCustomReviewerLaunchDoesNotCrash
+
+# Release CLI launch smoke tests
+smoke-release-launch:
+	bash scripts/smoke-release-launch.sh
 
 # Build Swift app
 build-swift:
