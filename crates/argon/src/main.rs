@@ -705,6 +705,8 @@ enum WaitResult {
 
 const WAIT_POLL_INTERVAL_MS: u64 = 250;
 const FOLLOW_AGENT_HEARTBEAT_INTERVAL_SECS: u64 = 30;
+#[cfg(target_os = "macos")]
+const ARGON_BUNDLE_IDENTIFIER: &str = "dev.argonapp.macos";
 static ARGON_CLI_COMMAND: OnceLock<String> = OnceLock::new();
 
 fn main() {
@@ -858,13 +860,6 @@ fn run_path_workspace(path: PathBuf, launch: &LaunchOptions) -> Result<()> {
 
     let target = resolve_workspace_launch_target(&path)?;
     launch_desktop_app_for_workspace(&target, launch);
-
-    println!("workspace: {}", target.repo_root.display());
-    println!("common-dir: {}", target.repo_common_dir.display());
-    println!(
-        "selected-worktree: {}",
-        target.selected_worktree_root.display()
-    );
     Ok(())
 }
 
@@ -2577,6 +2572,21 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn workspace_launch_url_encodes_workspace_target() {
+        let target = WorkspaceLaunchTarget {
+            repo_root: PathBuf::from("/tmp/repo path"),
+            repo_common_dir: PathBuf::from("/tmp/repo path/.git"),
+            selected_worktree_root: PathBuf::from("/tmp/repo-worktrees/feature#a"),
+        };
+
+        assert_eq!(
+            workspace_launch_url(&target),
+            "argon://workspace?repo-root=%2Ftmp%2Frepo%20path&repo-common-dir=%2Ftmp%2Frepo%20path%2F.git&selected-worktree-path=%2Ftmp%2Frepo-worktrees%2Ffeature%23a"
+        );
+    }
+
     #[test]
     fn agent_describe_accepts_description_as_subcommand_arg() {
         let session_id = Uuid::new_v4().to_string();
@@ -3376,21 +3386,14 @@ fn try_launch_desktop_app_for_workspace(
     let repo_root = target.repo_root.to_string_lossy().to_string();
     let repo_common_dir = target.repo_common_dir.to_string_lossy().to_string();
     let selected_worktree = target.selected_worktree_root.to_string_lossy().to_string();
-    #[cfg(target_os = "macos")]
-    let launch_args = [
-        "--workspace-repo-root".to_string(),
-        repo_root.clone(),
-        "--workspace-common-dir".to_string(),
-        repo_common_dir.clone(),
-        "--selected-worktree-path".to_string(),
-        selected_worktree.clone(),
-    ];
     let envs = vec![
         ("ARGON_WORKSPACE_REPO_ROOT", repo_root.clone()),
         ("ARGON_WORKSPACE_COMMON_DIR", repo_common_dir.clone()),
         ("ARGON_SELECTED_WORKTREE_PATH", selected_worktree.clone()),
         ("ARGON_CLI_CMD", argon_cli_command().to_string()),
     ];
+    #[cfg(target_os = "macos")]
+    let launch_url = workspace_launch_url(target);
 
     if let Some(launcher_path) = launch
         .desktop_launch
@@ -3412,8 +3415,8 @@ fn try_launch_desktop_app_for_workspace(
         if let Some(app_path) = std::env::var_os("ARGON_APP").filter(|v| !v.is_empty()) {
             let app = PathBuf::from(app_path);
             if app.exists()
-                && spawn_desktop_command(
-                    open_macos_app_command(&app, &launch_args),
+                && run_desktop_command(
+                    open_macos_app_url_command(&app, &launch_url),
                     &target.selected_worktree_root,
                     &envs,
                 )
@@ -3424,8 +3427,8 @@ fn try_launch_desktop_app_for_workspace(
         }
 
         if let Some(app) = current_macos_app_bundle()
-            && spawn_desktop_command(
-                open_macos_app_command(&app, &launch_args),
+            && run_desktop_command(
+                open_macos_app_url_command(&app, &launch_url),
                 &target.selected_worktree_root,
                 &envs,
             )
@@ -3435,8 +3438,8 @@ fn try_launch_desktop_app_for_workspace(
         }
 
         if let Some(app) = dev_macos_app_bundle()
-            && spawn_desktop_command(
-                open_macos_app_command(&app, &launch_args),
+            && run_desktop_command(
+                open_macos_app_url_command(&app, &launch_url),
                 &target.selected_worktree_root,
                 &envs,
             )
@@ -3445,21 +3448,34 @@ fn try_launch_desktop_app_for_workspace(
             return Ok("dev-app");
         }
 
-        if spawn_desktop_command(
-            {
-                let mut command = Command::new("open");
-                command.arg("-n");
-                command.args(["-a", "Argon"]);
-                command.arg("--args");
-                command.args(&launch_args);
-                command
-            },
+        if run_desktop_command(
+            open_macos_bundle_url_command(ARGON_BUNDLE_IDENTIFIER, &launch_url),
             &target.selected_worktree_root,
             &envs,
         )
         .is_ok()
         {
-            return Ok("macos-open");
+            return Ok("launch-services-bundle-id");
+        }
+
+        if run_desktop_command(
+            open_macos_named_app_url_command("Argon", &launch_url),
+            &target.selected_worktree_root,
+            &envs,
+        )
+        .is_ok()
+        {
+            return Ok("launch-services-app-name");
+        }
+
+        if run_desktop_command(
+            open_macos_url_command(&launch_url),
+            &target.selected_worktree_root,
+            &envs,
+        )
+        .is_ok()
+        {
+            return Ok("launch-services-url");
         }
     }
 
@@ -3476,6 +3492,40 @@ fn open_macos_app_command(app: &Path, launch_args: &[String]) -> Command {
     command.arg(app);
     command.arg("--args");
     command.args(launch_args);
+    command
+}
+
+#[cfg(target_os = "macos")]
+fn open_macos_app_url_command(app: &Path, url: &str) -> Command {
+    let mut command = Command::new("open");
+    command.arg("-a");
+    command.arg(app);
+    command.arg(url);
+    command
+}
+
+#[cfg(target_os = "macos")]
+fn open_macos_bundle_url_command(bundle_identifier: &str, url: &str) -> Command {
+    let mut command = Command::new("open");
+    command.arg("-b");
+    command.arg(bundle_identifier);
+    command.arg(url);
+    command
+}
+
+#[cfg(target_os = "macos")]
+fn open_macos_named_app_url_command(app_name: &str, url: &str) -> Command {
+    let mut command = Command::new("open");
+    command.arg("-a");
+    command.arg(app_name);
+    command.arg(url);
+    command
+}
+
+#[cfg(target_os = "macos")]
+fn open_macos_url_command(url: &str) -> Command {
+    let mut command = Command::new("open");
+    command.arg(url);
     command
 }
 
@@ -3553,6 +3603,55 @@ fn spawn_desktop_command(
         .spawn()
         .with_context(|| "failed to spawn desktop launch command".to_string())?;
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn run_desktop_command(
+    mut command: Command,
+    launch_cwd: &Path,
+    envs: &[(&str, String)],
+) -> Result<()> {
+    command
+        .current_dir(launch_cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let status = command
+        .status()
+        .with_context(|| "failed to run desktop launch command".to_string())?;
+    if !status.success() {
+        bail!("desktop launch command exited with {status}");
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn workspace_launch_url(target: &WorkspaceLaunchTarget) -> String {
+    format!(
+        "argon://workspace?repo-root={}&repo-common-dir={}&selected-worktree-path={}",
+        url_query_encode(&target.repo_root.to_string_lossy()),
+        url_query_encode(&target.repo_common_dir.to_string_lossy()),
+        url_query_encode(&target.selected_worktree_root.to_string_lossy())
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn url_query_encode(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push('%');
+            encoded.push(HEX[(byte >> 4) as usize] as char);
+            encoded.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+    }
+    encoded
 }
 
 fn normalize_override_path(path: Option<PathBuf>) -> Option<PathBuf> {

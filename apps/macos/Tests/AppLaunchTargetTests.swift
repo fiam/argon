@@ -76,4 +76,46 @@ final class AppLaunchTargetTests: XCTestCase {
         ))
     )
   }
+
+  func testRequestParsesWorkspaceURL() throws {
+    let url = try XCTUnwrap(
+      URL(
+        string:
+          "argon://workspace?repo-root=%2Ftmp%2Frepo&repo-common-dir=%2Ftmp%2Frepo%2F.git&selected-worktree-path=%2Ftmp%2Frepo-worktrees%2Ffeature-a"
+      ))
+
+    XCTAssertEqual(
+      AppLaunchTarget.request(from: url),
+      .workspace(
+        WorkspaceTarget(
+          repoRoot: "/tmp/repo",
+          repoCommonDir: "/tmp/repo/.git",
+          selectedWorktreePath: "/tmp/repo-worktrees/feature-a"
+        ))
+    )
+  }
+
+  func testRequestParsesReviewURL() throws {
+    let url = try XCTUnwrap(
+      URL(
+        string:
+          "argon://review?session-id=session-123&repo-root=%2Ftmp%2Frepo&review-launch-context=externalHandoff"
+      ))
+
+    XCTAssertEqual(
+      AppLaunchTarget.request(from: url),
+      .review(
+        ReviewTarget(
+          sessionId: "session-123",
+          repoRoot: "/tmp/repo",
+          launchContext: .externalHandoff
+        ))
+    )
+  }
+
+  func testRequestRejectsUnknownURLScheme() throws {
+    let url = try XCTUnwrap(URL(string: "https://example.com"))
+
+    XCTAssertNil(AppLaunchTarget.request(from: url))
+  }
 }

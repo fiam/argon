@@ -41,6 +41,10 @@ struct ArgonApp: App {
           .environment(reviewWindowRegistry)
           .environment(workspaceWindowRegistry)
           .environment(terminalAttentionNotifier)
+          .appExternalLaunchHandler(
+            recentProjects: recentProjects,
+            workspaceWindowRegistry: workspaceWindowRegistry
+          )
           .preferredColorScheme(Self.launchAppearance.colorScheme)
           .argonCLIInstallStartupToast(
             cliInstallStartupPrompt,
@@ -161,6 +165,10 @@ struct ArgonApp: App {
           .environment(agentAvailability)
           .environment(terminalAttentionNotifier)
           .environmentObject(appUpdateController)
+          .appExternalLaunchHandler(
+            recentProjects: recentProjects,
+            workspaceWindowRegistry: workspaceWindowRegistry
+          )
           .task(id: savedAgents.profiles) {
             agentAvailability.refresh(for: savedAgents.profiles)
           }
@@ -181,6 +189,10 @@ struct ArgonApp: App {
     .environment(reviewWindowRegistry)
     .environment(workspaceWindowRegistry)
     .environment(terminalAttentionNotifier)
+    .appExternalLaunchHandler(
+      recentProjects: recentProjects,
+      workspaceWindowRegistry: workspaceWindowRegistry
+    )
     .preferredColorScheme(Self.launchAppearance.colorScheme)
     .argonCLIInstallStartupToast(
       cliInstallStartupPrompt,
@@ -205,6 +217,11 @@ struct ArgonApp: App {
       .environment(agentAvailability)
       .environment(commandContext)
       .environment(reviewWindowRegistry)
+      .environment(workspaceWindowRegistry)
+      .appExternalLaunchHandler(
+        recentProjects: recentProjects,
+        workspaceWindowRegistry: workspaceWindowRegistry
+      )
       .preferredColorScheme(Self.launchAppearance.colorScheme)
       .argonCLIInstallStartupToast(
         cliInstallStartupPrompt,

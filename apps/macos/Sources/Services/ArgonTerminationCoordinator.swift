@@ -92,8 +92,34 @@ final class ArgonTerminationCoordinator {
 }
 
 final class ArgonApplicationDelegate: NSObject, NSApplicationDelegate {
+  func applicationWillFinishLaunching(_ notification: Notification) {
+    NSAppleEventManager.shared().setEventHandler(
+      self,
+      andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
+      forEventClass: AEEventClass(kInternetEventClass),
+      andEventID: AEEventID(kAEGetURL)
+    )
+  }
+
   @MainActor
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
     ArgonTerminationCoordinator.shared.applicationShouldTerminate(sender)
+  }
+
+  @objc
+  private func handleGetURLEvent(
+    _ event: NSAppleEventDescriptor,
+    withReplyEvent _: NSAppleEventDescriptor
+  ) {
+    guard
+      let rawURL = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
+      let url = URL(string: rawURL)
+    else {
+      return
+    }
+
+    Task { @MainActor in
+      AppExternalLaunchStore.shared.enqueue(url)
+    }
   }
 }

@@ -58,4 +58,51 @@ enum AppLaunchTarget {
         selectedWorktreePath: selectedWorktreePath
       ))
   }
+
+  static func request(from url: URL) -> LaunchRequest? {
+    guard url.scheme == "argon" else { return nil }
+    guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+      return nil
+    }
+
+    switch components.host {
+    case "workspace":
+      guard
+        let repoRoot = components.queryValue(named: "repo-root"),
+        let repoCommonDir = components.queryValue(named: "repo-common-dir")
+      else {
+        return nil
+      }
+      return .workspace(
+        WorkspaceTarget(
+          repoRoot: repoRoot,
+          repoCommonDir: repoCommonDir,
+          selectedWorktreePath: components.queryValue(named: "selected-worktree-path")
+        ))
+    case "review":
+      guard
+        let sessionId = components.queryValue(named: "session-id"),
+        let repoRoot = components.queryValue(named: "repo-root")
+      else {
+        return nil
+      }
+      let launchContext =
+        components.queryValue(named: "review-launch-context")
+        .flatMap(ReviewLaunchContext.init(rawValue:)) ?? .standalone
+      return .review(
+        ReviewTarget(
+          sessionId: sessionId,
+          repoRoot: repoRoot,
+          launchContext: launchContext
+        ))
+    default:
+      return nil
+    }
+  }
+}
+
+extension URLComponents {
+  fileprivate func queryValue(named name: String) -> String? {
+    queryItems?.first { $0.name == name }?.value
+  }
 }

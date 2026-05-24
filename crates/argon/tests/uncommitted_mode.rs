@@ -57,6 +57,33 @@ fn run_argon_with_env(repo: &TempDir, args: &[&str], envs: &[(&str, &str)]) -> R
 }
 
 #[cfg(unix)]
+fn run_argon_direct_with_env(
+    repo: &TempDir,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<String> {
+    let bin = env!("CARGO_BIN_EXE_argon");
+    let mut command = Command::new(bin);
+    command.current_dir(repo.path()).args(args);
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let output = command.output().context("failed to run argon")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        anyhow::bail!(
+            "argon {:?} failed (exit {:?}):\nstdout: {}\nstderr: {}",
+            args,
+            output.status.code(),
+            stdout,
+            stderr
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[cfg(unix)]
 fn test_desktop_launcher(marker_path: &std::path::Path) -> Result<TempDir> {
     let dir = TempDir::new()?;
     let launcher = dir.path().join("launcher.sh");
@@ -78,6 +105,17 @@ fn shell_quote(raw: &str) -> String {
     format!("'{}'", raw.replace('\'', "'\\''"))
 }
 
+#[cfg(unix)]
+fn wait_for_file(path: &std::path::Path) -> bool {
+    for _ in 0..50 {
+        if path.exists() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    false
+}
+
 #[test]
 fn review_uncommitted_mode_creates_session() -> Result<()> {
     let repo = setup_git_repo()?;
@@ -92,6 +130,29 @@ fn review_uncommitted_mode_creates_session() -> Result<()> {
     assert!(
         !session["id"].as_str().unwrap().is_empty(),
         "session id should be present"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_path_invocation_launches_desktop_app_quietly() -> Result<()> {
+    let repo = setup_git_repo()?;
+    let marker_dir = TempDir::new()?;
+    let marker = marker_dir.path().join("launched");
+    let launcher_dir = test_desktop_launcher(&marker)?;
+    let launcher = launcher_dir.path().join("launcher.sh");
+
+    let out = run_argon_direct_with_env(
+        &repo,
+        &["--desktop-launch", &launcher.display().to_string(), "."],
+        &[],
+    )?;
+
+    assert_eq!(out, "");
+    assert!(
+        wait_for_file(&marker),
+        "direct path should launch the desktop app"
     );
     Ok(())
 }
