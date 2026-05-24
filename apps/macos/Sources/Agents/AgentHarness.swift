@@ -206,6 +206,10 @@ protocol AgentHarness: Sendable {
   var sandboxAgentFamily: String { get }
 
   func displayVersion(rawOutput: String?) -> String?
+  func dynamicParameterChoices(
+    for parameterID: String,
+    command: String
+  ) async -> [AgentHarnessParameterChoice]
   func matchesCommand(_ command: String) -> Bool
   func renderedArguments(for values: AgentHarnessParameterValues) -> [String]
   func resumeSessionRecords(notBefore: Date) -> [AgentResumeSessionRecord]
@@ -218,6 +222,13 @@ extension AgentHarness {
 
   func displayVersion(rawOutput: String?) -> String? {
     defaultDisplayVersion(rawOutput)
+  }
+
+  func dynamicParameterChoices(
+    for parameterID: String,
+    command: String
+  ) async -> [AgentHarnessParameterChoice] {
+    []
   }
 
   func matchesCommand(_ command: String) -> Bool {
@@ -274,6 +285,17 @@ enum AgentHarnesses {
   static func parameterDefinitions(for familyID: AgentFamilyID) -> [AgentHarnessParameterDefinition]
   {
     definition(for: familyID).parameterDefinitions
+  }
+
+  static func dynamicParameterChoices(
+    for familyID: AgentFamilyID,
+    parameterID: String,
+    command: String
+  ) async -> [AgentHarnessParameterChoice] {
+    await harness(for: familyID).dynamicParameterChoices(
+      for: parameterID,
+      command: command
+    )
   }
 
   static func renderedArguments(

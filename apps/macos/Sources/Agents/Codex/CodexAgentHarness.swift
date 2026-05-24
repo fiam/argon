@@ -57,6 +57,14 @@ struct CodexAgentHarness: AgentHarness {
     return rawVersion.replacingOccurrences(of: "codex-cli ", with: "")
   }
 
+  func dynamicParameterChoices(
+    for parameterID: String,
+    command: String
+  ) async -> [AgentHarnessParameterChoice] {
+    guard parameterID == "model" else { return [] }
+    return await CodexModelCatalog.loadChoices(command: command)
+  }
+
   func resumeSessionRecords(notBefore: Date) -> [AgentResumeSessionRecord] {
     CodexSessionStore.loadSessionRecords(notBefore: notBefore)
   }

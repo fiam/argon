@@ -123,6 +123,47 @@ struct UserShellTests {
     #expect(details["missing"]?.exists == false)
   }
 
+  @Test("command output captures stdout stderr and status")
+  func commandOutputCapturesStdoutStderrAndStatus() throws {
+    let tempDir = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+
+    let logPath = tempDir.appendingPathComponent("shell.log")
+    let shellPath = tempDir.appendingPathComponent("fake-shell.sh")
+    let script = """
+      #!/bin/sh
+      printf '%s\\n' "$@" > "\(logPath.path)"
+      for last do :; done
+      eval "$last"
+      """
+    try script.write(to: shellPath, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o755],
+      ofItemAtPath: shellPath.path
+    )
+
+    let output = UserShell.commandOutput(
+      "printf 'models'; printf 'warn' >&2",
+      environment: ["SHELL": shellPath.path],
+      timeout: 5
+    )
+
+    #expect(output?.stdout == "models")
+    #expect(output?.stderr == "warn")
+    #expect(output?.terminationStatus == 0)
+    #expect(output?.succeeded == true)
+
+    let loggedArgs = try String(contentsOf: logPath, encoding: .utf8)
+      .split(separator: "\n")
+      .map(String.init)
+    #expect(loggedArgs.count >= 4)
+    #expect(loggedArgs[0] == "-i")
+    #expect(loggedArgs[1] == "-l")
+    #expect(loggedArgs[2] == "-c")
+  }
+
   @Test("environmentResolvingInteractivePath reads the startup shell PATH")
   func environmentResolvingInteractivePathReadsStartupShellPath() throws {
     let tempDir = FileManager.default.temporaryDirectory

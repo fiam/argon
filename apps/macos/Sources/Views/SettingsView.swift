@@ -1451,6 +1451,7 @@ private struct AgentEditorSheet: View {
   @State private var editIsEnabled: Bool
   @State private var editYoloFlag: String
   @State private var editParameterValues: AgentHarnessParameterValues
+  @State private var dynamicParameterChoices: [String: [AgentHarnessParameterChoice]] = [:]
   @State private var attemptedSave = false
 
   private let labelWidth: CGFloat = 132
@@ -1482,6 +1483,9 @@ private struct AgentEditorSheet: View {
     }
     .padding(24)
     .frame(width: 550)
+    .task(id: dynamicParameterChoicesTaskID) {
+      await refreshDynamicParameterChoices()
+    }
   }
 
   private var editorTitle: String {
@@ -1642,6 +1646,35 @@ private struct AgentEditorSheet: View {
     return AgentHarnesses.parameterDefinitions(for: familyID)
   }
 
+  private var dynamicParameterChoicesTaskID: String {
+    guard let familyID = profile.familyID else { return "custom" }
+    return "\(familyID.rawValue):\(familyID.defaultProfile.command)"
+  }
+
+  @MainActor
+  private func refreshDynamicParameterChoices() async {
+    guard profile.isMutable, let familyID = profile.familyID else {
+      dynamicParameterChoices = [:]
+      return
+    }
+
+    var loadedChoices: [String: [AgentHarnessParameterChoice]] = [:]
+    for definition in harnessParameterDefinitions
+    where definition.input == .choice && definition.allowsCustomValue {
+      let choices = await AgentHarnesses.dynamicParameterChoices(
+        for: familyID,
+        parameterID: definition.id,
+        command: familyID.defaultProfile.command
+      )
+      guard !Task.isCancelled else { return }
+      if !choices.isEmpty {
+        loadedChoices[definition.id] = choices
+      }
+    }
+
+    dynamicParameterChoices = loadedChoices
+  }
+
   private func parameterValueBinding(
     for definition: AgentHarnessParameterDefinition
   ) -> Binding<String> {
@@ -1768,7 +1801,18 @@ private struct AgentEditorSheet: View {
         help: harnessParameterHelpText(for: definition)
       )
       .disabled(!profile.isMutable)
-    case .text, .choice:
+    case .choice:
+      comboBoxField(
+        definition.label,
+        text: parameterValueBinding(for: definition),
+        prompt: definition.placeholder,
+        choices: parameterChoiceValues(for: definition),
+        isMonospaced: true,
+        isDisabled: !profile.isMutable,
+        help: harnessParameterHelpText(for: definition),
+        showsHelpCaption: profile.isMutable
+      )
+    case .text:
       editorField(
         definition.label,
         text: parameterValueBinding(for: definition),
@@ -1778,6 +1822,46 @@ private struct AgentEditorSheet: View {
         help: harnessParameterHelpText(for: definition),
         showsHelpCaption: profile.isMutable
       )
+    }
+  }
+
+  @ViewBuilder
+  private func comboBoxField(
+    _ label: String,
+    text: Binding<String>,
+    prompt: String,
+    choices: [String],
+    isMonospaced: Bool = false,
+    isDisabled: Bool = false,
+    help: String? = nil,
+    showsHelpCaption: Bool = true
+  ) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 12) {
+      Text(label)
+        .frame(width: labelWidth, alignment: .trailing)
+        .foregroundStyle(.secondary)
+
+      VStack(alignment: .leading, spacing: 5) {
+        AgentParameterComboBox(
+          text: text,
+          prompt: prompt,
+          choices: choices,
+          isDisabled: isDisabled,
+          isMonospaced: isMonospaced,
+          accessibilityLabel: label
+        )
+        .frame(width: fieldWidth)
+        .disabled(isDisabled)
+        .help(help ?? "")
+
+        if let help, showsHelpCaption {
+          Text(help)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(width: fieldWidth, alignment: .leading)
+        }
+      }
     }
   }
 
@@ -1804,11 +1888,22 @@ private struct AgentEditorSheet: View {
   }
 
   private func parameterHelpText(for definition: AgentHarnessParameterDefinition) -> String? {
-    let suggestions = definition.choices.map(\.label)
+    let choices = parameterChoices(for: definition)
+    let suggestions = choices.map { definition.allowsCustomValue ? $0.value : $0.label }
     guard !suggestions.isEmpty else { return definition.help }
     let suggestionText = "Suggested: \(suggestions.joined(separator: ", "))."
     guard let help = definition.help, !help.isEmpty else { return suggestionText }
     return "\(help) \(suggestionText)"
+  }
+
+  private func parameterChoices(
+    for definition: AgentHarnessParameterDefinition
+  ) -> [AgentHarnessParameterChoice] {
+    dynamicParameterChoices[definition.id] ?? definition.choices
+  }
+
+  private func parameterChoiceValues(for definition: AgentHarnessParameterDefinition) -> [String] {
+    parameterChoices(for: definition).map(\.value)
   }
 
   @ViewBuilder

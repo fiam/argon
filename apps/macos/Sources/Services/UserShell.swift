@@ -12,6 +12,17 @@ struct UserShellCommandDetails: Sendable {
   let version: String?
 }
 
+struct UserShellCommandOutput: Sendable {
+  let stdout: String
+  let stderr: String
+  let terminationStatus: Int32
+  let timedOut: Bool
+
+  var succeeded: Bool {
+    terminationStatus == 0 && !timedOut
+  }
+}
+
 enum UserShell {
   static func resolvedPath(
     environment: [String: String] = ProcessInfo.processInfo.environment
@@ -100,6 +111,14 @@ enum UserShell {
     environment: [String: String] = ProcessInfo.processInfo.environment
   ) -> [String: UserShellCommandDetails] {
     commandDetails(commandsByFamily, environment: environment, launch: launchSpec)
+  }
+
+  static func commandOutput(
+    _ command: String,
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    timeout: TimeInterval = 8
+  ) -> UserShellCommandOutput? {
+    commandOutput(command, environment: environment, timeout: timeout, launch: launchSpec)
   }
 
   private static func commandStatuses(
@@ -239,6 +258,81 @@ enum UserShell {
           ($0, UserShellCommandDetails(exists: false, resolvedPath: nil, version: nil))
         })
     }
+  }
+
+  private static func commandOutput(
+    _ command: String,
+    environment: [String: String],
+    timeout: TimeInterval,
+    launch: (String, [String: String]) -> SandboxedProcessSpec
+  ) -> UserShellCommandOutput? {
+    let fileManager = FileManager.default
+    let runID = UUID().uuidString
+    let stdoutURL = fileManager.temporaryDirectory
+      .appendingPathComponent("argon-shell-\(runID).out")
+    let stderrURL = fileManager.temporaryDirectory
+      .appendingPathComponent("argon-shell-\(runID).err")
+
+    fileManager.createFile(atPath: stdoutURL.path, contents: nil)
+    fileManager.createFile(atPath: stderrURL.path, contents: nil)
+    defer {
+      try? fileManager.removeItem(at: stdoutURL)
+      try? fileManager.removeItem(at: stderrURL)
+    }
+
+    guard let stdout = FileHandle(forWritingAtPath: stdoutURL.path),
+      let stderr = FileHandle(forWritingAtPath: stderrURL.path)
+    else { return nil }
+    defer {
+      try? stdout.close()
+      try? stderr.close()
+    }
+
+    let process = Process()
+    let processLaunch = launch(command, environment)
+    process.executableURL = URL(fileURLWithPath: processLaunch.executable)
+    process.arguments = processLaunch.args
+    process.environment = environment
+    process.standardOutput = stdout
+    process.standardError = stderr
+
+    let semaphore = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in
+      semaphore.signal()
+    }
+
+    do {
+      try process.run()
+    } catch {
+      return nil
+    }
+
+    var timedOut = false
+    if timeout > 0 {
+      let timeoutMilliseconds = max(1, Int(timeout * 1000))
+      if semaphore.wait(timeout: .now() + .milliseconds(timeoutMilliseconds)) == .timedOut {
+        timedOut = true
+        process.terminate()
+        if semaphore.wait(timeout: .now() + .seconds(1)) == .timedOut {
+          kill(process.processIdentifier, SIGKILL)
+          semaphore.wait()
+        }
+      }
+    } else {
+      semaphore.wait()
+    }
+
+    try? stdout.close()
+    try? stderr.close()
+
+    let stdoutData = (try? Data(contentsOf: stdoutURL)) ?? Data()
+    let stderrData = (try? Data(contentsOf: stderrURL)) ?? Data()
+    return UserShellCommandOutput(
+      stdout: String(data: stdoutData, encoding: .utf8) ?? "",
+      stderr: String(data: stderrData, encoding: .utf8) ?? "",
+      terminationStatus: process.terminationStatus,
+      timedOut: timedOut
+    )
   }
 
   private static func shellQuote(_ value: String) -> String {
