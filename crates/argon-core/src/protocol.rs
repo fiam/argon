@@ -25,7 +25,6 @@ pub enum CliCommand {
     ReviewerWait,
     ReviewerComment,
     ReviewerDecide,
-    SkillInstall,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -79,8 +79,6 @@ enum Commands {
     Reviewer(ReviewerCommands),
     #[command(subcommand)]
     Draft(DraftCommands),
-    #[command(subcommand)]
-    Skill(SkillCommands),
 }
 
 #[derive(Subcommand, Debug)]
@@ -144,24 +142,6 @@ enum ReviewerCommands {
     Wait(ReviewerWaitArgs),
     Comment(ReviewerCommentArgs),
     Decide(ReviewerDecideArgs),
-}
-
-#[derive(Subcommand, Debug)]
-enum SkillCommands {
-    Install(SkillInstallArgs),
-}
-
-#[derive(clap::Args, Debug)]
-struct SkillInstallArgs {
-    #[arg(long, default_value = "all")]
-    agent: SkillAgentArg,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum SkillAgentArg {
-    ClaudeCode,
-    Codex,
-    All,
 }
 
 #[derive(clap::Args, Debug)]
@@ -761,7 +741,6 @@ fn run() -> Result<()> {
         Commands::Terminal(command) => terminal_session::run_terminal(command),
         Commands::Reviewer(command) => run_reviewer(command, &runtime),
         Commands::Draft(command) => run_draft(command, &runtime),
-        Commands::Skill(command) => run_skill(command),
     }
 }
 
@@ -843,7 +822,7 @@ fn maybe_direct_path_invocation(raw_args: &[String]) -> Option<(PathBuf, LaunchO
 fn is_command_token(token: &str) -> bool {
     matches!(
         token,
-        "review" | "agent" | "sandbox" | "terminal" | "reviewer" | "draft" | "skill" | "help"
+        "review" | "agent" | "sandbox" | "terminal" | "reviewer" | "draft" | "help"
     )
 }
 
@@ -982,102 +961,6 @@ fn run_draft(command: DraftCommands, runtime: &RuntimeOptions) -> Result<()> {
     }
 }
 
-fn run_skill(command: SkillCommands) -> Result<()> {
-    match command {
-        SkillCommands::Install(args) => run_skill_install(args),
-    }
-}
-
-fn run_skill_install(args: SkillInstallArgs) -> Result<()> {
-    let skill_source = find_skill_source()?;
-    let home_dir = dirs_home()?;
-
-    let mut targets: Vec<(&str, PathBuf)> = Vec::new();
-    match args.agent {
-        SkillAgentArg::ClaudeCode => {
-            targets.push(("claude-code", home_dir.join(".claude/skills")));
-        }
-        SkillAgentArg::Codex => {
-            targets.push(("codex", home_dir.join(".codex/skills")));
-        }
-        SkillAgentArg::All => {
-            targets.push(("claude-code", home_dir.join(".claude/skills")));
-            targets.push(("codex", home_dir.join(".codex/skills")));
-        }
-    }
-
-    for (agent_name, skills_home) in &targets {
-        let dest = skills_home.join("argon-app-review");
-        std::fs::create_dir_all(&dest)
-            .with_context(|| format!("failed to create skill directory: {}", dest.display()))?;
-        copy_dir_recursive(&skill_source, &dest)
-            .with_context(|| format!("failed to copy skill to {}", dest.display()))?;
-        println!(
-            "installed argon-app-review skill for {agent_name} at {}",
-            dest.display()
-        );
-    }
-
-    Ok(())
-}
-
-fn find_skill_source() -> Result<PathBuf> {
-    // Check relative to current executable for .app bundle layout
-    if let Ok(exe) = std::env::current_exe() {
-        let bundle_path = exe
-            .parent()
-            .and_then(|p| p.parent())
-            .map(|p| p.join("Resources/skills/argon-app-review"));
-        if let Some(path) = bundle_path
-            && path.is_dir()
-        {
-            return Ok(path);
-        }
-    }
-
-    // Check ARGON_SKILL_DIR env var
-    if let Ok(dir) = std::env::var("ARGON_SKILL_DIR") {
-        let path = PathBuf::from(&dir);
-        if path.is_dir() {
-            return Ok(path);
-        }
-    }
-
-    // Check relative to CARGO_MANIFEST_DIR (development builds)
-    if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
-        let workspace_root = PathBuf::from(manifest_dir)
-            .ancestors()
-            .nth(2)
-            .map(|p| p.to_path_buf());
-        if let Some(root) = workspace_root {
-            let path = root.join("skills/argon-app-review");
-            if path.is_dir() {
-                return Ok(path);
-            }
-        }
-    }
-
-    bail!(
-        "could not find bundled skill directory; set ARGON_SKILL_DIR or run from an Argon.app bundle"
-    )
-}
-
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    for entry in std::fs::read_dir(src).with_context(|| format!("reading {}", src.display()))? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if file_type.is_dir() {
-            std::fs::create_dir_all(&dst_path)?;
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
-            std::fs::copy(&src_path, &dst_path)?;
-        }
-    }
-    Ok(())
-}
-
 fn description_from_args(
     description: Option<String>,
     description_file: Option<PathBuf>,
@@ -1092,13 +975,6 @@ fn description_from_args(
         }
         (None, None) => Ok(None),
     }
-}
-
-fn dirs_home() -> Result<PathBuf> {
-    std::env::var("HOME")
-        .map(PathBuf::from)
-        .or_else(|_| std::env::var("USERPROFILE").map(PathBuf::from))
-        .context("could not determine home directory (HOME or USERPROFILE not set)")
 }
 
 fn run_start(args: StartArgs, runtime: &RuntimeOptions) -> Result<()> {

@@ -7,12 +7,13 @@ Argon is a native macOS workspace for coding agents. It provides:
 - A SwiftUI desktop app for managing Git worktrees, terminals, and review.
 - A CLI (`argon`) for agent-safe, non-interactive control.
 - A review workflow that can be launched from the UI or from the CLI,
-  while agents may follow either prompt-driven or skill-backed handoff.
+  while agents follow prompt-driven or direct CLI handoff.
 
 ## Source of Truth
 
 - Product requirements: `PRD.md`
-- Skill contract: `skills/argon-app-review/SKILL.md`
+- CLI protocol contract: `crates/argon-core/src/protocol.rs`
+- Prompt contract: `crates/argon-core/src/prompt.rs`
 
 If behavior conflicts, prioritize `PRD.md` and update the other docs.
 
@@ -56,24 +57,25 @@ If behavior conflicts, prioritize `PRD.md` and update the other docs.
 
 1. `cargo fmt` + `swift-format` — format all Rust and Swift code.
 2. `cargo fmt --check` + `cargo clippy` + `swift-format lint` — verify formatting and lint.
-3. `cargo deny check` — license and advisory audit.
-4. `cargo test --workspace` — Rust unit and integration tests.
-5. `xcodebuild test` — Swift unit tests.
+3. `scripts/check-release-metadata.sh` — verify release metadata is synchronized.
+4. `cargo deny check` — license and advisory audit.
+5. `cargo test --workspace` — Rust unit and integration tests.
+6. Swift app build — regenerate the Xcode project and build `Argon.app`.
+7. `xcodebuild test` — Swift unit tests.
 
 ## Repository Structure
 
 ```
-argon-native/
+argon/
 ├── crates/
-│   ├── argon-core/       # Domain types, ReviewBackend trait, LocalBackend
-│   └── argon/            # CLI binary
+│   ├── argon/            # CLI binary
+│   ├── argon-core/       # Domain types, diff/review logic, and protocol types
+│   ├── argon-lib/        # FFI bridge used by the macOS app
+│   └── sandbox/          # Sandboxfile parser, evaluator, and macOS backend
 ├── apps/
 │   └── macos/            # SwiftUI app (project.yml + sources, .xcodeproj gitignored)
 │       ├── Sources/      # App source code
 │       └── Tests/        # Swift unit tests
-├── skills/               # Bundled agent skills
-│   ├── argon-app-review/ # Production skill for coding agents
-│   └── argon-dev-review/ # Dev skill for testing the app
 ├── scripts/              # Dev scripts
 ├── Makefile              # `make check`, `make fmt`, `make test`, etc.
 ├── deny.toml             # cargo-deny configuration
@@ -98,7 +100,6 @@ argon-native/
 - Rebuild and launch for testing: `bash scripts/dev-argon.sh .`
 - `scripts/dev-argon.sh` builds the Rust CLI, regenerates the Xcode
   project, builds `Argon.app`, and launches the requested workspace.
-- Install dev skill: `make install-dev-skill`
 - Run all checks: `make check`
 - Format code: `make fmt`
 
@@ -117,11 +118,11 @@ argon-native/
 ## Key Design Decisions
 
 - **SwiftUI primary**: use SwiftUI for all UI, AppKit only for hard limitations (NSTextView, PTY terminals).
-- **ReviewBackend trait**: the core abstraction. LocalBackend ships first; RemoteBackend enables SaaS mode later.
-- **Per-session backends**: each app window holds one backend managing one session.
+- **Local session store first**: review sessions are local files managed by
+  `argon-core`; remote review backends remain a future direction in the PRD.
 - **Dual review entry**: review can start from the workspace UI or from the
   CLI.
-- **Prompt-first agent handoff**: agents may be driven entirely through
-  copied prompts and CLI commands; bundled skills are optional wrappers.
+- **App/CLI-first agent handoff**: agents are driven through app-generated
+  prompts and direct CLI commands.
 - **Draft review mode**: comments accumulate as drafts, submitted together with a decision (like GitHub).
 - **FSEvents file watcher**: diff refreshes automatically when the working tree changes.

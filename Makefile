@@ -85,7 +85,7 @@ build-release:
 build-dmg:
 	bash scripts/build-release.sh --dmg
 
-# Build vendored Ghostty xcframework for future terminal integration
+# Build vendored Ghostty xcframework for the embedded terminal
 build-libghostty:
 	bash scripts/build-libghostty.sh
 
@@ -100,7 +100,3 @@ print-libghostty-path:
 # Print the deterministic Ghostty resources path
 print-libghostty-resources-path:
 	bash scripts/build-libghostty.sh --print-resources-path
-
-# Install dev skill into Claude Code and Codex
-install-dev-skill:
-	bash scripts/install-dev-skill.sh

@@ -16,8 +16,8 @@ workspace-first product:
 - the CLI is also the convenient human launcher for opening and focusing
   app windows from the terminal
 - `argon agent ...` remains the machine-readable review loop for agents,
-  while prompt-driven handoff stays a first-class option and skills remain
-  optional convenience wrappers
+  while app-generated prompts and direct CLI commands stay the first-class
+  agent handoff path
 
 The new daily-driver experience is:
 
@@ -136,14 +136,15 @@ screen anymore. The workspace window is.
   over prompt-only conventions.
 - Secrets stay out of prompts: provider tokens, refresh tokens, client
   secrets, and long-lived grants must not be written into prompts,
-  terminal transcripts, repo files, or skill files.
+  terminal transcripts, repo files, or local config files.
 - Human and admin consent are product boundaries: connector access should
   reflect explicit user authorization, enterprise approval requirements,
   and local per-agent grants.
 - Human-convenient launch: the same CLI should be ergonomic for users who
   want to open the right window from the terminal without extra flags.
 - Prompt-driven interoperability: agent workflows should be expressible
-  through copied prompts and CLI commands, not only through installed skills.
+  through copied prompts and CLI commands, without agent-specific plugins
+  or wrapper workflows.
 
 ## 8. Command Model
 
@@ -168,7 +169,7 @@ The following flows stay supported during the transition:
 
 - `argon review --repo <dir> ...`
 - `argon agent start --repo <dir> ...`
-- existing agent/reviewer/draft/diff commands
+- existing agent/reviewer/draft commands
 
 The CLI should treat positional directory arguments as the preferred human
 syntax while preserving machine-readable flags for agents and scripts.
@@ -188,16 +189,11 @@ Human-launch expectations:
 
 ### 8.4 Agent Interaction Expectations
 
-Argon should support agent interaction in four forms:
+Argon should support agent interaction in three primary forms:
 
 - direct prompt-driven handoff from the UI
 - explicit CLI commands copied into an agent session
 - an internal MCP server that exposes typed Argon tools to embedded agents
-- optional installed skills that wrap the same underlying commands
-
-No core review or workspace workflow should require a skill installation if
-the same interaction can be expressed with prompt text, CLI commands, or MCP
-tools.
 
 ## 9. UX Overview
 
@@ -494,7 +490,7 @@ The summary should resemble a PR description and include:
 
 #### FR-14 Prompt-Driven Agent Interop
 
-Agent workflows must be usable without requiring a skill installation.
+Agent workflows must be usable without requiring agent-specific plugins.
 
 Requirements:
 
@@ -502,8 +498,8 @@ Requirements:
   for coder and reviewer agents
 - agents must be able to participate through copied prompts plus CLI
   commands only
-- skills may accelerate the workflow, but they must not be the only
-  supported path
+- the app-generated prompts and CLI protocol are the only supported lifecycle
+  contract for agent handoff
 
 #### FR-15 Post-Commit Review Reset
 
@@ -578,7 +574,7 @@ Connector requirements:
   registrations when the provider allows a suitable native / public-client
   flow.
 - Provider client secrets and private keys must not ship in the app bundle,
-  CLI, skills, repo, or prompts.
+  CLI, repo, local config, or prompts.
 - When a provider requires a confidential client secret, Argon must use
   either a minimal hosted OAuth broker or a user/company-provided app
   registration.
@@ -956,7 +952,8 @@ Behavior:
 Compatibility:
 
 - keep `argon review --repo <dir>` working
-- keep `argon agent start --repo <dir>` unchanged for skills
+- keep `argon agent start --repo <dir>` working for existing agent
+  integrations
 
 ### 11.5 Agent Control Spec
 
@@ -979,10 +976,10 @@ Proposed abstraction:
 Phase 1 transport can still be terminal-backed, but the request and result
 shapes should be explicit in Rust domain types.
 
-The transport must support both:
+The transport must support:
 
 - prompt-driven agent handoff
-- optional skill-backed wrappers over the same request model
+- direct CLI or MCP execution over the same request model
 
 ### 11.6 Review Summary Spec
 
@@ -1206,10 +1203,12 @@ larger workspace domain.
 
 ### 12.2 Backend Boundary
 
-The current `ReviewBackend` abstraction should remain for review windows.
+The current implementation stores review sessions locally through
+`argon-core`. A future remote review backend should stay scoped to review
+windows and should not become the owner of broader workspace concerns.
 
-The workspace likely needs a separate backend or service layer rather than
-forcing review-only abstractions to own:
+The workspace needs separate service boundaries rather than forcing
+review-oriented abstractions to own:
 
 - worktrees
 - terminals
@@ -1238,7 +1237,7 @@ Future v2 direction:
   reviewer-agent requests
 - add centrally managed connector support so agents can be connected to
   shared services from one place, with MCP as the primary surface and
-  optional skills as wrappers
+  direct CLI commands as the fallback surface
 - add subagent orchestration tools so a parent agent can launch visible
   child agents using the same detected harness
 - keep saved agent profiles as the authority for which reviewer agents can
@@ -1276,7 +1275,7 @@ Exit criteria:
 - make `argon <dir>` open the workspace window
 - make `argon review <dir>` open the review window
 - preserve `argon agent start ...` and current review contract, whether the
-  agent is following a copied prompt or an installed skill
+  agent is following a copied prompt or direct CLI instructions
 - add compatibility coverage for old flag-based review entry
 
 Exit criteria:
