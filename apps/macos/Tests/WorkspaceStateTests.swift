@@ -1946,10 +1946,10 @@ struct WorkspaceStateTests {
             id: lazyTabID,
             worktreePath: "/tmp/repo/feature",
             worktreeLabel: "feature/window",
-            title: "Gemini",
-            commandDescription: "gemini",
-            kind: .agent(profileName: "Gemini", icon: "sparkles"),
-            agentFamilyID: .gemini,
+            title: "Antigravity",
+            commandDescription: "agy",
+            kind: .agent(profileName: "Antigravity", icon: "antigravity"),
+            agentFamilyID: .antigravity,
             createdAt: Date(timeIntervalSince1970: 6),
             isSandboxed: true,
             writableRoots: ["/tmp/repo/feature"]
@@ -2152,10 +2152,10 @@ struct WorkspaceStateTests {
             id: coldTabID,
             worktreePath: "/tmp/repo/feature",
             worktreeLabel: "feature/window",
-            title: "Gemini",
-            commandDescription: "gemini",
-            kind: .agent(profileName: "Gemini", icon: "sparkles"),
-            agentFamilyID: .gemini,
+            title: "Antigravity",
+            commandDescription: "agy",
+            kind: .agent(profileName: "Antigravity", icon: "antigravity"),
+            agentFamilyID: .antigravity,
             createdAt: Date(timeIntervalSince1970: 9),
             isSandboxed: true,
             writableRoots: ["/tmp/repo/feature"]
@@ -3116,8 +3116,8 @@ struct WorkspaceStateTests {
           startedAt: Date(timeIntervalSince1970: 20)
         ),
         AgentResumeSessionRecord(
-          familyID: .gemini,
-          sessionID: "gemini-current",
+          familyID: .antigravity,
+          sessionID: "antigravity-current",
           cwd: "/tmp/repo",
           startedAt: Date(timeIntervalSince1970: 10)
         ),
@@ -3136,13 +3136,10 @@ struct WorkspaceStateTests {
     let state = makeState()
     let sessions = state.restorableAgentSessions(savedProfiles: SavedAgentProfiles.builtinDefaults)
 
-    #expect(sessions.map(\.sessionID) == ["codex-current", "claude-current", "gemini-current"])
-    #expect(sessions.map(\.familyID) == [.codex, .claudeCode, .gemini])
+    #expect(sessions.map(\.sessionID) == ["codex-current", "claude-current"])
+    #expect(sessions.map(\.familyID) == [.codex, .claudeCode])
     #expect(
       sessions.first(where: { $0.familyID == .claudeCode })?.resumeArgumentTemplate
-        == "--resume {{session_id}}")
-    #expect(
-      sessions.first(where: { $0.familyID == .gemini })?.resumeArgumentTemplate
         == "--resume {{session_id}}")
   }
 

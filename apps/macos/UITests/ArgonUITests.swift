@@ -142,10 +142,10 @@ final class ArgonUITests: XCTestCase {
   }
 
   @MainActor
-  func testGhosttyGeminiReviewerLaunchDoesNotCrash() throws {
-    try requireCommandInstalled("gemini")
+  func testGhosttyAntigravityReviewerLaunchDoesNotCrash() throws {
+    try requireCommandInstalled("agy")
     try runReviewerLaunchSmoke(
-      command: "gemini",
+      command: "agy",
       expectedHostSignal: "ghostty-terminal-host-created"
     )
   }
@@ -1191,13 +1191,13 @@ final class ArgonUITests: XCTestCase {
             filePath: "Sandboxfile",
             lineNew: 5,
             body:
-              "Gemini, keep the proxy-backed network story explicit so reviewer agents can validate it before merge-back.",
+              "Antigravity, keep the proxy-backed network story explicit so reviewer agents can validate it before merge-back.",
             timestamp: timestamp
           ),
           reviewComment(
             id: "aaaaaaaa-3333-3333-3333-333333333333",
             threadId: sandboxThreadId,
-            authorName: "Gemini",
+            authorName: "Antigravity",
             filePath: "Sandboxfile",
             lineNew: 5,
             body:
@@ -1249,7 +1249,7 @@ final class ArgonUITests: XCTestCase {
           reviewComment(
             id: "dddddddd-2222-2222-2222-222222222222",
             threadId: manifestThreadId,
-            authorName: "Gemini",
+            authorName: "Antigravity",
             filePath: "Sources/SandboxPolicyManifest.swift",
             lineNew: 612,
             body:
@@ -1312,7 +1312,7 @@ final class ArgonUITests: XCTestCase {
           reviewComment(
             id: "ffffffff-2222-2222-2222-222222222222",
             threadId: telemetryThreadId,
-            authorName: "Gemini",
+            authorName: "Antigravity",
             filePath: "Sources/ReviewTelemetryPlan.swift",
             lineNew: 650,
             body:
@@ -2692,11 +2692,11 @@ final class ArgonUITests: XCTestCase {
             "icon": "codex",
           ],
           [
-            "name": "Gemini",
-            "command": "gemini",
+            "name": "Antigravity",
+            "command": "agy",
             "focusPrompt": "Review the branch for product copy and reviewer handoff clarity.",
             "sandboxEnabled": true,
-            "icon": "gemini",
+            "icon": "antigravity",
           ],
         ]
       } else {
@@ -2704,20 +2704,20 @@ final class ArgonUITests: XCTestCase {
           [
             "name": "Codex",
             "command":
-              "/bin/sh -lc 'printf \"Codex reviewer\\n\\nGemini already pushed on the product copy.\\nI am checking merge-back safety and the sandbox wording before land.\\n\\n- keep sandbox-on-by-default explicit\\n- make proxy activity visible before merge-back\\n\"; sleep 180'",
+              "/bin/sh -lc 'printf \"Codex reviewer\\n\\nAntigravity already pushed on the product copy.\\nI am checking merge-back safety and the sandbox wording before land.\\n\\n- keep sandbox-on-by-default explicit\\n- make proxy activity visible before merge-back\\n\"; sleep 180'",
             "focusPrompt":
-              "Review the branch for merge-back safety and sandbox clarity, then coordinate with Gemini on the final wording.",
+              "Review the branch for merge-back safety and sandbox clarity, then coordinate with Antigravity on the final wording.",
             "sandboxEnabled": true,
             "icon": "codex",
           ],
           [
-            "name": "Gemini",
+            "name": "Antigravity",
             "command":
-              "/bin/sh -lc 'printf \"Gemini reviewer\\n\\nCodex is checking merge-back safety.\\nI am tightening the reviewer handoff and approval language.\\n\\n- make the human approval gate explicit\\n- keep the copy local-first and concrete\\n\"; sleep 180'",
+              "/bin/sh -lc 'printf \"Antigravity reviewer\\n\\nCodex is checking merge-back safety.\\nI am tightening the reviewer handoff and approval language.\\n\\n- make the human approval gate explicit\\n- keep the copy local-first and concrete\\n\"; sleep 180'",
             "focusPrompt":
               "Review the branch for product copy and reviewer handoff clarity, then align with Codex on what should block merge-back.",
             "sandboxEnabled": true,
-            "icon": "gemini",
+            "icon": "antigravity",
           ],
         ]
       }

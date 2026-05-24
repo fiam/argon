@@ -3,7 +3,7 @@ import Foundation
 enum AgentFamilyID: String, Codable, CaseIterable, Sendable {
   case claudeCode = "claude-code"
   case codex
-  case gemini
+  case antigravity
 
   var defaultProfileID: String {
     rawValue
@@ -250,7 +250,7 @@ enum AgentHarnesses {
   private static let harnesses: [any AgentHarness] = [
     ClaudeCodeAgentHarness(),
     CodexAgentHarness(),
-    GeminiAgentHarness(),
+    AntigravityAgentHarness(),
   ]
 
   private static let harnessesByFamily: [AgentFamilyID: any AgentHarness] = Dictionary(

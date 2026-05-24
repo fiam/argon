@@ -26,7 +26,7 @@ struct AgentSelectionSettingsTests {
     #expect(AgentSelectionSettings.lastSelectedAgentID(userDefaults: defaults) == "codex")
 
     AgentSelectionSettings.setRememberLastSelection(false, userDefaults: defaults)
-    AgentSelectionSettings.recordLastSelectedAgentID("gemini", userDefaults: defaults)
+    AgentSelectionSettings.recordLastSelectedAgentID("antigravity", userDefaults: defaults)
     #expect(AgentSelectionSettings.lastSelectedAgentID(userDefaults: defaults) == "codex")
 
     defaults.removePersistentDomain(forName: suiteName)

@@ -91,13 +91,13 @@ enum AgentDetector {
         ))
     }
 
-    if commandExists("gemini") {
+    if commandExists("agy") {
       agents.append(
         AgentProfile(
-          id: "gemini",
-          name: "Gemini CLI",
-          command: "gemini",
-          icon: "sparkles",
+          id: "antigravity",
+          name: "Antigravity CLI",
+          command: "agy",
+          icon: "antigravity",
           isDetected: true,
           promptArgumentTemplate: ""
         ))

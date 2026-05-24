@@ -50,11 +50,11 @@ final class UITestAutomationTests: XCTestCase {
         icon: "codex"
       ),
       UITestAutomationConfig.ReviewerLaunch(
-        name: "Gemini",
-        command: "gemini",
+        name: "Antigravity",
+        command: "agy",
         focusPrompt: "review website copy",
         sandboxEnabled: true,
-        icon: "gemini"
+        icon: "antigravity"
       ),
     ]
     let data = try JSONEncoder().encode(launches)

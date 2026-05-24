@@ -263,7 +263,7 @@ struct WorkspaceTerminalChromeBar: View {
     if tab.agentActivityState == .thinking,
       !confirmThinkingAgentRelaunch(
         tab,
-        actionDescription: "Changing model or reasoning",
+        actionDescription: "Changing agent profile",
         confirmButtonTitle: "Change Profile"
       )
     {
@@ -477,7 +477,7 @@ struct WorkspaceTerminalTabItem: View {
               }
             }
           } label: {
-            Label("Model / Reasoning", systemImage: "slider.horizontal.3")
+            Label("Agent Profile", systemImage: "slider.horizontal.3")
           }
 
           Divider()
@@ -575,7 +575,7 @@ struct WorkspaceTerminalTabItem: View {
   private var resolvedAgentTabIconName: String {
     guard case .agent(_, let icon) = tab.kind else { return "agent" }
     switch icon {
-    case "claude", "codex", "gemini":
+    case "claude", "codex", "antigravity":
       return icon
     default:
       return "agent"

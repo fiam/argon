@@ -1222,8 +1222,8 @@ final class AppState {
     if normalized.contains("codex") {
       return "Codex"
     }
-    if normalized.contains("gemini") {
-      return "Gemini"
+    if normalized.contains("agy") || normalized.contains("antigravity") {
+      return "Antigravity"
     }
     if normalized.contains("claude") {
       return "Claude"
@@ -1242,8 +1242,8 @@ final class AppState {
     if normalized.contains("codex") {
       return "codex"
     }
-    if normalized.contains("gemini") {
-      return "gemini"
+    if normalized.contains("agy") || normalized.contains("antigravity") {
+      return "antigravity"
     }
     if normalized.contains("claude") {
       return "claude"

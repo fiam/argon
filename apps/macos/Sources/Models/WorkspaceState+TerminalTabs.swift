@@ -676,14 +676,14 @@ extension WorkspaceState {
     )
 
     _ = insertUITestWebsiteDemoTab(
-      title: "Gemini",
-      commandDescription: "gemini",
-      icon: "gemini",
+      title: "Antigravity",
+      commandDescription: "agy",
+      icon: "antigravity",
       worktree: worktree,
       processSpec: Self.websiteDemoAgentProcessSpec(
-        preferredCommand: "gemini",
+        preferredCommand: "agy",
         fallbackLines: [
-          "Gemini CLI",
+          "Antigravity CLI",
           "",
           "Planning next pass...",
           "- tighten the website copy",

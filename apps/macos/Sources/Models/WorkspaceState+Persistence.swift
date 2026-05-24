@@ -1063,9 +1063,9 @@ extension WorkspaceState {
     profile: SavedAgentProfile
   ) -> String {
     switch familyID {
-    case .claudeCode, .gemini:
+    case .claudeCode:
       "--resume {{session_id}}"
-    case .codex:
+    case .codex, .antigravity:
       profile.resumeArgumentTemplate.isEmpty
         ? familyID.defaultProfile.resumeArgumentTemplate
         : profile.resumeArgumentTemplate

@@ -119,7 +119,7 @@ struct SavedAgentProfilesTests {
       AgentHarnesses.displayVersion(for: .claudeCode, rawOutput: "2.1.98 (Claude Code)")
         == "2.1.98"
     )
-    #expect(AgentHarnesses.displayVersion(for: .gemini, rawOutput: "0.38.2") == "0.38.2")
+    #expect(AgentHarnesses.displayVersion(for: .antigravity, rawOutput: "0.38.2") == "0.38.2")
   }
 
   @Test("builtin defaults are immutable and render no harness parameters")
@@ -334,7 +334,7 @@ struct SavedAgentProfilesTests {
     #expect(profiles.profiles.count == 3)
     #expect(profiles.profiles.first { $0.familyID == .codex }?.isEnabled == true)
     #expect(profiles.profiles.first { $0.familyID == .claudeCode }?.isEnabled == false)
-    #expect(profiles.profiles.first { $0.familyID == .gemini }?.isEnabled == false)
+    #expect(profiles.profiles.first { $0.familyID == .antigravity }?.isEnabled == false)
   }
 
   @Test("builtins disable while custom profiles delete")
@@ -349,7 +349,7 @@ struct SavedAgentProfilesTests {
     profiles.remove(id: "codex")
 
     #expect(profiles.profiles.first { $0.id == "codex" }?.isEnabled == false)
-    #expect(profiles.enabledProfiles.map(\.id) == ["claude-code", "gemini"])
+    #expect(profiles.enabledProfiles.map(\.id) == ["claude-code", "antigravity"])
 
     profiles.add(
       SavedAgentProfile(
@@ -380,7 +380,7 @@ struct SavedAgentProfilesTests {
     profiles.resetToDefaults()
 
     #expect(profiles.profiles.allSatisfy { $0.isEnabled })
-    #expect(profiles.profiles.compactMap(\.familyID) == [.claudeCode, .codex, .gemini])
+    #expect(profiles.profiles.compactMap(\.familyID) == [.claudeCode, .codex, .antigravity])
   }
 
   @Test("moving profiles persists the new order")
@@ -393,10 +393,10 @@ struct SavedAgentProfilesTests {
     let profiles = SavedAgentProfiles(userDefaults: defaults, storageKey: suiteName)
     profiles.move(from: IndexSet(integer: 2), to: 0)
 
-    #expect(profiles.profiles.map(\.id) == ["gemini", "claude-code", "codex"])
+    #expect(profiles.profiles.map(\.id) == ["antigravity", "claude-code", "codex"])
 
     let reloaded = SavedAgentProfiles(userDefaults: defaults, storageKey: suiteName)
-    #expect(reloaded.profiles.map(\.id) == ["gemini", "claude-code", "codex"])
+    #expect(reloaded.profiles.map(\.id) == ["antigravity", "claude-code", "codex"])
 
     defaults.removePersistentDomain(forName: suiteName)
   }

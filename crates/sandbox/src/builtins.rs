@@ -61,8 +61,8 @@ static BUILTINS: &[BuiltinModule] = &[
         source: include_str!("../builtins/agent/codex.Sandboxfile"),
     },
     BuiltinModule {
-        name: "agent/gemini",
-        source: include_str!("../builtins/agent/gemini.Sandboxfile"),
+        name: "agent/antigravity",
+        source: include_str!("../builtins/agent/antigravity.Sandboxfile"),
     },
 ];
 

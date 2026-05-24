@@ -1,0 +1,8 @@
+ENV ALLOW AGY_*
+ENV ALLOW ANTIGRAVITY_*
+ENV ALLOW GOOGLE_*
+
+EXEC ALLOW agy
+IF TEST -d "$HOME/.gemini/antigravity-cli"
+FS ALLOW WRITE $HOME/.gemini/antigravity-cli/
+END

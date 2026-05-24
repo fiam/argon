@@ -376,9 +376,9 @@ Builtins are authored in `Sandboxfile` syntax and compiled into Argon.
 Current builtins:
 
 - `agent`
+- `agent/antigravity`
 - `agent/claude`
 - `agent/codex`
-- `agent/gemini`
 - `gpg`
 - `git`
 - `git/signing`
@@ -402,8 +402,8 @@ Common entrypoints and includes:
 
 These are ordinary builtin modules, not evaluator-level shorthands. They
 dispatch internally to more specific modules such as `os/macos`,
-`shell/zsh`, or `agent/codex` based on the current launch context. Relative
-`USE` paths are file includes, not builtin lookups.
+`shell/zsh`, `agent/codex`, or `agent/antigravity` based on the current
+launch context. Relative `USE` paths are file includes, not builtin lookups.
 
 `USE shell` is intentionally minimal. It grants access to the current shell
 binary and the shell's history file when those variables are available. It

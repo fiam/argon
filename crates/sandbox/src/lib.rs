@@ -3532,6 +3532,7 @@ mod tests {
         assert!(names.contains(&"gpg".to_string()));
         assert!(names.contains(&"shell".to_string()));
         assert!(names.contains(&"agent".to_string()));
+        assert!(names.contains(&"agent/antigravity".to_string()));
         assert!(names.contains(&"os/macos".to_string()));
         assert!(names.contains(&"shell/zsh".to_string()));
     }
@@ -4413,14 +4414,14 @@ NET ALLOW CONNECT udp *:53
         fs::create_dir_all(&repo_root).expect("repo");
         fs::create_dir_all(&bin_root).expect("bin");
         fs::create_dir_all(repo_root.join("home")).expect("home");
-        fs::create_dir_all(repo_root.join("home/.gemini")).expect("agent state");
-        fs::write(bin_root.join("gemini"), "#!/bin/sh\nexit 0\n").expect("fake gemini");
+        fs::create_dir_all(repo_root.join("home/.gemini/antigravity-cli")).expect("agent state");
+        fs::write(bin_root.join("agy"), "#!/bin/sh\nexit 0\n").expect("fake agy");
         fs::write(bin_root.join("rg"), "#!/bin/sh\nexit 0\n").expect("fake rg");
         fs::write(repo_root.join(REPO_SANDBOXFILE), "USE agent\n").expect("sandbox");
 
-        let mut context = context_for(&repo_root, &["gemini"]);
+        let mut context = context_for(&repo_root, &["agy"]);
         context.launch = LaunchKind::Agent;
-        context.agent = Some("gemini".to_string());
+        context.agent = None;
         context.env.insert(
             "PATH".to_string(),
             format!("{}:/bin:/usr/bin", bin_root.display()),
@@ -4428,11 +4429,12 @@ NET ALLOW CONNECT udp *:53
 
         let explain = explain(&context, &[]).expect("explain");
 
+        assert_eq!(explain.context["ARGV0_BASENAME"], "agy");
         assert!(
             explain
                 .sources
                 .iter()
-                .any(|source| source.name == "agent/gemini" && source.kind == "builtin")
+                .any(|source| source.name == "agent/antigravity" && source.kind == "builtin")
         );
         assert!(
             explain

@@ -27,7 +27,7 @@ struct AgentIconView: View {
       return "brain"
     case "codex":
       return "rectangle.and.text.magnifyingglass"
-    case "gemini":
+    case "antigravity":
       return "sparkles"
     case "agent", "terminal":
       return "sparkles.rectangle.stack"
@@ -42,8 +42,6 @@ struct AgentIconView: View {
       return Image(.claude)
     case "codex":
       return Image(.codex)
-    case "gemini":
-      return Image(.gemini)
     default:
       return nil
     }
@@ -1625,7 +1623,10 @@ private struct AgentEditorSheet: View {
     if profile.isBuiltIn {
       return "Duplicate this built-in profile to customize launch arguments."
     }
-    return "Harness profiles use the built-in command. Change model or reasoning below."
+    if harnessParameterDefinitions.isEmpty {
+      return "Harness profiles use the built-in command."
+    }
+    return "Harness profiles use the built-in command. Change launch arguments below."
   }
 
   private var availabilityCommandName: String {

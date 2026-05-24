@@ -4,8 +4,8 @@ CASE "claude"
 SET AGENT claude
 CASE "codex"
 SET AGENT codex
-CASE "gemini"
-SET AGENT gemini
+CASE "agy"
+SET AGENT antigravity
 END
 END
 
@@ -18,8 +18,8 @@ CASE "claude"
 USE agent/claude
 CASE "codex"
 USE agent/codex
-CASE "gemini"
-USE agent/gemini
+CASE "antigravity"
+USE agent/antigravity
 DEFAULT
 IF TEST -n "$AGENT"
 WARN "USE agent does not recognize agent `$AGENT`"
