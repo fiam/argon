@@ -1,4 +1,4 @@
-.PHONY: check fmt lint test test-rust test-swift test-ui smoke-release-launch build-swift build-release build-dmg build-libghostty build-libghostty-universal print-libghostty-path print-libghostty-resources-path deny
+.PHONY: check fmt lint test test-rust test-swift test-ui check-release-metadata smoke-release-launch build-swift build-release build-dmg build-libghostty build-libghostty-universal print-libghostty-path print-libghostty-resources-path deny
 
 SWIFT_FORMAT ?= $(shell xcrun --find swift-format 2>/dev/null || command -v swift-format 2>/dev/null)
 SDKROOT ?= $(shell xcrun --sdk macosx --show-sdk-path 2>/dev/null)
@@ -28,6 +28,7 @@ lint:
 	cargo fmt --check
 	cargo clippy --workspace -- -D warnings
 	$(SWIFT_FORMAT) lint --recursive apps/macos/Sources/ apps/macos/Tests/ apps/macos/UITests/
+	bash scripts/check-release-metadata.sh
 
 # Run all tests
 test: test-rust test-swift
@@ -57,6 +58,10 @@ test-ui: build-swift
 # Release CLI launch smoke tests
 smoke-release-launch:
 	bash scripts/smoke-release-launch.sh
+
+# Check release version metadata is synchronized
+check-release-metadata:
+	bash scripts/check-release-metadata.sh
 
 # Build Swift app
 build-swift:

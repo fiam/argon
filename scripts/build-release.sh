@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$REPO_ROOT/build"
-VERSION=$(grep 'MARKETING_VERSION' "$REPO_ROOT/apps/macos/project.yml" | head -1 | sed 's/.*: *"\(.*\)"/\1/')
+VERSION="$(tr -d '[:space:]' < "$REPO_ROOT/version.txt")"
 CREATE_DMG=false
 
 while [[ $# -gt 0 ]]; do
@@ -12,6 +12,8 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
+
+bash "$REPO_ROOT/scripts/check-release-metadata.sh"
 
 echo "==> Building Argon $VERSION (release)"
 
