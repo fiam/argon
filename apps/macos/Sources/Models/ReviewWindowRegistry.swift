@@ -25,43 +25,51 @@ final class ReviewWindowRegistry {
   }
 
   @ObservationIgnored
-  private var openingRepoRoots = Set<String>()
+  private var openingSessionIDs = Set<String>()
   @ObservationIgnored
-  private var registrationsByRepoRoot: [String: [Registration]] = [:]
+  private var registrationsBySessionID: [String: [Registration]] = [:]
 
   func open(target: ReviewTarget, openWindow: (ReviewTarget) -> Void) {
-    let normalized = normalizedPath(target.repoRoot)
-    if bringToFront(repoRoot: normalized) {
+    let sessionID = sessionKey(target.sessionId)
+    if bringToFront(sessionID: sessionID) {
       return
     }
 
-    guard !openingRepoRoots.contains(normalized) else { return }
-    openingRepoRoots.insert(normalized)
+    guard !openingSessionIDs.contains(sessionID) else { return }
+    openingSessionIDs.insert(sessionID)
     openWindow(target)
   }
 
-  func state(for repoRoot: String) -> WindowState {
-    let normalized = normalizedPath(repoRoot)
-    if openingRepoRoots.contains(normalized) {
+  func state(forSessionID sessionID: String) -> WindowState {
+    let sessionID = sessionKey(sessionID)
+    if openingSessionIDs.contains(sessionID) {
       return .opening
     }
-    pruneDeadRegistrations(for: normalized)
-    if !(registrationsByRepoRoot[normalized] ?? []).isEmpty {
+    pruneDeadRegistrations(forSessionID: sessionID)
+    if !(registrationsBySessionID[sessionID] ?? []).isEmpty {
       return .open
     }
     return .idle
   }
 
-  func markOpening(repoRoot: String) {
-    openingRepoRoots.insert(normalizedPath(repoRoot))
+  func state(for target: ReviewTarget) -> WindowState {
+    state(forSessionID: target.sessionId)
   }
 
-  func register(window: NSWindow, repoRoot: String) {
-    let normalized = normalizedPath(repoRoot)
-    openingRepoRoots.remove(normalized)
-    pruneDeadRegistrations(for: normalized)
+  func markOpening(sessionID: String) {
+    openingSessionIDs.insert(sessionKey(sessionID))
+  }
 
-    if registrationsByRepoRoot[normalized]?.contains(where: { $0.window === window }) == true {
+  func register(window: NSWindow, target: ReviewTarget) {
+    register(window: window, sessionID: target.sessionId)
+  }
+
+  func register(window: NSWindow, sessionID rawSessionID: String) {
+    let sessionID = sessionKey(rawSessionID)
+    openingSessionIDs.remove(sessionID)
+    pruneDeadRegistrations(forSessionID: sessionID)
+
+    if registrationsBySessionID[sessionID]?.contains(where: { $0.window === window }) == true {
       return
     }
 
@@ -72,37 +80,41 @@ final class ReviewWindowRegistry {
     ) { [weak self, weak window] _ in
       MainActor.assumeIsolated {
         guard let self, let window else { return }
-        self.unregister(window: window, repoRoot: normalized)
+        self.unregister(window: window, sessionID: sessionID)
       }
     }
 
-    registrationsByRepoRoot[normalized, default: []].append(
+    registrationsBySessionID[sessionID, default: []].append(
       Registration(window: window, closeObserver: closeObserver)
     )
   }
 
-  func unregister(window: NSWindow, repoRoot: String) {
-    let normalized = normalizedPath(repoRoot)
-    openingRepoRoots.remove(normalized)
-    guard var registrations = registrationsByRepoRoot[normalized] else { return }
+  func unregister(window: NSWindow, target: ReviewTarget) {
+    unregister(window: window, sessionID: target.sessionId)
+  }
+
+  func unregister(window: NSWindow, sessionID rawSessionID: String) {
+    let sessionID = sessionKey(rawSessionID)
+    openingSessionIDs.remove(sessionID)
+    guard var registrations = registrationsBySessionID[sessionID] else { return }
 
     registrations.removeAll { registration in
       registration.window == nil || registration.window === window
     }
 
     if registrations.isEmpty {
-      registrationsByRepoRoot.removeValue(forKey: normalized)
+      registrationsBySessionID.removeValue(forKey: sessionID)
     } else {
-      registrationsByRepoRoot[normalized] = registrations
+      registrationsBySessionID[sessionID] = registrations
     }
   }
 
   @discardableResult
-  func bringToFront(repoRoot: String) -> Bool {
-    let normalized = normalizedPath(repoRoot)
-    pruneDeadRegistrations(for: normalized)
+  func bringToFront(sessionID rawSessionID: String) -> Bool {
+    let sessionID = sessionKey(rawSessionID)
+    pruneDeadRegistrations(forSessionID: sessionID)
     guard
-      let window = registrationsByRepoRoot[normalized]?
+      let window = registrationsBySessionID[sessionID]?
         .compactMap(\.window)
         .last
     else {
@@ -113,13 +125,13 @@ final class ReviewWindowRegistry {
     return true
   }
 
-  private func pruneDeadRegistrations(for repoRoot: String) {
-    guard var registrations = registrationsByRepoRoot[repoRoot] else { return }
+  private func pruneDeadRegistrations(forSessionID sessionID: String) {
+    guard var registrations = registrationsBySessionID[sessionID] else { return }
     registrations.removeAll { $0.window == nil }
     if registrations.isEmpty {
-      registrationsByRepoRoot.removeValue(forKey: repoRoot)
+      registrationsBySessionID.removeValue(forKey: sessionID)
     } else {
-      registrationsByRepoRoot[repoRoot] = registrations
+      registrationsBySessionID[sessionID] = registrations
     }
   }
 
@@ -131,7 +143,7 @@ final class ReviewWindowRegistry {
     window.makeKeyAndOrderFront(nil)
   }
 
-  private func normalizedPath(_ path: String) -> String {
-    URL(fileURLWithPath: path).standardizedFileURL.path
+  private func sessionKey(_ sessionID: String) -> String {
+    sessionID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
   }
 }

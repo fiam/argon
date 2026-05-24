@@ -8,13 +8,14 @@ enum WorkspaceReviewLauncher {
     reviewWindowRegistry: ReviewWindowRegistry,
     openWindow: @escaping (ReviewTarget) -> Void
   ) {
-    guard let worktreePath = workspaceState.selectedWorktree?.path else { return }
+    guard workspaceState.selectedWorktree != nil else { return }
 
-    if reviewWindowRegistry.bringToFront(repoRoot: worktreePath) {
-      return
+    if let sessionID = workspaceState.selectedReviewSnapshot?.sessionId.uuidString {
+      if reviewWindowRegistry.bringToFront(sessionID: sessionID) {
+        return
+      }
+      guard reviewWindowRegistry.state(forSessionID: sessionID) != .opening else { return }
     }
-
-    guard reviewWindowRegistry.state(for: worktreePath) != .opening else { return }
 
     guard let decision = workspaceState.beginReviewLaunchFlow() else { return }
 

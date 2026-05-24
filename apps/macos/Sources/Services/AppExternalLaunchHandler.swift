@@ -28,6 +28,7 @@ extension Notification.Name {
 
 struct AppExternalLaunchHandler: ViewModifier {
   let recentProjects: RecentProjects
+  let reviewWindowRegistry: ReviewWindowRegistry
   let workspaceWindowRegistry: WorkspaceWindowRegistry
 
   @Environment(\.openWindow) private var openWindow
@@ -66,7 +67,9 @@ struct AppExternalLaunchHandler: ViewModifier {
       dismissWindow(id: "welcome")
     case .review(let target):
       recentProjects.add(repoRoot: target.repoRoot)
-      openWindow(value: target)
+      reviewWindowRegistry.open(target: target) { target in
+        openWindow(value: target)
+      }
       dismissWindow(id: "welcome")
     }
   }
@@ -75,11 +78,13 @@ struct AppExternalLaunchHandler: ViewModifier {
 extension View {
   func appExternalLaunchHandler(
     recentProjects: RecentProjects,
+    reviewWindowRegistry: ReviewWindowRegistry,
     workspaceWindowRegistry: WorkspaceWindowRegistry
   ) -> some View {
     modifier(
       AppExternalLaunchHandler(
         recentProjects: recentProjects,
+        reviewWindowRegistry: reviewWindowRegistry,
         workspaceWindowRegistry: workspaceWindowRegistry
       ))
   }

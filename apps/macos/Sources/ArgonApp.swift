@@ -43,6 +43,7 @@ struct ArgonApp: App {
           .environment(terminalAttentionNotifier)
           .appExternalLaunchHandler(
             recentProjects: recentProjects,
+            reviewWindowRegistry: reviewWindowRegistry,
             workspaceWindowRegistry: workspaceWindowRegistry
           )
           .preferredColorScheme(Self.launchAppearance.colorScheme)
@@ -167,6 +168,7 @@ struct ArgonApp: App {
           .environmentObject(appUpdateController)
           .appExternalLaunchHandler(
             recentProjects: recentProjects,
+            reviewWindowRegistry: reviewWindowRegistry,
             workspaceWindowRegistry: workspaceWindowRegistry
           )
           .task(id: savedAgents.profiles) {
@@ -191,6 +193,7 @@ struct ArgonApp: App {
     .environment(terminalAttentionNotifier)
     .appExternalLaunchHandler(
       recentProjects: recentProjects,
+      reviewWindowRegistry: reviewWindowRegistry,
       workspaceWindowRegistry: workspaceWindowRegistry
     )
     .preferredColorScheme(Self.launchAppearance.colorScheme)
@@ -220,6 +223,7 @@ struct ArgonApp: App {
       .environment(workspaceWindowRegistry)
       .appExternalLaunchHandler(
         recentProjects: recentProjects,
+        reviewWindowRegistry: reviewWindowRegistry,
         workspaceWindowRegistry: workspaceWindowRegistry
       )
       .preferredColorScheme(Self.launchAppearance.colorScheme)
@@ -512,16 +516,18 @@ private struct WorkspaceWorktreeCommands: Commands {
 
   private func startReview() {
     guard let workspaceState = commandContext.activeWorkspaceState,
-      let worktreePath = workspaceState.selectedWorktree?.path
+      workspaceState.selectedWorktree != nil
     else {
       return
     }
 
-    if reviewWindowRegistry.bringToFront(repoRoot: worktreePath) {
-      return
+    if let sessionID = workspaceState.selectedReviewSnapshot?.sessionId.uuidString {
+      if reviewWindowRegistry.bringToFront(sessionID: sessionID) {
+        return
+      }
+      guard reviewWindowRegistry.state(forSessionID: sessionID) != .opening else { return }
     }
 
-    guard reviewWindowRegistry.state(for: worktreePath) != .opening else { return }
     WorkspaceReviewLauncher.startReview(
       workspaceState: workspaceState,
       reviewWindowRegistry: reviewWindowRegistry,

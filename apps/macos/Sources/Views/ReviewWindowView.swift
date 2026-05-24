@@ -44,12 +44,12 @@ struct ReviewWindowView: View {
       guard attachedWindow !== window else { return }
       attachedWindow = window
       window.contentMinSize = NSSize(width: 860, height: 560)
-      reviewWindowRegistry.register(window: window, repoRoot: target.repoRoot)
+      reviewWindowRegistry.register(window: window, target: target)
       return
     }
 
     guard let attachedWindow else { return }
-    reviewWindowRegistry.unregister(window: attachedWindow, repoRoot: target.repoRoot)
+    reviewWindowRegistry.unregister(window: attachedWindow, target: target)
     self.attachedWindow = nil
   }
 }

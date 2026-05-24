@@ -281,11 +281,14 @@ private struct WorkspaceContentView: View {
   }
 
   private var isPreparingSelectedWorktreeReview: Bool {
-    guard let worktreePath = workspaceState.selectedWorktree?.path else { return false }
+    guard workspaceState.selectedWorktree != nil else { return false }
     if workspaceState.isLaunchingReview {
       return true
     }
-    return reviewWindowRegistry.state(for: worktreePath) == .opening
+    guard let sessionID = workspaceState.selectedReviewSnapshot?.sessionId.uuidString else {
+      return false
+    }
+    return reviewWindowRegistry.state(forSessionID: sessionID) == .opening
   }
 
   private var pendingShellSandboxfileWizardIsPresented: Binding<Bool> {
